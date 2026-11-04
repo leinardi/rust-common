@@ -52,6 +52,7 @@ fn exporter(settings: Settings) -> Client {
     Client::new(
         settings
             .user_agent(EXPORTER_USER_AGENT.to_owned())
+            .unwrap()
             .response_header_timeout(Some(Duration::from_secs(30))),
     )
 }

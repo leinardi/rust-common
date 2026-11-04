@@ -451,6 +451,7 @@ async fn a_caller_s_user_agent_replaces_moby_s() {
     let settings = Settings::unix(daemon.socket())
         .unwrap()
         .user_agent(EXPORTER_USER_AGENT.to_owned())
+        .unwrap()
         .response_header_timeout(Some(Duration::from_secs(30)));
     let client = Client::new(settings);
     assert_eq!(list_containers(&client).await.unwrap(), "[]");
@@ -470,6 +471,50 @@ async fn a_caller_s_user_agent_replaces_moby_s() {
         )
     );
     assert_eq!(requests[0].connection, requests[1].connection);
+}
+
+/// A `User-Agent` no header may carry is refused when it is set, with net/http's message, never
+/// swapped for another one; the settings keep the one they had.
+#[test]
+fn a_user_agent_no_header_may_carry_is_refused() {
+    let settings = Settings::unix("/run/docker.sock").unwrap();
+    for invalid in [
+        "swarm-scheduler-exporter/1.2.3\r\nX: y",
+        "a\0b",
+        "del\u{7f}",
+    ] {
+        let error = settings.clone().user_agent(invalid.to_owned()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "net/http: invalid header field value for \"User-Agent\"",
+            "{invalid:?}"
+        );
+        assert!(Settings::check_user_agent(invalid).is_err(), "{invalid:?}");
+    }
+    // A tab and text beyond ASCII pass, as Go's `ValidHeaderFieldValue` lets them.
+    for valid in ["a\tb", "exporter/1.0 (ünïcode)"] {
+        let set = settings.clone().user_agent(valid.to_owned()).unwrap();
+        assert_eq!(set.user_agent_value(), valid);
+    }
+    assert_eq!(settings.user_agent_value(), crate::moby_user_agent());
+}
+
+/// Settings compare field by field; a changed `User-Agent` or timeout makes them differ.
+#[test]
+fn settings_compare_by_value() {
+    let settings = Settings::unix("/run/docker.sock").unwrap();
+    assert_eq!(settings, Settings::unix("/run/docker.sock").unwrap());
+    assert_ne!(settings, Settings::unix("/run/other.sock").unwrap());
+    assert_ne!(
+        settings,
+        settings.clone().user_agent("x/1".to_owned()).unwrap()
+    );
+    assert_ne!(
+        settings,
+        settings
+            .clone()
+            .response_header_timeout(Some(Duration::from_secs(1)))
+    );
 }
 
 /// moby's `GOARCH` names, which its `User-Agent` carries.
@@ -619,10 +664,16 @@ async fn ping_head_closed_falls_back_to_get() {
         };
         for daemon in each_transport(script) {
             let (wire, version) = two_calls(&daemon, &daemon.client()).await;
-            assert_eq!(wire[..2], ["HEAD /_ping", "GET /_ping"], "{}", daemon.host);
             assert_eq!(
-                wire[wire.len() - 2..],
-                ["GET /v1.51/containers/json", "GET /v1.51/containers/json"]
+                wire,
+                [
+                    "HEAD /_ping",
+                    "GET /_ping",
+                    "GET /v1.51/containers/json",
+                    "GET /v1.51/containers/json"
+                ],
+                "{}",
+                daemon.host
             );
             assert_eq!(version, "1.51");
         }
@@ -1057,7 +1108,7 @@ async fn a_done_context_fails_the_request_as_net_http() {
     );
 
     // Without a context the client does not see, the bound is the bare error.
-    let error = crate::with_timeout(Duration::from_millis(200), inspect())
+    let error = crate::with_bare_timeout(Duration::from_millis(200), inspect())
         .await
         .unwrap_err();
     assert_eq!(error.to_string(), "context deadline exceeded");

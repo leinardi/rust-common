@@ -164,12 +164,18 @@ pub fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> {
 
 /// Bounds `call` by `timeout`, as `context.WithTimeout` bounds a Go call, with the bare error:
 /// the client does not see the deadline, so a request cut short ends as `context deadline
-/// exceeded` (see [`crate::with_context_timeout`] for net/http's `url.Error` instead).
+/// exceeded`.
+///
+/// **Not [`crate::with_context_timeout`].** That one hands the deadline to the client, so a
+/// request it cuts short fails as net/http fails it, `Get "<url>": context deadline exceeded`.
+/// swarm-scheduler-exporter's `with_timeout` is this function; swarm-device-access's
+/// `docker::with_timeout` is [`crate::with_context_timeout`], and must move to that one to keep
+/// its error text. The name says `bare` so that the two are never swapped by an import.
 ///
 /// # Errors
 ///
 /// The call's [`Error`], or [`Error::deadline_exceeded`] when the time ran out first.
-pub async fn with_timeout<T>(
+pub async fn with_bare_timeout<T>(
     timeout: Duration,
     call: impl Future<Output = Result<T, Error>>,
 ) -> Result<T, Error> {
@@ -178,12 +184,15 @@ pub async fn with_timeout<T>(
         .unwrap_or_else(|_| Err(Error::deadline_exceeded()))
 }
 
-/// Bounds `call` by a `deadline` other calls share, with the bare error as [`with_timeout`].
+/// Bounds `call` by a `deadline` other calls share, with the bare error as
+/// [`with_bare_timeout`] (swarm-scheduler-exporter's `with_deadline`). A context with a deadline,
+/// [`crate::CallContext::with_deadline`] under [`crate::with_context`], gives net/http's error
+/// instead.
 ///
 /// # Errors
 ///
 /// The call's [`Error`], or [`Error::deadline_exceeded`] when the deadline passed first.
-pub async fn with_deadline<T>(
+pub async fn with_bare_deadline<T>(
     deadline: tokio::time::Instant,
     call: impl Future<Output = Result<T, Error>>,
 ) -> Result<T, Error> {

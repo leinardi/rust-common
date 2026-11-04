@@ -191,6 +191,43 @@ mod attach {
         assert_ne!(requests[0].connection, requests[1].connection);
     }
 
+    /// On TCP too, the hijacked request carries no `Accept-Encoding`: moby writes it on the
+    /// connection itself (`req.Write`), not through the transport that adds `gzip` to a pooled
+    /// TCP request (`tcp_requests_match_go_s_wire`).
+    #[cfg(feature = "tcp")]
+    #[tokio::test]
+    async fn a_tcp_attach_sends_no_accept_encoding() {
+        let daemon = FakeDaemon::tcp(|request| {
+            if request.target == "/_ping" {
+                return ok(&[("Api-Version", "1.56")], "OK");
+            }
+            Reply::Raw(
+                b"HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n".to_vec(),
+            )
+        });
+        let client = daemon.client();
+        let upgraded = client
+            .exchange_upgrade("/containers/c1/attach", "stream=1", upgrade)
+            .await
+            .unwrap();
+        drop(upgraded);
+        let requests = daemon.requests();
+        assert_eq!(
+            daemon.wire(),
+            ["HEAD /_ping", "POST /v1.56/containers/c1/attach?stream=1"]
+        );
+        let user_agent = crate::moby_user_agent();
+        assert_eq!(
+            requests[1].head,
+            format!(
+                "POST /v1.56/containers/c1/attach?stream=1 HTTP/1.1\r\nHost: {}\r\nUser-Agent: \
+                 {user_agent}\r\nConnection: Upgrade\r\nUpgrade: tcp",
+                daemon.host.strip_prefix("tcp://").unwrap()
+            )
+        );
+        assert!(requests[1].header("accept-encoding").is_empty());
+    }
+
     /// An answer that is not an upgrade is moby's `setupHijackConn` error.
     #[tokio::test]
     async fn an_attach_that_is_not_upgraded_fails_as_moby() {

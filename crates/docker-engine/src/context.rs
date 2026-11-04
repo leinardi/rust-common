@@ -182,7 +182,7 @@ pub async fn with_context<T>(
 /// [`with_context`] under a context with a deadline `timeout` from now and nothing else: Go's
 /// `context.WithTimeout(context.Background(), timeout)` around one call. A request the deadline
 /// cuts short fails as net/http fails it (`Get "<url>": context deadline exceeded`), where
-/// [`crate::with_timeout`] ends the call with the bare `context deadline exceeded`.
+/// [`crate::with_bare_timeout`] ends the call with the bare `context deadline exceeded`.
 ///
 /// # Errors
 ///

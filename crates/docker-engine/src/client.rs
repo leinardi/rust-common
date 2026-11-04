@@ -97,6 +97,9 @@ pub fn moby_user_agent() -> String {
 }
 
 /// Where the daemon is and how the client talks to it.
+///
+/// Two settings are equal when every field is; with `tls`, their TLS configurations are equal only
+/// when they are the same one (an [`Arc`] clone), as rustls's `ClientConfig` cannot be compared.
 #[derive(Debug, Clone)]
 pub struct Settings {
     /// moby's `DaemonHost`, as given.
@@ -111,8 +114,34 @@ pub struct Settings {
     version: String,
     pinned: bool,
     user_agent: String,
+    /// `user_agent`, checked as a header value when it was set.
+    user_agent_header: HeaderValue,
     response_header_timeout: Option<Duration>,
 }
+
+impl PartialEq for Settings {
+    fn eq(&self, other: &Self) -> bool {
+        #[cfg(feature = "tls")]
+        let same_tls = match (&self.tls, &other.tls) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        #[cfg(not(feature = "tls"))]
+        let same_tls = true;
+        same_tls
+            && self.host == other.host
+            && self.addr == other.addr
+            && self.base_path == other.base_path
+            && self.endpoint == other.endpoint
+            && self.version == other.version
+            && self.pinned == other.pinned
+            && self.user_agent == other.user_agent
+            && self.response_header_timeout == other.response_header_timeout
+    }
+}
+
+impl Eq for Settings {}
 
 impl Settings {
     fn with_endpoint(host: String, addr: String, base_path: String, endpoint: Endpoint) -> Self {
@@ -126,6 +155,9 @@ impl Settings {
             version: MAX_API_VERSION.to_owned(),
             pinned: false,
             user_agent: moby_user_agent(),
+            // moby's own is `moby-client/<version> <GOOS>/<GOARCH>`, all visible ASCII.
+            user_agent_header: HeaderValue::from_str(&moby_user_agent())
+                .unwrap_or_else(|_| HeaderValue::from_static("moby-client")),
             response_header_timeout: None,
         }
     }
@@ -205,10 +237,32 @@ impl Settings {
     }
 
     /// The `User-Agent` of every request, in place of moby's ([`moby_user_agent`]).
-    #[must_use]
-    pub fn user_agent(mut self, user_agent: String) -> Self {
+    ///
+    /// A value no HTTP header may carry (a control character other than a tab, such as a line
+    /// break) is refused here, rather than replaced by another `User-Agent` behind the caller's
+    /// back: Go's net/http fails every request that carries it, with the same message. A caller
+    /// that wants a fallback (swarm-scheduler-exporter's bare program name for a version stamp
+    /// that cannot be sent) checks its value with [`Settings::check_user_agent`] first.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`]: `net/http: invalid header field value for "User-Agent"`.
+    pub fn user_agent(mut self, user_agent: String) -> Result<Self, ConfigError> {
+        self.user_agent_header = Self::check_user_agent(&user_agent)?;
         self.user_agent = user_agent;
-        self
+        Ok(self)
+    }
+
+    /// Whether `user_agent` can be sent as a `User-Agent`, by Go's rule (`httpguts`'s
+    /// `ValidHeaderFieldValue`: no control character but a tab), and the header it makes.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`]: `net/http: invalid header field value for "User-Agent"`.
+    pub fn check_user_agent(user_agent: &str) -> Result<HeaderValue, ConfigError> {
+        HeaderValue::from_str(user_agent).map_err(|_| {
+            ConfigError::new("net/http: invalid header field value for \"User-Agent\"".to_owned())
+        })
     }
 
     /// The longest wait for a response's headers, from the request written (Go's
@@ -403,8 +457,7 @@ impl Client {
             scheme: if tls { "https" } else { "http" },
             host_header: HeaderValue::from_str(&host_header)
                 .unwrap_or_else(|_| HeaderValue::from_static(DUMMY_HOST)),
-            user_agent: HeaderValue::from_str(&settings.user_agent)
-                .unwrap_or_else(|_| HeaderValue::from_static("moby-client")),
+            user_agent: settings.user_agent_header.clone(),
             // go-connections leaves compression on for every protocol but unix sockets.
             #[cfg(feature = "tcp")]
             gzip: !matches!(settings.endpoint, Endpoint::Unix(_)),
@@ -730,6 +783,12 @@ impl Client {
     ) -> Result<hyper::upgrade::Upgraded, Error> {
         let target = self.versioned_target(path, query).await;
         let mut request = self.request(&target, &[]);
+        // moby writes the hijacked request on the connection itself (`req.Write`), never through
+        // the transport, so no `Accept-Encoding: gzip` goes out with it, on TCP either. It is the
+        // builder's last header, so removing it before `shape` leaves the order of the rest as it
+        // is on a unix socket (a removal swaps the last entry into the freed slot).
+        #[cfg(feature = "tcp")]
+        request.headers_mut().remove(ACCEPT_ENCODING);
         shape(&mut request);
         let response = self
             .pool

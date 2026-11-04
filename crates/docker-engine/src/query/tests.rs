@@ -106,7 +106,7 @@ async fn a_timeout_ends_a_call_with_deadline_exceeded() {
         let error = if with_context {
             crate::with_context_timeout(timeout, pending).await
         } else {
-            with_timeout(timeout, pending).await
+            with_bare_timeout(timeout, pending).await
         }
         .unwrap_err();
         assert_eq!(start.elapsed(), timeout);
@@ -114,7 +114,7 @@ async fn a_timeout_ends_a_call_with_deadline_exceeded() {
         assert_eq!(error.to_string(), "context deadline exceeded");
     }
     assert_eq!(
-        with_timeout(timeout, async { Ok::<_, Error>(7) })
+        with_bare_timeout(timeout, async { Ok::<_, Error>(7) })
             .await
             .unwrap(),
         7
@@ -137,8 +137,8 @@ async fn a_shared_deadline_bounds_calls_together() {
         tokio::time::sleep(Duration::from_secs(7)).await;
         Ok::<_, Error>(())
     };
-    with_deadline(deadline, slow).await.unwrap();
-    let error = with_deadline(deadline, async {
+    with_bare_deadline(deadline, slow).await.unwrap();
+    let error = with_bare_deadline(deadline, async {
         tokio::time::sleep(Duration::from_secs(7)).await;
         Ok::<_, Error>(())
     })

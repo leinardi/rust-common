@@ -33,7 +33,11 @@
 //!   version down from 1.56 ([`version`]); a failed negotiation is not an error, exactly as in
 //!   moby, and concurrent first requests share one ping. `DOCKER_API_VERSION` pins it.
 //! - [`context`]: Go's `context.Context` for a call ([`with_context`]); a request it cuts short
-//!   fails as net/http fails it. [`with_timeout`] and [`with_deadline`] bound a call without one.
+//!   fails as net/http fails it, and [`with_context_timeout`] bounds one call that way.
+//!   [`with_bare_timeout`] and [`with_bare_deadline`] bound a call the client does not see, with
+//!   the bare `context deadline exceeded` (swarm-scheduler-exporter's `with_timeout` and
+//!   `with_deadline`). swarm-device-access's own `with_timeout` is [`with_context_timeout`], not
+//!   [`with_bare_timeout`]: the names differ so that neither port swaps one for the other unseen.
 //! - [`events`]: moby's JSON stream decoder over a chunked body, each record bounded to 1 MiB.
 //! - [`types`]: Go's `json.Decoder` on an answer ([`types::decode_first`],
 //!   [`types::decode_list`]), with a JSON `null` as Go's zero value.
@@ -42,6 +46,11 @@
 //! `write` ([`Client::exchange`]), `attach` (implies `write`: [`Client::exchange_upgrade`], moby's
 //! [`stdcopy`] and the [`wait`] answer's parser) and `test-util` (the `test_util` fake engine,
 //! request recorder and test helpers). Without any, the client speaks to a unix socket only.
+//!
+//! Extracted from swarm-scheduler-exporter/src/docker/mod.rs at c9e79afa8810 (the module map, the
+//! TCP and TLS transport, the gzip, the response-header timeout).
+//! Extracted from swarm-device-access/src/docker/mod.rs at 8b4ab3a3e417 (the context, the unix
+//! socket settings, the writes and the attach).
 
 mod client;
 mod connect;
@@ -67,7 +76,8 @@ pub use context::{CallContext, ContextError, with_context, with_context_timeout}
 pub use error::{ConfigError, Error, ErrorKind};
 pub use events::{JsonStream, StreamError, StreamErrorKind};
 pub use query::{
-    Filters, encode_query, push_json_string, since_parameter, trim_id, with_deadline, with_timeout,
+    Filters, encode_query, push_json_string, since_parameter, trim_id, with_bare_deadline,
+    with_bare_timeout,
 };
 #[cfg(feature = "tls")]
 pub use tls::PathError;
