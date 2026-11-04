@@ -5,6 +5,7 @@
 members = [
     "crates/go-clock",
     "crates/go-compat",
+    "crates/go-prom",
     "crates/go-slog",
     "crates/service-kit",
     "meta",

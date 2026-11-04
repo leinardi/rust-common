@@ -16,15 +16,15 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. **Available:** `go-compat`, `go-clock`, `go-slog`, `service-kit`. The others are planned for
-`v0.1.0` and land one at a time.
+it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `service-kit`. The others are
+planned for `v0.1.0` and land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
 | `go-compat` (available) | Go standard-library behaviour the projects' output depends on, ported byte for byte: number and duration formatting, `strconv` quoting, the errno table, `path.Clean`, `net` address parsing, RFC 3339 time | – |
 | `go-clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `go-slog` (available) | A `log/slog`-compatible logger: slog's text and JSON handlers and a plain format, byte for byte | – (the plain style, the level parsing and the global logger or a `LogHandle` are parameters) |
-| `go-prom` | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation | expfmt version as a parameter; `testing` |
+| `go-prom` (available) | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation and the process collector | `testing` (the expfmt version is a parameter) |
 | `http-framing` | HTTP/1 request-head framing, std only | – |
 | `go-http` | Go `net/http` server behaviours on hyper: the timeouts, `bind` and `parse_port`, `serve` | the listen-error prefix as a parameter |
 | `docker-engine` | A Docker Engine API client over HTTP/1: transport, version negotiation, events, decoding | `tcp`, `tls`, `write`, `attach`, `test-util` |
@@ -100,6 +100,30 @@ process's stdout (`Logger::new`, `LogHandle::configure_to` and `set_global` take
 default logger does.
 
 It depends on `go-compat`, `go-clock` and `jiff` (as `go-compat`).
+
+### go-prom
+
+The parts of the Prometheus Go client (`client_golang` v1.24.1) the Go programs used, byte for
+byte: a registry, its families, the text exposition format 0.0.4 and promhttp's answer.
+
+| Item | What it is |
+| --- | --- |
+| `Registry`, `Collector`, `Desc`, `Kind`, `Gathered` | a registry gathered as Go's `Gather` normalises: label pairs by name, series by label values, families by name, empty families dropped; a collector's descriptors are read once, at registration, and no collector callback runs under the registry's lock |
+| `Gauge`, `GaugeVec`, `Counter`, `CounterVec`, `Histogram`, `GaugeFunc`, `DEF_BUCKETS` | the families, with Go's label checks (`LabelsMismatch`) |
+| `SnapshotCollector`, `SnapshotFamily`, `SnapshotBuilder`, `snapshot::series_key` | gauge families rebuilt whole off to the side and published with one swap, so a scrape never sees half an update |
+| `constant_desc` | a descriptor of constant names that panics on a typo |
+| `text` | expfmt's `MetricFamilyToText` (`encode`, `push_float`, `TEXT_CONTENT_TYPE`) |
+| `exposition` | promhttp's `Accept` negotiation (`negotiate`, `content_type`, `go_content_type`), its `Accept-Encoding` negotiation (`negotiate_encoding`) and the answer (`render`), gzipped with Go's header bytes |
+| `ExpfmtVersion::V0_70_1`, `V0_71_0` | the `prometheus/common` release whose negotiation to follow: v0.70.1 matches exact types only, v0.71.0 lets a wildcard type or subtype match |
+| `process::ProcessCollector` | the nine `process_*` families, read from `/proc` with procfs's quirks |
+| `promhttp::HandlerMetrics` | `promhttp_metric_handler_requests_total` and `_in_flight`, in Go's order |
+| `testing` (feature) | the Go tests' `gather_series` and `series_id`, for a program's own collector tests |
+
+Each `ExpfmtVersion` is checked against Go's answers: 95 header pairs under v0.71.0 and 106 under
+v0.70.1 (`crates/go-prom/tests/testdata/exposition`). The body is always text 0.0.4; only the
+`Content-Type`'s `escaping` follows the negotiation. The `go_*` runtime families are not served.
+
+It depends on `go-compat` and `flate2` (the `rust_backend` only).
 
 ### service-kit
 

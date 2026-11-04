@@ -41,6 +41,15 @@ go-clock = [
     { all-features = true },
 ]
 
+# go-prom: swarm-scheduler-exporter and swarm-device-access build it with no features (the default
+# enables nothing) and pick their expfmt negotiation by parameter (ExpfmtVersion::V0_71_0 and
+# V0_70_1); swarm-scheduler-exporter's collector tests add `testing` (gather_series, series_id).
+go-prom = [
+    { no-default-features = true },
+    { features = ["testing"] },
+    { all-features = true },
+]
+
 # go-slog has no features: swarm-scheduler-exporter (the global logger, PlainStyle::Quoted, the
 # strict parsers) and swarm-device-access (LogHandle, PlainStyle::Raw, the fallback parsers) choose
 # by parameter, so both build it as it is.
