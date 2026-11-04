@@ -26,5 +26,10 @@
 # meta/tests/feature_sets.rs holds the file to the crates: every crate under crates/ has an entry,
 # with a --no-default-features set and an --all-features set, and every feature it declares is
 # named in at least one set. Add the exact set each consumer uses.
-#
-# No crate yet: the library crates arrive one change at a time, each with its entry here.
+
+# go-compat has no features: both sets build the same crate, and are listed because every crate has
+# them.
+go-compat = [
+    { no-default-features = true },
+    { all-features = true },
+]

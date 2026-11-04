@@ -15,12 +15,12 @@ shares the workspace version.
 
 ## Crates
 
-Planned for `v0.1.0`; each one lands under `crates/<name>` with its tests. A crate depends only on
-crates listed above it.
+Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
+it. **Available:** `go-compat`. The others are planned for `v0.1.0` and land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
-| `go-compat` | Go standard-library behaviour the projects' output depends on, ported byte for byte: number and duration formatting, `strconv` quoting, the errno table, `path.Clean`, `net` address parsing, RFC 3339 time | – |
+| `go-compat` (available) | Go standard-library behaviour the projects' output depends on, ported byte for byte: number and duration formatting, `strconv` quoting, the errno table, `path.Clean`, `net` address parsing, RFC 3339 time | – |
 | `go-clock` | The injected clock (`Clock`, a tokio-backed one and a `FakeClock`) | – |
 | `go-slog` | `log/slog`-compatible text and JSON handlers | style and level-parsing parameters; a global logger or a `LogHandle` |
 | `go-prom` | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation | expfmt version as a parameter; `testing` |
@@ -34,6 +34,30 @@ crates listed above it.
 
 Where the projects legitimately differ, the shared code takes a parameter; one project's behaviour
 is never forced on another.
+
+### go-compat
+
+Ports of go1.26's standard library, each checked against output a Go program printed (the corpora
+under `crates/go-compat/tests/testdata`). One module per Go package area:
+
+| Module | Go behaviour |
+| --- | --- |
+| `float` | `strconv.FormatFloat(f, 'g', -1, 64)`, which is `%v` (`format_g`, `push_g`), and encoding/json's float layout (`format_json`); exact ties round to even, as Go's do |
+| `duration` | `time.Duration.String` (`format`, `push`) and `time.ParseDuration` (`parse`), on `i64` nanoseconds |
+| `quote` | `strconv.Quote` (`quote`, `push_quoted`), `strconv.QuoteRune`, and Go's Unicode 15 `IsPrint` and `IsSpace` tables (`is_print`, `is_space`) |
+| `time_layout` | `time.RFC3339Nano` and slog's millisecond layout, `time.Parse(time.RFC3339Nano, …)`, Go's zero time |
+| `local_zone` | how Go resolves `time.Local` from `TZ` and the zoneinfo files |
+| `strings` | `strings.EqualFold`, `ToLower`, `TrimSpace`, `Fields`, on Go's Unicode 15 tables |
+| `parse_bool`, `parse_int`, `parse_float` | `strconv.ParseBool`, `ParseInt`, `ParseUint`, `Atoi`, `ParseFloat(s, 32)`, with Go's `*NumError` texts |
+| `errno` | `syscall.Errno.Error()` from Go's whole linux/amd64 table (`errno_string`), and an `io::Error` as Go words it (`io_error_text`) |
+| `errors` | `errors.Join`'s text |
+| `filepath` | `filepath.Match`, `Clean`, `Join` and `Base`; on Unix `Clean` and `Join` are also `path.Clean` and `path.Join` |
+| `scanner` | `bufio.Scanner` with `ScanLines` and the default 64 KiB token limit |
+| `sort` | `sort.Sort` step for step, for comparisons that are not a total order |
+| `http_status` | `net/http.StatusText` |
+| `net_ip`, `host_port` | `net.ParseIP`, `ParseCIDR`, `IP.Equal`, `IPNet.Contains`; `net.SplitHostPort` and `JoinHostPort` |
+
+Its only dependency is `jiff`, with `default-features = false` and `std`.
 
 ## Using a crate
 

@@ -2,7 +2,7 @@
 # Listed explicitly, never as a glob: meta/tests/workspace_lints.rs checks each member's manifest.
 # Library crates live under crates/<name> and are added here, and to feature-sets.toml, by the
 # change that brings them in.
-members = ["meta"]
+members = ["crates/go-compat", "meta"]
 resolver = "3"
 
 [workspace.package]
