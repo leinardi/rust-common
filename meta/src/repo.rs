@@ -20,6 +20,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::workspace::crate_of_manifest;
+
 /// The repository root: the meta crate sits one level below it.
 #[must_use]
 pub fn root() -> PathBuf {
@@ -68,5 +70,18 @@ pub fn tracked(pathspecs: &[&str]) -> Vec<String> {
         .split('\0')
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
+        .collect()
+}
+
+/// The crate directories under `crates/` that have a tracked `crates/<name>/Cargo.toml`.
+///
+/// # Panics
+///
+/// git cannot list them.
+#[must_use]
+pub fn tracked_crates() -> Vec<String> {
+    tracked(&["crates/*/Cargo.toml"])
+        .iter()
+        .filter_map(|path| crate_of_manifest(path).map(str::to_owned))
         .collect()
 }

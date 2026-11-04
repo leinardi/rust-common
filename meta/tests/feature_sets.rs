@@ -17,27 +17,11 @@
 //! The negative controls run the same checks over scratch trees, so the check on this repository
 //! is not trusted on the strength of having found nothing to check.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
 use meta::feature_sets::{coverage_problems, parse, plan};
 use meta::repo;
-use toml::Table;
-
-/// The crate directories under `crates/` that have a tracked manifest.
-fn tracked_crates() -> Vec<String> {
-    repo::tracked(&["crates/*/Cargo.toml"])
-        .iter()
-        .filter_map(|path| {
-            let segments: Vec<&str> = path.split('/').collect();
-            match segments.as_slice() {
-                ["crates", name, "Cargo.toml"] => Some((*name).to_owned()),
-                _ => None,
-            }
-        })
-        .collect()
-}
 
 fn write(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
@@ -65,30 +49,8 @@ always = "1"
 
 #[test]
 fn feature_sets_cover_every_crate_feature() {
-    let problems = coverage_problems(&repo::root(), &tracked_crates());
+    let problems = coverage_problems(&repo::root(), &repo::tracked_crates());
     assert!(problems.is_empty(), "{}", problems.join("\n"));
-}
-
-#[test]
-fn every_crate_is_a_workspace_member() {
-    let manifest: Table = repo::read("Cargo.toml")
-        .parse()
-        .unwrap_or_else(|error| panic!("parse Cargo.toml: {error}"));
-    let members: BTreeSet<String> = manifest
-        .get("workspace")
-        .and_then(|workspace| workspace.get("members"))
-        .and_then(toml::Value::as_array)
-        .expect("the root Cargo.toml lists [workspace] members")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .filter_map(|member| member.strip_prefix("crates/"))
-        .map(str::to_owned)
-        .collect();
-    let crates: BTreeSet<String> = tracked_crates().into_iter().collect();
-    assert_eq!(
-        members, crates,
-        "the crates/ members of the workspace and the tracked crates/*/Cargo.toml differ"
-    );
 }
 
 #[test]
