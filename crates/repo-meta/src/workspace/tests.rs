@@ -297,3 +297,28 @@ fn an_empty_override_scan_is_a_problem() {
         );
     }
 }
+
+/// No required lint level and no tracked crate are problems, not passes on nothing.
+#[test]
+fn empty_level_and_layout_inputs_are_problems() {
+    let root: Table = "[workspace]\nmembers = [\"meta\"]\n".parse().unwrap();
+    assert_eq!(
+        strings(&lint_level_problems(&root, &[])),
+        ["no lint level is required; the check would pass on nothing"]
+    );
+    let scratch = tempfile::tempdir().unwrap();
+    fs::write(
+        scratch.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"meta\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        strings(&layout_problems(
+            &Repo::scratch(scratch.path()),
+            "crates",
+            &["meta"],
+            &[]
+        )),
+        ["no crate under crates has a tracked manifest; the check would pass on nothing"]
+    );
+}

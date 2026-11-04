@@ -39,6 +39,7 @@ const BG_RUST_MK: &str = include_str!("../../tests/testdata/bitgauge.rust.mk");
 const BG_RELEASE_MK: &str = include_str!("../../tests/testdata/bitgauge.rust-release.mk");
 const BG_DROAST: &str = include_str!("../../tests/testdata/bitgauge.droast.toml");
 const SRD_DOCKERFILE: &str = include_str!("../../tests/testdata/srd.Dockerfile");
+const SSE_DOCKERFILE: &str = include_str!("../../tests/testdata/sse.Dockerfile");
 
 fn sample() -> String {
     format!(
@@ -247,24 +248,30 @@ fn build_stage_rules() {
                 "cargo zigbuild --release",
             ),
         ),
-        (
-            "an undeclared download",
-            content.replace(
-                "RUN APP_VERSION",
-                "RUN curl -fsSL -o /tmp/x https://example.invalid/x\nRUN APP_VERSION",
-            ),
-        ),
-        (
-            "an added archive",
-            content.replace(
-                "RUN APP_VERSION",
-                "ADD https://example.invalid/x /tmp/x\nRUN APP_VERSION",
-            ),
-        ),
     ] {
         assert_ne!(sample, content, "{name}");
         let problems = build_stage_problems(&stage(&sample, "build"), &BUILD);
         assert_eq!(problems.len(), 1, "{name}: {problems:?}");
+    }
+    for (name, line) in [
+        (
+            "an undeclared download",
+            "RUN curl -fsSL -o /tmp/x https://example.invalid/x",
+        ),
+        (
+            "a download from a variable",
+            "ARG EXTRA_URL=https://example.invalid/x\nRUN curl -fsSL -o /tmp/x \"${EXTRA_URL}\"",
+        ),
+        (
+            "a wget after an assignment",
+            "RUN true && URL=x wget -q -O /tmp/x \"${URL}\"",
+        ),
+        ("an added archive", "ADD https://example.invalid/x /tmp/x"),
+        ("an added variable", "ADD ${EXTRA_URL} /tmp/x"),
+    ] {
+        let sample = content.replace("RUN APP_VERSION", &format!("{line}\nRUN APP_VERSION"));
+        let problems = build_stage_problems(&stage(&sample, "build"), &BUILD);
+        assert!(!problems.is_empty(), "{name} passes");
     }
     let installs_curl = content.replace(
         "RUN APP_VERSION",
@@ -391,6 +398,33 @@ fn bg_stamp_problems(dockerfile: &str, makefile: &str, rust_mk: &str, release_mk
             release: Some((release_mk, "rust_static_build")),
         })
         .len()
+}
+
+/// swarm-scheduler-exporter's build stage, whose downloads are bitgauge's, passes with them; an
+/// unchecked extra download in a RUN that also fetches a listed URL fails, as SSE's own
+/// per-stage count refuses it.
+#[test]
+fn an_extra_download_beside_a_listed_one_fails() {
+    let downloads = bg_downloads();
+    let rules = BuildStage {
+        platform: "$BUILDPLATFORM",
+        base: BuildBase::Exact("dhi.io/rust:1.98.1-debian13-dev"),
+        required: &[
+            "cargo zigbuild --release --locked --target \"${triple}\" --bin swarm-scheduler-exporter",
+        ],
+        downloads: &downloads,
+    };
+    let check = |content: &str| build_stage_problems(&stage(content, "build"), &rules);
+    assert_eq!(check(SSE_DOCKERFILE), []);
+    let zig_check = "\t&& echo \"${zig_sha256}  /tmp/zig.tar.xz\" | sha256sum -c - \\\n";
+    assert!(SSE_DOCKERFILE.contains(zig_check));
+    for extra in [
+        "\t&& curl -fsSL -o /tmp/x https://example.invalid/x \\\n",
+        "\t&& curl -fsSL -o /tmp/x \"${EXTRA_URL}\" \\\n",
+    ] {
+        let sample = SSE_DOCKERFILE.replacen(zig_check, &format!("{zig_check}{extra}"), 1);
+        assert!(!check(&sample).is_empty(), "{extra:?} passes");
+    }
 }
 
 /// bitgauge's files pass with bitgauge's parameters.
@@ -549,10 +583,10 @@ fn bitgauge_stamp_mutations_fail() {
     );
 }
 
-/// bitgauge's mutations of the make side of its stamps, each refused: the Makefile's prefix,
-/// rust.mk's assignments and recipe, and the release recipe, a stamp left only in a comment too.
+/// bitgauge's mutations of its Makefile's stamp prefix, each refused, and the assignments that keep
+/// the value accepted.
 #[test]
-fn bitgauge_make_stamp_mutations_fail() {
+fn bitgauge_prefix_mutations_fail() {
     let make = |makefile: &str, rust_mk: &str, release_mk: &str| {
         bg_stamp_problems(BG_DOCKERFILE, makefile, rust_mk, release_mk)
     };
@@ -583,6 +617,28 @@ fn bitgauge_make_stamp_mutations_fail() {
         assert!(BG_MAKEFILE != makefile, "{name}");
         assert!(make(&makefile, BG_RUST_MK, BG_RELEASE_MK) > 0, "{name}");
     }
+    for (name, line) in [
+        ("an override", "override RUST_STAMP_PREFIX := OTHER"),
+        ("an exported one", "export RUST_STAMP_PREFIX := OTHER"),
+        ("an append", "RUST_STAMP_PREFIX += OTHER"),
+    ] {
+        assert!(
+            make(&format!("{BG_MAKEFILE}{line}\n"), BG_RUST_MK, BG_RELEASE_MK) > 0,
+            "{name} wins and is read"
+        );
+    }
+    assert_eq!(
+        make(
+            &BG_MAKEFILE.replace(
+                "RUST_STAMP_PREFIX := BITGAUGE",
+                "export RUST_STAMP_PREFIX := BITGAUGE"
+            ),
+            BG_RUST_MK,
+            BG_RELEASE_MK
+        ),
+        0,
+        "export keeps the value"
+    );
     assert_eq!(
         make(
             &format!("{BG_MAKEFILE}RUST_STAMP_PREFIX ?= OTHER\n"),
@@ -592,6 +648,15 @@ fn bitgauge_make_stamp_mutations_fail() {
         0,
         "a later ?= does not change the value"
     );
+}
+
+/// bitgauge's mutations of the make side of its stamps, each refused: the Makefile's prefix,
+/// rust.mk's assignments and recipe, and the release recipe, a stamp left only in a comment too.
+#[test]
+fn bitgauge_make_stamp_mutations_fail() {
+    let make = |makefile: &str, rust_mk: &str, release_mk: &str| {
+        bg_stamp_problems(BG_DOCKERFILE, makefile, rust_mk, release_mk)
+    };
     for (name, from, to) in [
         (
             "the commit from another variable",
@@ -795,6 +860,12 @@ fn runtime_rules() {
         .len(),
         2
     );
+    let nothing = RuntimeStage {
+        repository: "dhi.io/static",
+        forbidden: &[],
+        exactly: &[],
+    };
+    assert_eq!(runtime_problems(&runtime, &nothing).len(), 1, "empty rules");
     assert_eq!(
         strings(&label_problems(&runtime, &[])),
         ["no label is wanted of the runtime stage; the check would pass on nothing"]

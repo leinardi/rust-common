@@ -209,3 +209,43 @@ fn labels_lose_their_quotes() {
         ]
     );
 }
+
+/// An escape directive other than the backslash and a heredoc are refused; a bash here-string
+/// and the backslash directive are not; and every consumer's real Dockerfile parses.
+#[test]
+fn what_the_reader_cannot_take_apart_is_malformed() {
+    for (name, content) in [
+        (
+            "a backtick escape",
+            "# escape=`\nFROM a:1\nRUN echo `\n  two\n",
+        ),
+        ("a heredoc", "FROM a:1\nRUN <<EOF\necho one\nEOF\n"),
+        ("a dash heredoc", "FROM a:1\nRUN cat <<-\"EOF\" > /x\nEOF\n"),
+        ("a heredoc copy", "FROM a:1\nCOPY <<EOF /x\nhello\nEOF\n"),
+    ] {
+        assert!(parse(content).is_err(), "{name} parsed");
+    }
+    for content in [
+        "# escape=\\\nFROM a:1\nRUN echo \\\n  two\n",
+        "FROM a:1\nRUN bash -c 'cat <<<\"x\"'\n",
+        "FROM a:1\n# escape=`\nRUN true\n",
+    ] {
+        assert!(parse(content).is_ok(), "{content:?} refused");
+    }
+    for (name, content) in [
+        ("sse", include_str!("../../tests/testdata/sse.Dockerfile")),
+        ("sda", include_str!("../../tests/testdata/sda.Dockerfile")),
+        ("awtx", include_str!("../../tests/testdata/awtx.Dockerfile")),
+        ("srd", include_str!("../../tests/testdata/srd.Dockerfile")),
+        (
+            "bitgauge",
+            include_str!("../../tests/testdata/bitgauge.Dockerfile"),
+        ),
+        (
+            "bitgauge tools",
+            include_str!("../../tests/testdata/bitgauge.tools.Dockerfile"),
+        ),
+    ] {
+        assert!(parse(content).is_ok(), "{name}: {:?}", parse(content));
+    }
+}

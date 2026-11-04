@@ -235,16 +235,25 @@ having checked nothing (no file, no rule) is itself a problem. The caller assert
 members, the pins, the jobs, the hooks, the exemptions) is a parameter; every check is as strict
 as the strictest project's.
 
+`repo_root!()` is fixed at compile time: a test binary checks the checkout it was built from. A
+scratch copy or a second worktree builds into a target directory of its own (or cleans the
+shared one first), or its binary goes on checking the copy it was built from.
+
+What stays in a consumer's own meta-tests: swarm-rootless-docker's exact dind image, last-USER,
+single user-rewrite and no-apk rules and its `base.name` label; awtrix-controller's and
+swarm-rootless-docker's `label_arguments_are_supplied`; and every check that runs a tool, such as
+droast.
+
 | Module | What it checks |
 | --- | --- |
 | `Repo`, `Problem`, `report` | the repository under test (`Repo::new`, git with the process's environment, so a commit hook's index) or a scratch one (`Repo::scratch`, git isolated); the tracked files (`tracked`, `tracked_or_new`, `files_under`), reads that become problems (`try_read`); `file:line: message` problems |
 | `workspace` | `lint_opt_in` (the root's `[workspace.lints]`, every member's `[lints] workspace = true`, the expected members), `lint_level_problems`, `override_problems`, `layout_problems` (crates under one directory, nothing else tracked there) |
 | `links` | `check_repository` (every tracked Markdown file, none at all a problem) and `Checker`: every relative link resolves to a file, and every `#anchor` to a heading, as the Go link checker the projects ported reads them |
-| `dockerfile` | the parser (`parse`, `Stage`, `Instruction`, `syntax`), `tag_pinned`, `digest_pinned`, `from_dhi`, `base_pinned`, `repository`, `tag`, `labels` |
-| `image` | `dockerfiles` (tracked or new, `Dockerfile.<name>` included), `only_dockerfile_problems`, `syntax_problems` (required or optional), `stage_problems` with a `BasePolicy` (`DhiTagElseDigest`, `DhiOnly`, `TagOnly`), `BuildStage` (a `BuildBase` repository or exact image, each `Download` checked in its RUN: release, platform argument, exact arms, sha256 check; no other download), `Stamps` (in the building RUN, the Makefile's winning prefix, `rust.mk`'s `RUST_VERSION_ENV` and `rust-build`, the release recipe), `RuntimeStage`, `label_problems`, `platform_problems` (in the named workflow), `label_policy_problems` |
-| `toolchain` | `one_value` (one pin read from several files), `RustVersion::{Exact, Line}`, `image_rust_problems` (the FROM tag equal to `ARG RUST_VERSION`), `ci_toolchain_problems` with a `ToolchainRef` (`Input`, or `InputOrRef` for dtolnay's `@<release>`), `rust_std_problems`, `ReleasePins` and `release_pin_problems` (exact `(platform, name, digest)` arms, no stray `sha256`), `zigbuild_action_problems`, `shellcheck_problems`, `trivy_problems` |
-| `ci` | `CiGates` (the result job needs every job, the pre-commit job's `SKIP` list is exactly the hooks other jobs run), `RustdocGate`, `always_run_problems` |
-| `allowlist` | `LintAllowlist`: a lint (`unsafe_code`, a clippy ban) lifted only where an exemption names the file or item, at most once there, every exemption used, and a group that contains the lint never named |
+| `dockerfile` | the parser (`parse`, `Stage`, `Instruction`, `syntax`; an `escape` directive other than `\` or a heredoc is `Malformed`), `tag_pinned`, `digest_pinned`, `from_dhi`, `base_pinned`, `repository`, `tag`, `labels` |
+| `image` | `dockerfiles` (tracked or new, `Dockerfile.<name>` included), `only_dockerfile_problems`, `syntax_problems` (required or optional), `stage_problems` with a `BasePolicy` (`DhiTagElseDigest`, `DhiOnly`, `TagOnly`), `BuildStage` (a `BuildBase` repository or exact image, each `Download` checked in its RUN: release, platform argument, exact arms, sha256 check; every curl or wget, of a URL or a variable, a rule's and checked in its RUN; no ADD of a URL or a variable), `Stamps` (in the building RUN, the Makefile's winning prefix, `rust.mk`'s `RUST_VERSION_ENV` and `rust-build`, the release recipe), `RuntimeStage`, `label_problems`, `platform_problems` (in the named workflow), `label_policy_problems` |
+| `toolchain` | `one_value` (one pin read from several files), `RustVersion::{Exact, Line}`, `image_rust_problems` (the FROM tag equal to `ARG RUST_VERSION`), `ci_toolchain_problems` with a `ToolchainRef` (`Input`, or `InputOrRef` for dtolnay's `@<release>`), `rust_std_problems`, `make_value` (make's value of a variable, `export`, `override`, `?=` and `+=` read as make reads them), `ReleasePins` and `release_pin_problems` (exact `(platform, name, digest)` arms, no stray `sha256`), `zigbuild_action_problems`, `shellcheck_problems`, `trivy_problems` |
+| `ci` | `CiGates` (the result job needs every gate job; the pre-commit job skips something, and every hook it skips exists and is run by a job the result job needs), `RustdocGate`, `always_run_problems` |
+| `allowlist` | `LintAllowlist`: a lint (`unsafe_code`, a clippy ban) lifted only where an exemption names the file or item, at most once there, every exemption used unless marked `reserved`, and a group that contains the lint never named |
 | `vacuous` | `VacuousFlags` (`core`, `with_rust`, `with_javascript`): what turns a failing gate into a pass (an `or true`, `continue-on-error`, `if: false`, make's `-` prefix, `--cap-lints`, cargo's `--skip`, `--passWithNoTests`, …) and a clippy run without `-D warnings`, with `AllowedFragment` exceptions that must each be used |
 | `integration` | `IntegrationGate` (integration modules behind a feature, the suite's manifest entry), `cargo_test_commands`, `docker_drivers` |
 | `tools` | `tool_lookup_problems`: no meta-test looks a tool up on `PATH` or reads a switch that turns a missing tool into a skip, for a project whose meta-tests fail without their tools (one on `toolgate::Gate` does not run it) |

@@ -13,7 +13,9 @@
 
 //! Reads a Dockerfile closely enough to assert an image's invariants: the syntax directive, the
 //! stages, their bases and the instructions inside them, and the base pins. A file this reader
-//! cannot take apart is refused ([`Malformed`]) rather than guessed at.
+//! cannot take apart is refused ([`Malformed`]) rather than guessed at: among others, one with an
+//! `escape` directive other than the backslash, or with a heredoc. No consumer's Dockerfile has
+//! either.
 //!
 //! The pin rules: a dhi.io base is pinned by an explicit tag alone, so a build takes the fixes
 //! dhi.io republishes under it; any other base, and the `BuildKit` frontend, by tag and digest
@@ -95,6 +97,9 @@ static PARSER_DIRECTIVE: LazyLock<Regex> =
 static LABEL_PAIR: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"([A-Za-z0-9._\-]+)=("(?:[^"\\]|\\.)*"|\S+)"#));
 
+/// A `BuildKit` heredoc opener, `<<EOF`, `<<-EOF` or `<<"EOF"`, but not bash's `<<<` here-string.
+static HEREDOC: LazyLock<Regex> = LazyLock::new(|| regex(r#"(?:^|[^<])<<-?\s*["']?[A-Za-z_]"#));
+
 /// The registry whose bases are pinned by tag, not by digest.
 pub const DHI_REGISTRY: &str = "dhi.io/";
 
@@ -118,9 +123,22 @@ pub fn syntax(content: &str) -> Option<String> {
 ///
 /// # Errors
 ///
-/// An instruction other than ARG before the first FROM, a FROM this reader cannot read, or a file
-/// that ends inside a continuation.
+/// An instruction other than ARG before the first FROM, a FROM this reader cannot read, a file
+/// that ends inside a continuation, an `escape` directive other than the backslash (the reader
+/// joins lines on a backslash only), or a heredoc (`RUN <<EOF`), whose body lines it would read
+/// as instructions.
 pub fn parse(content: &str) -> Result<Vec<Stage>, Malformed> {
+    for line in content.split('\n') {
+        let Some(captures) = PARSER_DIRECTIVE.captures(line.trim()) else {
+            break;
+        };
+        if captures[1].eq_ignore_ascii_case("escape") && &captures[2] != "\\" {
+            return Err(Malformed(format!(
+                "the escape directive {:?}; this reader joins lines on a backslash only",
+                &captures[2]
+            )));
+        }
+    }
     let mut stages: Vec<Stage> = Vec::new();
     let mut pending = String::new();
     for line in content.split('\n') {
@@ -141,6 +159,12 @@ pub fn parse(content: &str) -> Result<Vec<Stage>, Malformed> {
             .split_once(' ')
             .unwrap_or((instruction.as_str(), ""));
         let keyword = keyword.to_ascii_uppercase();
+        if HEREDOC.is_match(args) {
+            return Err(Malformed(format!(
+                "the heredoc in {keyword} {args}; this reader cannot tell its body from \
+                 instructions"
+            )));
+        }
         if keyword == "FROM" {
             stages.push(parse_from(args)?);
             continue;

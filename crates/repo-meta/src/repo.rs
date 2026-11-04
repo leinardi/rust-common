@@ -14,7 +14,11 @@
 //! The repository under test: its root, its files and its tracked paths.
 //!
 //! A meta crate sits one level below the root, so a test names the root with
-//! `Repo::new(testenv_core::repo_root!())`: the macro expands `CARGO_MANIFEST_DIR` in the caller.
+//! `Repo::new(testenv_core::repo_root!())`: the macro expands `CARGO_MANIFEST_DIR` in the caller,
+//! at compile time. The root is the checkout the test binary was built from, so a binary built
+//! in one checkout (a scratch copy, a second worktree) and run from a shared target directory
+//! checks that checkout, or a path that no longer exists; each checkout builds into its own
+//! target directory.
 //! Any other root works the same, which is how the negative controls point a check at a scratch
 //! tree.
 //!
@@ -342,6 +346,9 @@ mod tests {
 
     fn run_child(env: &[(&str, &Path)]) {
         let mut child = Command::new(std::env::current_exe().unwrap());
+        // The parent's own git environment (a commit hook's) is dropped, so the child sees only
+        // the decoy's.
+        testenv_core::gitenv::isolate(&mut child);
         child.args([
             "--exact",
             "repo::tests::scratch_listing_under_a_hook_environment",

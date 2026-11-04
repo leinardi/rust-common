@@ -165,6 +165,11 @@ pub fn one_value(what: &str, sources: &[PinSource], extra: &[PinValue]) -> Vec<P
             )));
         }
     }
+    if found.is_empty() && problems.is_empty() {
+        problems.push(Problem::new(format!(
+            "{what}: no source writes it; the check would pass on nothing"
+        )));
+    }
     if found.len() > 1 {
         let values: Vec<String> = found
             .into_iter()
@@ -304,7 +309,7 @@ pub fn image_rust_problems(
     let mut problems = Vec::new();
     let mut written = Vec::new();
     for (what, pattern) in [
-        ("the dhi.io/rust tag", &*RUST_IMAGE),
+        ("dhi.io/rust tag", &*RUST_IMAGE),
         ("ARG RUST_VERSION", &*RUST_VERSION_ARG),
     ] {
         let found: Vec<&str> = pattern
@@ -316,11 +321,14 @@ pub fn image_rust_problems(
             [] => problems.push(Problem::at(file, format!("writes no {what}"))),
             [version] => problems.push(Problem::at(
                 file,
-                format!("{what} is {version:?}, not an exact X.Y.Z release"),
+                format!("the {what} is {version:?}, not an exact X.Y.Z release"),
             )),
             found => problems.push(Problem::at(
                 file,
-                format!("writes {what} {} times ({found:?}), want once", found.len()),
+                format!(
+                    "writes the {what} {} times ({found:?}), want once",
+                    found.len()
+                ),
             )),
         }
     }
@@ -675,16 +683,27 @@ static ANY_SHA256: LazyLock<Regex> = LazyLock::new(|| regex(r"\b[0-9a-f]{64}\b")
 /// An image or frontend digest: its pin is the Dockerfile's own, not a release archive's.
 static IMAGE_DIGEST: LazyLock<Regex> = LazyLock::new(|| regex(r"@sha256:[0-9a-f]{64}\b"));
 
-/// The value of make's last `<variable> :=` (or `=`) assignment in `text`, the one that wins.
-fn last_assignment<'text>(text: &'text str, variable: &str) -> Option<&'text str> {
-    pattern(&format!(
-        r"(?m)^{}[ \t]*:?=[ \t]*(\S*)[ \t]*$",
+/// The value make gives `<variable>` in `text`, assignments read in order: `=`, `:=` and `::=`
+/// set it, `?=` only when it is unset, `+=` appends with a space, and `!=` (a shell command's
+/// output) is kept as `!=<command>`, which matches no pin; an `export` or `override` prefix is
+/// read past. `None` when nothing assigns it.
+#[must_use]
+pub fn make_value(text: &str, variable: &str) -> Option<String> {
+    let assignment = pattern(&format!(
+        r"(?m)^(?:(?:export|override)[ \t]+)*{}[ \t]*(::|:|\?|\+|!)?=[ \t]*(.*?)[ \t]*$",
         regex::escape(variable)
-    ))
-    .captures_iter(text)
-    .last()
-    .and_then(|captures| captures.get(1))
-    .map(|value| value.as_str())
+    ));
+    let mut value: Option<String> = None;
+    for captures in assignment.captures_iter(text) {
+        let assigned = captures[2].to_owned();
+        value = match (captures.get(1).map(|flavour| flavour.as_str()), value) {
+            (Some("?"), Some(current)) => Some(current),
+            (Some("+"), Some(current)) => Some(format!("{current} {assigned}")),
+            (Some("!"), _) => Some(format!("!={assigned}")),
+            (_, _) => Some(assigned),
+        };
+    }
+    value
 }
 
 /// One `(platform, name, digest)` arm.
@@ -791,9 +810,9 @@ pub fn release_pin_problems(
                 .captures_iter(dockerfile)
                 .filter_map(|captures| captures.get(1).map(|value| value.as_str()))
                 .collect();
-        let in_fragment = last_assignment(fragment, variable);
+        let in_fragment = make_value(fragment, variable);
         match (in_docker.as_slice(), in_fragment) {
-            ([docker], Some(record)) if docker == &record => {}
+            ([docker], Some(record)) if *docker == record => {}
             (_, None) => problems.push(Problem::at(
                 fragment_file,
                 format!("does not set {variable}"),

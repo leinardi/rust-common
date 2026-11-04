@@ -184,6 +184,11 @@ pub fn level<'table>(lints: &'table Table, lint: &str) -> Option<&'table str> {
 /// allowlisted place could not be lifted.
 #[must_use]
 pub fn lint_level_problems(root: &Table, required: &[LintLevel<'_>]) -> Vec<Problem> {
+    if required.is_empty() {
+        return vec![Problem::new(
+            "no lint level is required; the check would pass on nothing",
+        )];
+    }
     required
         .iter()
         .filter_map(|want| {
@@ -269,6 +274,11 @@ pub fn layout_problems(
     others: &[&str],
     crates: &[String],
 ) -> Vec<Problem> {
+    if crates.is_empty() {
+        return vec![Problem::new(format!(
+            "no crate under {crates_dir} has a tracked manifest; the check would pass on nothing"
+        ))];
+    }
     let members = match read_manifest(repo, "Cargo.toml").and_then(|root| members(&root)) {
         Ok(members) => members,
         Err(problem) => return vec![problem],

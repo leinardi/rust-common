@@ -37,7 +37,10 @@ const BPF: &str = "src/cgroup/bpf_sys.rs";
 const LINTS: [LintAllowlist<'static>; 3] = [
     LintAllowlist {
         lint: UNSAFE,
-        exemptions: &[Exemption::FileLevel { file: BPF }],
+        exemptions: &[Exemption::FileLevel {
+            file: BPF,
+            reserved: false,
+        }],
     },
     LintAllowlist {
         lint: METHODS,
@@ -45,14 +48,17 @@ const LINTS: [LintAllowlist<'static>; 3] = [
             Exemption::Item {
                 file: "src/healthcheck.rs",
                 item: "connect",
+                reserved: false,
             },
             Exemption::Item {
                 file: "src/test_support.rs",
                 item: "dial_loopback",
+                reserved: false,
             },
             Exemption::Item {
                 file: "src/clock.rs",
                 item: "SystemClock",
+                reserved: false,
             },
         ],
     },
@@ -133,6 +139,20 @@ fn an_unused_exemption_is_refused() {
         [format!(
             "src/clock.rs: the exemption for {METHODS} on SystemClock matches nothing; remove it"
         )]
+    );
+    let reserved = [LintAllowlist {
+        lint: METHODS,
+        exemptions: &[Exemption::Item {
+            file: "src/clock.rs",
+            item: "SystemClock",
+            reserved: true,
+        }],
+    }];
+    let files: BTreeMap<String, String> = [("src/lib.rs".to_owned(), String::new())].into();
+    assert_eq!(
+        allowlist_problems(&files, &reserved, &GROUPS),
+        [],
+        "a reserved exemption may go unused"
     );
     assert_eq!(
         strings(&allowlist_problems(&BTreeMap::new(), &LINTS, &GROUPS)),

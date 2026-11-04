@@ -22,6 +22,12 @@
 //! Each rule takes its project's values: the stage names, the base policy, the images, the
 //! instruction texts, the downloads, the stamp prefix, the platforms and the labels.
 //!
+//! What stays in a consumer's own meta-tests: swarm-rootless-docker's exact dind image, its rules
+//! that the last USER is the unprivileged one, that the user rewrite is the stage's one RUN and
+//! that nothing is installed with apk, and its `base.name` label; awtrix-controller's and
+//! swarm-rootless-docker's check that the release workflow supplies every label argument
+//! (`label_arguments_are_supplied`); and every check that runs a tool, such as droast.
+//!
 //! Extracted from swarm-device-access/meta/tests/dockerfiles.rs at 8b4ab3a3e417 (the rules as
 //! functions of the contents, `build_stage_problems`, `stamp_problems`, `runtime_problems`,
 //! `platform_problems`, `label_policy_problems`) with
@@ -233,9 +239,60 @@ pub struct BuildStage<'rules> {
     pub downloads: &'rules [Download<'rules>],
 }
 
-/// A download command in a RUN: curl or wget, in a RUN that also names a URL (an `apt-get
-/// install curl` names none).
-static FETCH: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(curl|wget)\s"));
+/// A download command in a RUN: curl or wget where a shell command starts (the start of the RUN,
+/// or after `&&`, `||`, `;`, `|`, `(`, `then`, `do`, past any `NAME=value` assignments), whatever
+/// it fetches, a literal URL or a variable; `apt-get install curl` runs no curl.
+static FETCH: LazyLock<Regex> = LazyLock::new(|| {
+    regex(
+        r"(?:^|&&|\|\||;|\||\(|\bthen\b|\bdo\b)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:curl|wget)\b",
+    )
+});
+/// The check every fetch must have in its RUN.
+const SHA256_CHECK: &str = "| sha256sum -c -";
+
+/// What is wrong with the fetches of one RUN: every fetch must be one a download rule names in
+/// this RUN (a RUN holding one listed URL cannot fetch a second file beside it), and the RUN must
+/// check as many files with `sha256sum -c -` as it fetches, the consumers' per-stage rule held
+/// per RUN.
+fn run_fetch_problems(run: &str, downloads: &[Download<'_>]) -> Vec<Problem> {
+    let fetches = FETCH.find_iter(run).count();
+    if fetches == 0 {
+        return Vec::new();
+    }
+    let mut problems = Vec::new();
+    let credited = downloads
+        .iter()
+        .filter(|download| run.contains(download.url))
+        .count();
+    if fetches != credited {
+        problems.push(Problem::new(format!(
+            "the build stage's RUN {run} fetches {fetches} files, and its download rules name \
+             {credited}"
+        )));
+    }
+    let checks = run.matches(SHA256_CHECK).count();
+    if fetches != checks {
+        problems.push(Problem::new(format!(
+            "the build stage's RUN {run} fetches {fetches} files and checks {checks} with \
+             sha256sum -c -"
+        )));
+    }
+    problems
+}
+
+/// Whether an ADD fetches: one of its sources (the arguments before the destination, past the
+/// flags) is a URL or a variable, which may hold one.
+fn add_fetches(args: &str) -> bool {
+    let fields: Vec<&str> = args
+        .split_whitespace()
+        .filter(|field| !field.starts_with("--"))
+        .collect();
+    fields.split_last().is_some_and(|(_, sources)| {
+        sources
+            .iter()
+            .any(|source| source.contains("://") || source.contains('$'))
+    })
+}
 
 /// The build arguments a stage declares, each with its default, quotes removed; `None` for one
 /// declared with no default.
@@ -262,8 +319,9 @@ fn runs_with<'stage>(stage: &'stage Stage, needle: &str) -> Vec<&'stage str> {
 }
 
 /// What is wrong with a build stage against `rules`: its platform, its base, the required texts,
-/// each download ([`Download`]) checked in the one RUN that fetches its URL, and any RUN or ADD
-/// that downloads something no rule names.
+/// each download ([`Download`]) checked in the one RUN that fetches its URL, any RUN whose fetches
+/// (curl or wget, of a literal URL or a variable) are not each a download rule's and each checked
+/// with `sha256sum -c -` there, and any ADD of a URL or a variable.
 #[must_use]
 pub fn build_stage_problems(build: &Stage, rules: &BuildStage<'_>) -> Vec<Problem> {
     let mut problems = Vec::new();
@@ -297,21 +355,13 @@ pub fn build_stage_problems(build: &Stage, rules: &BuildStage<'_>) -> Vec<Proble
         problems.extend(download_problems(build, &args, download));
     }
     for instruction in &build.instructions {
-        let fetches = match instruction.keyword.as_str() {
-            "RUN" => FETCH.is_match(&instruction.args) && instruction.args.contains("://"),
-            "ADD" => instruction.args.contains("://"),
-            _ => false,
-        };
-        if fetches
-            && !rules
-                .downloads
-                .iter()
-                .any(|download| instruction.args.contains(download.url))
-        {
-            problems.push(Problem::new(format!(
-                "the build stage downloads with {} {}, which no download rule checks",
-                instruction.keyword, instruction.args
-            )));
+        match instruction.keyword.as_str() {
+            "RUN" => problems.extend(run_fetch_problems(&instruction.args, rules.downloads)),
+            "ADD" if add_fetches(&instruction.args) => problems.push(Problem::new(format!(
+                "the build stage fetches with ADD {}, which nothing checks by sha256",
+                instruction.args
+            ))),
+            _ => {}
         }
     }
     problems
@@ -374,7 +424,7 @@ fn download_problems(
     }
     // The reader collapses whitespace runs, so the two spaces sha256sum reads are one here.
     let check = format!("echo \"${{{}}} /tmp/", download.sha_var);
-    if !run.contains(&check) || !run.contains("| sha256sum -c -") {
+    if !run.contains(&check) || !run.contains(SHA256_CHECK) {
         problems.push(Problem::new(format!(
             "the RUN that downloads {tool} does not check it with sha256sum -c against ${}",
             download.sha_var
@@ -424,9 +474,13 @@ pub struct StampSources<'sources> {
     pub release: Option<(&'sources str, &'sources str)>,
 }
 
-/// The value of make's last `RUST_STAMP_PREFIX` assignment of any flavour, the one that wins.
-static STAMP_PREFIX: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"(?m)^RUST_STAMP_PREFIX[ \t]*(?:[:?+!]|::)?=.*$"));
+/// A `RUST_STAMP_PREFIX` assignment of any flavour, `export` and `override` included.
+static STAMP_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    regex(r"(?m)^(?:(?:export|override)[ \t]+)*RUST_STAMP_PREFIX[ \t]*(?:[:?+!]|::)?=.*$")
+});
+/// The `export` and `override` words before an assignment.
+static ASSIGNMENT_PREFIX: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"^(?:(?:export|override)[ \t]+)*"));
 /// `rust.mk`'s stamp assignment list: the variable and its continuation lines.
 static VERSION_ENV: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?m)^RUST_VERSION_ENV[ \t]*=(.*\\\n(?:.*\\\n)*.*)$"));
@@ -460,6 +514,40 @@ fn assignment_block<'text>(text: &'text str, variable: &str) -> Vec<&'text str> 
 }
 
 impl Stamps<'_> {
+    /// The problem with the Makefile's winning `RUST_STAMP_PREFIX` assignment, if any.
+    fn prefix_problem(&self, makefile: &str) -> Option<Problem> {
+        let prefix_line = format!("RUST_STAMP_PREFIX := {}", self.prefix);
+        // `export` and `override` keep the value; a `+=` appends to it and an `!=` replaces it
+        // with a command's output, so either, winning, is a value other than the prefix.
+        let assignments: Vec<&str> = STAMP_PREFIX
+            .find_iter(makefile)
+            .map(|line| {
+                let prefix = ASSIGNMENT_PREFIX
+                    .find(line.as_str())
+                    .map_or(0, |found| found.end());
+                &line.as_str()[prefix..]
+            })
+            .collect();
+        // A `?=` after another assignment does not change the value; any other flavour does.
+        let winning = assignments
+            .iter()
+            .rev()
+            .find(|line| !line.contains("?="))
+            .or_else(|| assignments.last());
+        match winning {
+            Some(line) if *line == prefix_line => None,
+            Some(line) => Some(Problem::new(format!(
+                "the Makefile's RUST_STAMP_PREFIX assignment that wins is {line:?}, want exactly \
+                 {prefix_line:?}"
+            ))),
+            None => Some(Problem::new(format!(
+                "the Makefile does not set {prefix_line}"
+            ))),
+        }
+    }
+}
+
+impl Stamps<'_> {
     /// What is wrong with the stamps in `sources`: the version module reads each variable with
     /// `option_env!`; the build stage declares each field's argument and sets each variable from
     /// it inside the one RUN that runs the build command; the Makefile's last `RUST_STAMP_PREFIX`
@@ -476,27 +564,7 @@ impl Stamps<'_> {
                 "no stamp field; the check would pass on nothing",
             ));
         }
-        let prefix_line = format!("RUST_STAMP_PREFIX := {}", self.prefix);
-        let assignments: Vec<&str> = STAMP_PREFIX
-            .find_iter(sources.makefile)
-            .map(|line| line.as_str())
-            .collect();
-        // A `?=` after another assignment does not change the value; any other flavour does.
-        let winning = assignments
-            .iter()
-            .rev()
-            .find(|line| !line.contains("?="))
-            .or_else(|| assignments.last());
-        match winning {
-            Some(line) if *line == prefix_line => {}
-            Some(line) => problems.push(Problem::new(format!(
-                "the Makefile's RUST_STAMP_PREFIX assignment that wins is {line:?}, want exactly \
-                 {prefix_line:?}"
-            ))),
-            None => problems.push(Problem::new(format!(
-                "the Makefile does not set {prefix_line}"
-            ))),
-        }
+        problems.extend(self.prefix_problem(sources.makefile));
         let stamped_build = last_recipe(sources.rust_mk, "rust-build")
             .is_some_and(|recipe| recipe.starts_with("\t$(RUST_VERSION_ENV) "));
         if !stamped_build {
@@ -587,6 +655,12 @@ pub struct RuntimeStage<'rules> {
 /// (no `--platform`).
 #[must_use]
 pub fn runtime_problems(runtime: &Stage, rules: &RuntimeStage<'_>) -> Vec<Problem> {
+    if rules.forbidden.is_empty() && rules.exactly.is_empty() {
+        return vec![Problem::new(
+            "the runtime rules forbid nothing and fix nothing; the check would pass on almost \
+             nothing",
+        )];
+    }
     let mut problems = Vec::new();
     if dockerfile::repository(&runtime.image) != rules.repository {
         problems.push(Problem::new(format!(

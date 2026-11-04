@@ -381,10 +381,10 @@ impl SuppressionHarness<'_> {
         }
         let mut problems = Vec::new();
         for (name, _, refusal) in cases {
-            if *refusal == Some("") {
+            if refusal.is_some_and(|text| text.trim().is_empty()) {
                 problems.push(Problem::at(
                     *name,
-                    "expects a refusal with empty text, which any refusal matches",
+                    "expects a refusal with empty or blank text, which any refusal matches",
                 ));
             }
         }

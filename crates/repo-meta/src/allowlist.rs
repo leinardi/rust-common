@@ -50,6 +50,10 @@ pub enum Exemption<'allowlist> {
     FileLevel {
         /// The file, relative to the root.
         file: &'allowlist str,
+        /// Whether the exemption may go unused: reserved for code that lifts the lint in some
+        /// builds or soon, such as bitgauge's `SystemClock`. An unused exemption that is not
+        /// reserved is a problem.
+        reserved: bool,
     },
     /// An item-level `#[expect(<lint>, reason = "...")]` line on `item` in `file`, at most once.
     Item {
@@ -57,6 +61,8 @@ pub enum Exemption<'allowlist> {
         file: &'allowlist str,
         /// The item's name.
         item: &'allowlist str,
+        /// Whether the exemption may go unused, as for [`Exemption::FileLevel`].
+        reserved: bool,
     },
 }
 
@@ -87,8 +93,8 @@ struct Compiled<'rules> {
 /// What is wrong with how `files` (each path and its text) name the allowlisted `lints` and the
 /// `groups` (such as `clippy::style` and `clippy::all` for the clippy bans): every mention of a
 /// group, every mention of a lint outside an accepted form in an allowlisted place, every
-/// exemption used more than once, and every exemption that matches nothing, so it cannot outlive
-/// the code it excuses. No file or no lint is a problem.
+/// exemption used more than once, and every exemption that matches nothing and is not reserved,
+/// so it cannot outlive the code it excuses. No file or no lint is a problem.
 #[must_use]
 pub fn allowlist_problems(
     files: &BTreeMap<String, String>,
@@ -189,10 +195,15 @@ fn exemption_count_problems(
     let mut problems = Vec::new();
     for allowlist in lints {
         for exemption in allowlist.exemptions {
-            if !used.contains_key(&(allowlist.lint, *exemption)) {
+            let reserved = match exemption {
+                Exemption::FileLevel { reserved, .. } | Exemption::Item { reserved, .. } => {
+                    *reserved
+                }
+            };
+            if !reserved && !used.contains_key(&(allowlist.lint, *exemption)) {
                 let (file, place) = match exemption {
-                    Exemption::FileLevel { file } => (*file, "file-level".to_owned()),
-                    Exemption::Item { file, item } => (*file, format!("on {item}")),
+                    Exemption::FileLevel { file, .. } => (*file, "file-level".to_owned()),
+                    Exemption::Item { file, item, .. } => (*file, format!("on {item}")),
                 };
                 problems.push(Problem::at(
                     file,
@@ -207,8 +218,8 @@ fn exemption_count_problems(
     for ((lint, exemption), count) in used {
         if *count > 1 {
             let (file, place) = match exemption {
-                Exemption::FileLevel { file } => (file, "file-level".to_owned()),
-                Exemption::Item { file, item } => (file, format!("on {item}")),
+                Exemption::FileLevel { file, .. } => (file, "file-level".to_owned()),
+                Exemption::Item { file, item, .. } => (file, format!("on {item}")),
             };
             problems.push(Problem::at(
                 *file,
@@ -228,16 +239,14 @@ fn accepted<'rules>(
     index: usize,
 ) -> Option<Exemption<'rules>> {
     if rule.file_level.is_match(line) {
-        return rule
-            .exemptions
-            .iter()
-            .copied()
-            .find(|exemption| matches!(exemption, Exemption::FileLevel { file } if *file == path));
+        return rule.exemptions.iter().copied().find(
+            |exemption| matches!(exemption, Exemption::FileLevel { file, .. } if *file == path),
+        );
     }
     if rule.item.is_match(line) {
         let item = item_after(lines, index)?;
         return rule.exemptions.iter().copied().find(|exemption| {
-            matches!(exemption, Exemption::Item { file, item: allowed } if *file == path && *allowed == item)
+            matches!(exemption, Exemption::Item { file, item: allowed, .. } if *file == path && *allowed == item)
         });
     }
     None
@@ -250,10 +259,10 @@ fn describe(exemptions: &[Exemption<'_>]) -> String {
     exemptions
         .iter()
         .map(|exemption| match exemption {
-            Exemption::FileLevel { file } => {
+            Exemption::FileLevel { file, .. } => {
                 format!("{file}'s one file-level #![expect(..., reason = \"...\")]")
             }
-            Exemption::Item { file, item } => {
+            Exemption::Item { file, item, .. } => {
                 format!("an item-level #[expect(..., reason = \"...\")] line on {item} in {file}")
             }
         })

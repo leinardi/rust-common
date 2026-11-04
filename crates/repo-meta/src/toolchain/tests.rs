@@ -19,6 +19,7 @@
 //! `rust_std_rules`, `hook_version_rules`, `trivy_rules`) and bitgauge/meta/tests/toolchain.rs at
 //! 600fc3905200 (`rust_toolchain_ci_rules`, `rust_release_pin_control_fails_on_a_change`).
 
+use super::make_value;
 use super::{
     PinSource, PinValue, RUST_RELEASE_PINS, ReleasePins, RustVersion, ToolchainRef, ZigRecord,
     ci_rust_toolchains, ci_toolchain_problems, image_rust_problems, one_value,
@@ -59,6 +60,11 @@ fn one_value_needs_every_source_and_one_value() {
             r"x: a does not write it ((?m)^X=(\S+)$)",
             "x: b cannot be read"
         ]
+    );
+    let optional = [PinSource::new("a", "nothing\n", r"(?m)^X=(\S+)$").optional()];
+    assert_eq!(
+        strings(&one_value("x", &optional, &[])),
+        ["x: no source writes it; the check would pass on nothing"]
     );
     assert_eq!(
         strings(&one_value("x", &[], &[])),
@@ -699,4 +705,33 @@ fn trivy_rules() {
         [],
         "a trailing comment is read past"
     );
+}
+
+/// How make values are read: each flavour, `export` and `override` read past, the last that
+/// sets the value winning; and a release pin read through them.
+#[test]
+fn make_values_follow_make() {
+    for (text, want) in [
+        ("X := 1\n", Some("1")),
+        ("X := 1\nX = 2\n", Some("2")),
+        ("X := 1\nX ?= 2\n", Some("1")),
+        ("X ?= 2\n", Some("2")),
+        ("X := 1\nX += 2\n", Some("1 2")),
+        ("X := 1\noverride X := 3\n", Some("3")),
+        ("export X := 4\n", Some("4")),
+        ("X != echo 5\n", Some("!=echo 5")),
+        ("# X := 1\nXY := 2\n", None),
+    ] {
+        assert_eq!(make_value(text, "X").as_deref(), want, "{text:?}");
+    }
+    for line in [
+        "override RUST_RELEASE_RUST_STD_VERSION := 1.98.0",
+        "RUST_RELEASE_RUST_STD_VERSION += 1",
+    ] {
+        assert_eq!(
+            release_check(BG_DOCKERFILE, &format!("{BG_RELEASE_MK}{line}\n")).len(),
+            1,
+            "{line}"
+        );
+    }
 }

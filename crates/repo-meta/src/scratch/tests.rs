@@ -219,3 +219,22 @@ fn the_scratch_baseline_is_what_the_ratchet_writes() {
     );
     assert!(scratch.repo().path().join("x.rs").is_file());
 }
+
+/// A blank refusal text matches any refusal, so it is refused before any case runs.
+#[test]
+fn a_blank_refusal_text_is_refused() {
+    let cases: [RatchetCase; 2] = [
+        ("empty", |scratch| scratch.commit_empty_baseline(), Some("")),
+        (
+            "blank",
+            |scratch| scratch.commit_empty_baseline(),
+            Some("  "),
+        ),
+    ];
+    let problems = RATCHET.run_cases(&rust_common(), &cases);
+    let names: Vec<&str> = problems
+        .iter()
+        .map(|problem| problem.location.as_str())
+        .collect();
+    assert_eq!(names, ["empty", "blank"]);
+}
