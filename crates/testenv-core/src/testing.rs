@@ -585,6 +585,12 @@ impl Runner {
 
     /// Runs the top-level test `name` with `body` under a child of `ctx`, its subtests matched
     /// against `filter`, and returns how it ended.
+    ///
+    /// With the deadline check on, a test that starts after `ctx` ended fails with
+    /// `integration suite deadline exceeded (<variable>=<value>)`, the value being the one
+    /// [`Runner::suite_timeout`] read on this runner or a clone. A suite calls `suite_timeout`
+    /// before its first test, as `main` does to build the suite context; a runner that never
+    /// called it names an empty value.
     pub async fn run_test<F, Fut>(
         &self,
         name: &str,
