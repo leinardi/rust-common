@@ -33,6 +33,8 @@ version = 2
 # MIT only; rcgen, yasna, time, time-core, deranged, powerfmt, num-conv and base64 offer MIT or
 # Apache-2.0, pem is MIT only, and ring is the Apache-2.0 AND ISC allowed below.
 allow = [
+    # bollard and bollard-stubs (Apache-2.0 only), under testenv-core's `bollard`; most other
+    # crates offer it beside MIT.
     "Apache-2.0",
     # winnow (MIT only), under the meta crate's toml; memchr and aho-corasick (Unlicense OR MIT),
     # under its regex; jiff and jiff-core (Unlicense OR MIT), under go-compat; tokio (MIT only),
@@ -41,6 +43,9 @@ allow = [
     # unicode-ident ((MIT OR Apache-2.0) AND Unicode-3.0), through tokio-macros -> syn ->
     # proc-macro2 -> unicode-ident. tokio's `macros` feature needs it, both for the tests'
     # #[tokio::test] and for service-kit's `runtime` feature, whose signal helpers use select!.
+    # Also the ICU crates (icu_*, zerovec, yoke, tinystr, litemap, writeable, potential_utf,
+    # zerotrie, zerofrom; Unicode-3.0) under testenv-core's `bollard`: bollard -> url -> idna, as in
+    # swarm-scheduler-exporter's and swarm-device-access's graphs.
     "Unicode-3.0",
     # ring (Apache-2.0 AND ISC), rustls-webpki (ISC) and untrusted (ISC), under docker-engine's
     # `tls` (rustls and tokio-rustls on ring), as in swarm-scheduler-exporter's deny.toml. No

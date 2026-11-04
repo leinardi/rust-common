@@ -11,6 +11,7 @@ members = [
     "crates/go-http",
     "crates/http-framing",
     "crates/service-kit",
+    "crates/testenv-core",
     "meta",
 ]
 resolver = "3"

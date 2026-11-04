@@ -1,0 +1,73 @@
+[package]
+name = "testenv-core"
+description = "Test-environment helpers of the Go-ported suites: Go's -run filter, environment IDs, the sweep rules, the tool gate, git isolation, Go's testing package for async and sync runners"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "testenv_core"
+
+[lints]
+workspace = true
+
+[features]
+# Go's context and testing packages on tokio, for an async `harness = false` suite
+# (swarm-scheduler-exporter's and swarm-device-access's): TestHandle, Outcome, Suite, and the
+# runner skeleton (--run, the suite deadline, SIGINT and SIGTERM, the tally).
+async = ["dep:tokio", "dep:tokio-util"]
+# bitgauge's runner of its Docker suites, without async: TestCase, Test, main and run_selected,
+# libtest's flags accepted.
+sync = ["dep:tempfile"]
+# The host daemon's sweep, listing and cleanup on bollard, and the PID liveness check. The sweep
+# logs its decisions through the redacting logger, and its calls run under a context.
+bollard = ["async", "redact", "dep:bollard", "dep:rustix"]
+# The harness's slog text log with secrets redacted, on go-slog.
+redact = ["dep:go-slog"]
+
+[dependencies]
+# Go's time.ParseDuration and Duration.String, strconv.Quote and errors.Join.
+go-compat = { path = "../go-compat" }
+# The sweep's started label, read as RFC 3339; as in go-compat, no tzdb or system feature.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+# The run filter: Go's -run patterns are regular expressions.
+regex = "1.13.1"
+go-slog = { path = "../go-slog", optional = true }
+# The suite deadline, its signals and select!, on the caller's current-thread runtime.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "rt",
+    "time",
+    "signal",
+    "macros",
+], optional = true }
+# CancellationToken, Go's context cancellation.
+tokio-util = { version = "0.7.20", default-features = false, optional = true }
+# Go's t.TempDir for the sync runner.
+tempfile = { version = "3.27.0", optional = true }
+# The Docker SDK for the harness's own host calls: the unix socket only (pipe). A suite that also
+# speaks TCP or TLS to its nodes (swarm-scheduler-exporter's) adds bollard's http and ssl itself,
+# and cargo unifies them; the version is pinned as the consumers pin it.
+bollard = { version = "=0.21.1", default-features = false, features = ["pipe"], optional = true }
+# kill(pid, 0) for the sweep's liveness check, without unsafe code.
+rustix = { version = "1.1.6", default-features = false, features = [
+    "std",
+    "process",
+], optional = true }
+
+[dev-dependencies]
+# The redacting logger's record times, from a clock the test sets.
+go-clock = { path = "../go-clock" }
+tempfile = "3.27.0"
+# The paused clock, and the fake daemon's socket and I/O for the host helpers' tests.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "rt",
+    "time",
+    "macros",
+    "test-util",
+    "net",
+    "io-util",
+] }

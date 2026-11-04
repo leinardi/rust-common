@@ -1,0 +1,1 @@
+usage: bitgauge [serve|healthcheck] [--config /etc/bitgauge/config.yaml]

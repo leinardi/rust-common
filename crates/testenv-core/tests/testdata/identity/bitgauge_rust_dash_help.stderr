@@ -1,0 +1,3 @@
+bitgauge: -help is not an option; write it as --help
+Usage: bitgauge [OPTIONS]
+       bitgauge <COMMAND>

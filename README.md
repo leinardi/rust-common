@@ -17,7 +17,8 @@ shares the workspace version.
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
 it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`, `go-http`,
-`docker-engine`, `service-kit`. The others are planned for `v0.1.0` and land one at a time.
+`docker-engine`, `testenv-core`, `service-kit`. The others are planned for `v0.1.0` and land one
+at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -28,7 +29,7 @@ it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`
 | `http-framing` (available) | HTTP/1 request framing over the bytes a connection read, as hyper frames them, std only | – |
 | `go-http` (available) | Go `net/http` server behaviours on hyper: the mux's answers, header order and framing, the four timeouts, `bind` and `parse_port`, `serve` and its drain | `testing` (the timeouts, the routes, the log callback and the listen-error prefix are parameters) |
 | `docker-engine` (available) | A Docker Engine API client over HTTP/1 that sends what moby client v0.6.0 sends: transport, version negotiation, events, decoding, moby's error texts | `tcp`, `tls`, `write`, `attach`, `test-util` (the `User-Agent` and the response-header timeout are parameters) |
-| `testenv-core` | Test-environment helpers: run filters, environment IDs, sweep rules, the tool gate, scratch git repositories | `async`, `sync`, `bollard`, `redact` |
+| `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
 | `repo-meta` | Repository meta-test checks: workspace lints, Markdown links, licence headers, suppressions, Dockerfiles, toolchain pins, CI gates | – |
 | `tracing-setup` | A `tracing` subscriber set up the way the projects log | `log-bridge` |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals | `runtime` |
@@ -191,6 +192,38 @@ It depends on `go-compat`, `jiff` (as `go-compat`), `hyper` (`client`, `http1`),
 with `attach` and `test-util`), `tokio-util`, `serde` and `serde_json`; `tcp` adds `socket2` and
 `flate2` (the `rust_backend` only), and `tls` adds `rustls` on `ring`, `tokio-rustls`,
 `rustls-pki-types` and `rustls-native-certs`.
+
+### testenv-core
+
+What the projects' test environments share: their Docker suites (`harness = false` runners with
+Go's test output) and their meta-tests. With no feature it needs no Docker, network or runtime.
+The suites' tests, clusters, images, label names and variables stay theirs; they pass them in.
+
+| Item | What it is |
+| --- | --- |
+| `run_filter::RunFilter` | Go's `-run` (levels split on `/`, alternatives on a top-level bar, unanchored); a pattern that selects nothing is an error |
+| `Error` | a message with Go's `%w` context chain and `errors.Join` |
+| `envid::EnvIds` | `{bytes, label, prefix}`: `generate`, `resource_name`, `label_filter` (Engine API), `cli_filter` (`label=…`); `random_hex` |
+| `sweep_rules` | `SweepRules::decide` (stale, same host and PID namespace, owner dead), `Owner`, `parse_owner`, `current_owner`, `hostname`, `current_pid_namespace`, `stale_after_from_env(name, default, getenv)`, `Labels` (`run_labels`, `record`), `Resources::cleanup_command` |
+| `toolgate::Gate` | `{require_env, tools, locate, note}`: a tool on `PATH` or under the nearest ancestor's directory, a skip with a note or, with the variable at `1`, a failure (`Required`); `lookup`, the testable `lookup_in`; `repo_root!()` |
+| `gitenv` | `isolate(&mut Command)`: no `GIT_*` redirection, no user or system config; `REPOSITORY_VARS`, `redirects` |
+| `identity` | `IDENTITY_FLAG` (`-help`), `Answer` and `Text` (an implementation's whole answer), `excerpt` (Go or Rust quoting), `is_static_elf` |
+| `context` (`async`) | Go's `context.Context` on tokio: `with_timeout`, `with_cancel`, `without_cancel`, `run` |
+| `testing` (`async`) | `TestHandle` (`log`, `error`, `fatal`, `skip`, `cleanup`, `run`), `Fatal`, `OrFatal`, `Outcome`, `Test`, `Suite<S>`, and `Runner` over a `RunnerConfig` (`--run`, the suite deadline, SIGINT and SIGTERM, the tally) |
+| `runner` (`sync`) | bitgauge's runner: `TestCase<S>`, `Test`, `main`, `main_selected`, `run`, `run_selected`; libtest's flags accepted |
+| `redact` (`redact`) | `RedactingLogger` (Go's text handler at debug, the caller's clock and zone), `Secret`, `redact_env` |
+| `host` (`bollard`) | `HostSweep {labels, resources, op_timeout}`: `sweep`, `list_environments`, `cleanup`, the removals; `sweep_rules`, `process_alive`, `with_timeout`, `OpError` |
+
+Each consumer passes its own: swarm-scheduler-exporter and swarm-device-access build `async`,
+`bollard` and `redact` with their envid bytes, labels, stale-after and suite-deadline variables,
+resources and tally; bitgauge builds `sync` and the default modules; awtrix-controller,
+swarm-rootless-docker and `repo-meta` the default features, for the tool gate and git isolation.
+`bollard` builds bollard 0.21.1 with `pipe` only; a suite that also needs `http` or `ssl` enables
+them on its own bollard dependency.
+
+It depends on `go-compat`, `jiff` (as `go-compat`) and `regex`; `async` adds `tokio` (`rt`,
+`time`, `signal`, `macros`) and `tokio-util`, `sync` adds `tempfile`, `redact` adds `go-slog`, and
+`bollard` adds `bollard` and `rustix` (`process`).
 
 ### service-kit
 
