@@ -16,8 +16,8 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. **Available:** `go-compat`, `go-clock`. The others are planned for `v0.1.0` and land one at a
-time.
+it. **Available:** `go-compat`, `go-clock`, `service-kit`. The others are planned for `v0.1.0` and
+land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ time.
 | `testenv-core` | Test-environment helpers: run filters, environment IDs, sweep rules, the tool gate, scratch git repositories | `async`, `sync`, `bollard`, `redact` |
 | `repo-meta` | Repository meta-test checks: workspace lints, Markdown links, licence headers, suppressions, Dockerfiles, toolchain pins, CI gates | – |
 | `tracing-setup` | A `tracing` subscriber set up the way the projects log | `log-bridge` |
-| `service-kit` | Process plumbing: shutdown and hangup signals, the runtime builder, `buildinfo!` | – |
+| `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals | `runtime` |
 
 Where the projects legitimately differ, the shared code takes a parameter; one project's behaviour
 is never forced on another.
@@ -73,6 +73,21 @@ handed:
 | `FakeClock` | set and advanced by hand; clones share the time |
 
 It depends on `jiff` (as `go-compat`) and on `tokio` with only the `time` feature.
+
+### service-kit
+
+What a service's `main` repeats. Every message, exit code and default stays the caller's.
+
+| Item | What it is |
+| --- | --- |
+| `buildinfo!(PREFIX, Defaults)` | the `<PREFIX>_VERSION`, `_COMMIT` and `_DATE` stamps, read with `option_env!` in the calling crate, as a constant `BuildInfo`; `Defaults` gives the value of each unstamped field and whether an empty stamp is kept (`EmptyStamp::Kept`) or counts as unstamped (`EmptyStamp::Unstamped`) |
+| `runtime::build_runtime` (`runtime`) | the multi-thread runtime, every driver on, with the caller's worker count or tokio's default |
+| `runtime::run_until_exit`, `runtime::Exit` (`runtime`) | runs the program on that runtime, then bounds the runtime's shutdown by what is left of the `Exit`'s deadline; the exit code is the program's own type |
+| `signal::shutdown_signal`, `signal::lazy_shutdown_signal` (`runtime`, Unix) | SIGINT or SIGTERM, with the handlers installed when called, or when first polled |
+| `signal::hangup_channel` (`runtime`, Unix) | SIGHUP into a channel holding one pending signal |
+
+Without features it has no dependency; `runtime` adds `tokio` (`rt-multi-thread`, `signal`, `sync`,
+`time`, `macros`).
 
 ## Using a crate
 

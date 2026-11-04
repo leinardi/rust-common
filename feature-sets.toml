@@ -40,3 +40,12 @@ go-clock = [
     { no-default-features = true },
     { all-features = true },
 ]
+
+# service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
+# no-default-features set, as the default enables nothing); swarm-scheduler-exporter,
+# swarm-device-access and awtrix-controller also use the runtime and the signals.
+service-kit = [
+    { no-default-features = true },
+    { features = ["runtime"] },
+    { all-features = true },
+]

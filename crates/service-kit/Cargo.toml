@@ -1,0 +1,37 @@
+[package]
+name = "service-kit"
+description = "Process plumbing for a service: build stamps, the runtime and its bounded shutdown, signals"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "service_kit"
+
+[lints]
+workspace = true
+
+[features]
+# `buildinfo!` needs nothing and is always there. `runtime` adds the multi-thread runtime builder,
+# its shutdown bounded by a deadline (`Exit`), and the SIGINT/SIGTERM/SIGHUP helpers, all on tokio.
+runtime = ["dep:tokio"]
+
+[dependencies]
+# rt-multi-thread for the runtime builder; signal for the handlers (and the I/O driver they run
+# on); sync for the SIGHUP channel; time for the deadline; macros for select!.
+tokio = { version = "1.54.1", default-features = false, optional = true, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+
+[[test]]
+name = "signals"
+required-features = ["runtime"]
