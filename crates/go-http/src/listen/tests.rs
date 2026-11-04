@@ -16,10 +16,11 @@
 //! names, and the dual-stack wildcard. Only loopback and `localhost` are bound, and the one
 //! name that must not resolve is under `.invalid`, so no test needs a network beyond the host.
 //!
-//! Extracted from swarm-device-access/src/server/tests.rs (`ports_parse_as_go_s`) and
-//! src/server/tests/shutdown.rs (the bind tests) at 8b4ab3a3e417, which extend
-//! swarm-scheduler-exporter's at c9e79afa8810; the `http listen: ` prefix case is
-//! swarm-scheduler-exporter's.
+//! Extracted from swarm-device-access/src/server/tests.rs at 8b4ab3a3e417 (`ports_parse_as_go_s`).
+//! Extracted from swarm-device-access/src/server/tests/shutdown.rs at 8b4ab3a3e417 (the bind
+//! tests, which extend swarm-scheduler-exporter's).
+//! Extracted from swarm-scheduler-exporter/src/server/tests/shutdown.rs at c9e79afa8810 (the
+//! `http listen: ` prefix case).
 
 use socket2::SockRef;
 use tokio::io::AsyncReadExt as _;

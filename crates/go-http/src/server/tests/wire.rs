@@ -13,11 +13,13 @@
 
 //! The wire-capture harness ([`crate::testing`]) on Go 1.26 captures of the mux's own answers,
 //! the ones that depend on no program's routes: a 404, a 307 for `GET` and `POST`, `OPTIONS *`,
-//! `CONNECT`, `HEAD` and two pipelined requests. They are copied from
-//! swarm-scheduler-exporter/tests/testdata/http at c9e79afa8810 (port 18080 is its healthy
+//! `CONNECT`, `HEAD`, two pipelined requests and the head of a `/metrics` answer. They are copied
+//! from swarm-scheduler-exporter/tests/testdata/http at c9e79afa8810 (port 18080 is its healthy
 //! server, whose `/healthz` answers `ok` with its type set), and from
 //! swarm-device-access/tests/testdata/http at 8b4ab3a3e417 for the sniffed `/readyz` (its own port
-//! 18080); each program keeps its whole set.
+//! 18080); each program keeps its whole set. Every capture is verbatim except `GET_METRICS_CUT`,
+//! which is trimmed here to its head and the first bytes of its first chunk, so it replays as a
+//! capture cut before the end.
 //!
 //! Extracted from swarm-scheduler-exporter/src/server/tests/wire.rs at c9e79afa8810.
 
@@ -136,7 +138,10 @@ ok[end: <nil>]
 
 ";
 
-/// A `/metrics` answer cut at its head, as a capture of a long body is.
+/// swarm-scheduler-exporter's `go-get-metrics.txt`, trimmed here to its head and the first bytes
+/// of its first chunk (`800\r\n# HELP`); the Go capture runs on into the Go program's own
+/// families before it is cut. Neither ends in `[end: <nil>]`, so both are captures cut before the
+/// end, matching any answer that starts with them.
 const GET_METRICS_CUT: &[u8] = b"### get-metrics  (port 18080)
 ### request: GET /metrics HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n
 HTTP/1.1 200 OK\r
@@ -258,4 +263,18 @@ fn captures_are_read_from_a_directory() {
         .collect();
     assert_eq!(names, ["a-star", "b-nope"]);
     assert!(testing::read_captures(&directory).is_err());
+}
+
+/// The control for an empty capture set: a directory with no capture in it is refused as
+/// `InvalidData` rather than read as zero captures, so a replay cannot pass on nothing.
+#[test]
+fn an_empty_capture_directory_is_refused() {
+    let directory =
+        std::env::temp_dir().join(format!("go-http-captures-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let read = testing::read_captures(&directory);
+    std::fs::remove_dir_all(&directory).unwrap();
+    let error = read.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(error.to_string().starts_with("no capture in "), "{error}");
 }

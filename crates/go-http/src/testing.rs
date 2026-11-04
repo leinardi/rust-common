@@ -125,14 +125,23 @@ pub fn head(response: &[u8]) -> Option<&[u8]> {
 
 /// Every capture in `directory`, sorted by file name, each named by its file stem.
 ///
+/// A directory with no capture in it is an error, so a replay can never pass on nothing because
+/// the captures were moved or never checked out.
+///
 /// # Errors
 ///
-/// The directory or a file cannot be read, or a file is not a capture
-/// ([`io::ErrorKind::InvalidData`]).
+/// The directory or a file cannot be read; the directory is empty, or a file is not a capture
+/// (both [`io::ErrorKind::InvalidData`]).
 pub fn read_captures(directory: &Path) -> io::Result<Vec<Capture>> {
     let mut paths = std::fs::read_dir(directory)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<io::Result<Vec<_>>>()?;
+    if paths.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("no capture in {}", directory.display()),
+        ));
+    }
     paths.sort();
     paths
         .iter()
@@ -175,6 +184,10 @@ pub struct Replay {
 
 /// Replays each of `captures` against the server `server_for` sets up for it (by its port, at
 /// its [`Capture::date`]), on a fresh connection under `timeouts`.
+///
+/// An empty `captures` gives an empty [`Replay`], which has nothing `different`: the caller
+/// asserts how many were `identical` (and [`read_captures`] refuses an empty directory), so a
+/// replay of nothing does not pass.
 pub async fn replay(
     captures: &[Capture],
     timeouts: Timeouts,
