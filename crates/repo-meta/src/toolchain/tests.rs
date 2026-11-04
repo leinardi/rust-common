@@ -20,12 +20,15 @@
 //! 600fc3905200 (`rust_toolchain_ci_rules`, `rust_release_pin_control_fails_on_a_change`).
 
 use super::{
-    PinSource, PinValue, RUST_RELEASE_PINS, RustVersion, ZigRecord, ci_rust_toolchains,
-    ci_toolchain_problems, image_rust_problems, one_value, release_pin_problems, rust_release,
-    rust_std_problems, rust_version_problems, shellcheck_problems, toolchain_targets,
-    trivy_problems, zigbuild_action_problems,
+    PinSource, PinValue, RUST_RELEASE_PINS, ReleasePins, RustVersion, ToolchainRef, ZigRecord,
+    ci_rust_toolchains, ci_toolchain_problems, image_rust_problems, one_value,
+    release_pin_problems, rust_release, rust_std_problems, rust_version_problems,
+    shellcheck_problems, toolchain_targets, trivy_problems, zigbuild_action_problems,
 };
 use crate::{strings, yaml};
+
+const BG_DOCKERFILE: &str = include_str!("../../tests/testdata/bitgauge.Dockerfile");
+const BG_RELEASE_MK: &str = include_str!("../../tests/testdata/bitgauge.rust-release.mk");
 
 fn documents(file: &str, content: &str) -> Vec<(String, yaml::Value)> {
     vec![(file.to_owned(), yaml::parse(file, content).unwrap())]
@@ -56,6 +59,10 @@ fn one_value_needs_every_source_and_one_value() {
             r"x: a does not write it ((?m)^X=(\S+)$)",
             "x: b cannot be read"
         ]
+    );
+    assert_eq!(
+        strings(&one_value("x", &[], &[])),
+        ["x: no source and no value; the check would pass on nothing"]
     );
 }
 
@@ -112,13 +119,16 @@ fn rust_version_follows_the_policy() {
     );
 }
 
-/// Another release in the tag or in `RUST_VERSION`, a floating tag, and a missing argument are
-/// each refused once.
+/// Another release in the tag or in `RUST_VERSION`, a tag and an argument that differ, a floating
+/// tag, a missing argument and a second build image are each refused; under the line policy
+/// a later patch passes when the tag and the argument agree, and a tag outside a FROM is not read.
 #[test]
 fn image_rust_rules() {
     let good = "FROM --platform=$BUILDPLATFORM dhi.io/rust:1.98.1-debian13-dev AS build\n\
                 ARG RUST_VERSION=1.98.1\n";
-    assert_eq!(image_rust_problems("Dockerfile", good, "1.98.1"), []);
+    let check = |sample: &str, policy| image_rust_problems("Dockerfile", sample, "1.98.1", policy);
+    assert_eq!(check(good, RustVersion::Exact), []);
+    assert_eq!(check(good, RustVersion::Line), []);
     for (name, sample) in [
         ("another tag", good.replace("rust:1.98.1-", "rust:1.98.0-")),
         (
@@ -134,13 +144,33 @@ fn image_rust_rules() {
             "a second build image",
             format!("{good}FROM dhi.io/rust:1.98.1-dev\n"),
         ),
+        (
+            "the tag only in a comment",
+            good.replace("FROM --platform", "# FROM --platform")
+                + "FROM dhi.io/static:1 AS runtime\n",
+        ),
     ] {
-        assert_eq!(
-            image_rust_problems("Dockerfile", &sample, "1.98.1").len(),
-            1,
-            "{name} was not refused once"
+        assert!(
+            !check(&sample, RustVersion::Exact).is_empty(),
+            "{name} was not refused"
         );
     }
+    let patched = good.replace("1.98.1", "1.98.2");
+    assert_eq!(check(&patched, RustVersion::Line), []);
+    assert_eq!(check(&patched, RustVersion::Exact).len(), 1);
+    let split = good.replace("rust:1.98.1-", "rust:1.98.2-");
+    assert_eq!(
+        strings(&check(&split, RustVersion::Line)),
+        [
+            "Dockerfile: the dhi.io/rust tag's release 1.98.2 is not ARG RUST_VERSION's 1.98.1, \
+             so the musl standard libraries are another release's"
+        ]
+    );
+    assert_eq!(
+        check(&good.replace("1.98.1", "1.97.0"), RustVersion::Line).len(),
+        1,
+        "another line"
+    );
 }
 
 /// Another release, a channel, a release without its patch, and no toolchain at all are refused;
@@ -172,20 +202,21 @@ fn ci_toolchain_rules() {
           toolchain: nightly
 "#,
     );
-    let problems = ci_toolchain_problems(&steps, "1.98.1");
+    let problems = ci_toolchain_problems(&steps, "1.98.1", ToolchainRef::Input);
     assert_eq!(problems.len(), 4, "{problems:#?}");
     assert_eq!(
         strings(&ci_toolchain_problems(
             &documents("ci.yaml", "jobs:\n  a:\n    steps: []\n"),
-            "1.98.1"
+            "1.98.1",
+            ToolchainRef::Input
         )),
         ["no CI step sets up a Rust toolchain; the check would see nothing"]
     );
 }
 
-/// What reads as a toolchain: an action's input or non-commit reference, `RUSTUP_TOOLCHAIN`, and a
-/// `rustup` or `cargo +` command; an action that names none is refused unless it reads
-/// `rust-toolchain.toml`.
+/// What reads as a toolchain: an action's input, its non-commit reference only where the
+/// project reads one (`InputOrRef`), `RUSTUP_TOOLCHAIN`, and a `rustup` or `cargo +` command; an
+/// action that names none is refused unless it reads `rust-toolchain.toml`.
 #[test]
 fn ci_toolchains_are_read_from_actions_and_scripts() {
     let documents = documents(
@@ -204,14 +235,36 @@ fn ci_toolchains_are_read_from_actions_and_scripts() {
       - run: rustup toolchain install --no-self-update 1.97.0 && cargo +beta build
 ",
     );
-    let (values, problems) = ci_rust_toolchains(&documents);
+    let no_toolchain = "sample.yaml: dtolnay/rust-toolchain names no toolchain, and does not read \
+                        rust-toolchain.toml";
+    let (values, problems) = ci_rust_toolchains(&documents, ToolchainRef::InputOrRef);
     let mut named: Vec<&str> = values.iter().map(|value| value.value.as_str()).collect();
     named.sort_unstable();
     assert_eq!(named, ["1.97.0", "1.98.1", "beta", "nightly", "stable"]);
+    assert_eq!(strings(&problems), [no_toolchain]);
+    let (values, problems) = ci_rust_toolchains(&documents, ToolchainRef::Input);
+    let mut named: Vec<&str> = values.iter().map(|value| value.value.as_str()).collect();
+    named.sort_unstable();
+    assert_eq!(named, ["1.97.0", "1.98.1", "beta", "nightly"]);
+    assert_eq!(strings(&problems), [no_toolchain, no_toolchain]);
+}
+
+/// `@<release>` with no `toolchain` input: read as the toolchain only under `InputOrRef`; under
+/// `Input` it names none, even when the reference is the right release.
+#[test]
+fn a_release_reference_without_an_input() {
+    let step = documents(
+        "ci.yaml",
+        "jobs:\n  rust:\n    steps:\n      - uses: dtolnay/rust-toolchain@1.98.1\n",
+    );
     assert_eq!(
-        strings(&problems),
+        ci_toolchain_problems(&step, "1.98.1", ToolchainRef::InputOrRef),
+        []
+    );
+    assert_eq!(
+        strings(&ci_toolchain_problems(&step, "1.98.1", ToolchainRef::Input)),
         [
-            "sample.yaml: dtolnay/rust-toolchain names no toolchain, and does not read \
+            "ci.yaml: dtolnay/rust-toolchain names no toolchain, and does not read \
              rust-toolchain.toml"
         ]
     );
@@ -279,6 +332,22 @@ fn zigbuild_action_rules() {
     for problems in records(&fragment, &dockerfile) {
         assert_eq!(problems, []);
     }
+    let commented = action().replace(
+        "ZIG_VERSION: \"0.17.0\"",
+        "ZIG_VERSION: \"0.17.0\" # the release make-common pins",
+    );
+    assert_eq!(
+        zigbuild_action_problems(
+            "action.yaml",
+            &commented,
+            ZigRecord::Fragment {
+                file: "rust-release.mk",
+                content: &fragment,
+            },
+        ),
+        [],
+        "a trailing comment is read past"
+    );
     for (name, action) in [
         (
             "a moved zig in the action",
@@ -330,69 +399,157 @@ fn zigbuild_action_rules() {
     }
 }
 
-/// Another version or digest in either file, an archive one names and the other does not, and a
-/// sha256 that is no archive's and no image's are each refused.
+fn release_check(dockerfile: &str, fragment: &str) -> Vec<String> {
+    strings(&release_pin_problems(
+        "Dockerfile",
+        dockerfile,
+        ".mk/rust-release.mk",
+        fragment,
+        &RUST_RELEASE_PINS,
+    ))
+}
+
+/// bitgauge's Dockerfile and release fragment pass; each way to move one copy fails with exactly
+/// the problem that names it: another version on either side, a changed digest on either side,
+/// swapped arms, a dropped aarch64 arm, a junk riscv64 arm, a digest the fragment holds for no
+/// arm, and a stray sha256. Make's last assignment is the one read.
 #[test]
 fn release_pin_rules() {
-    let check = |dockerfile: &str, fragment: &str| {
-        release_pin_problems(
-            "Dockerfile",
-            dockerfile,
-            ".mk/rust-release.mk",
-            fragment,
-            &RUST_RELEASE_PINS,
+    assert_eq!(
+        release_check(BG_DOCKERFILE, BG_RELEASE_MK),
+        Vec::<String>::new()
+    );
+    let std_amd64 = "bd9f35880de21dab0e387e84009c00001ae7836a4ba565cb16823f13f75f325f";
+    let std_arm64 = "7e0ad2e67817f224b7a6331e48d6397303fc050edaccf81784ed786ffddc884a";
+    let std_want = format!(
+        "{{(\"amd64\", \"x86_64-unknown-linux-musl\", \"{std_amd64}\"), (\"arm64\", \
+         \"aarch64-unknown-linux-musl\", \"{std_arm64}\")}}"
+    );
+    let std_arms = |found: &str| {
+        format!(
+            "Dockerfile: std_sha256 is chosen by the arms {found}, want exactly {std_want} from \
+             .mk/rust-release.mk"
         )
     };
-    let (dockerfile, fragment) = (dockerfile(), fragment());
-    assert_eq!(check(&dockerfile, &fragment), []);
-    let changed = format!("{}0", &DIGEST[..63]);
-    for (name, dockerfile, fragment) in [
-        (
-            "another zig",
-            dockerfile.replace("ARG ZIG_VERSION=0.17.0", "ARG ZIG_VERSION=0.16.0"),
-            fragment.clone(),
+    let docker = |from: &str, to: &str| {
+        assert!(BG_DOCKERFILE.contains(from), "{from:?} is gone");
+        release_check(&BG_DOCKERFILE.replacen(from, to, 1), BG_RELEASE_MK)
+    };
+    let fragment = |from: &str, to: &str| {
+        assert!(BG_RELEASE_MK.contains(from), "{from:?} is gone");
+        release_check(BG_DOCKERFILE, &BG_RELEASE_MK.replacen(from, to, 1))
+    };
+    assert_eq!(
+        docker("ARG ZIG_VERSION=0.17.0", "ARG ZIG_VERSION=0.16.0"),
+        [
+            "Dockerfile: writes ARG ZIG_VERSION as [\"0.16.0\"], want once as \
+             .mk/rust-release.mk's 0.17.0"
+        ]
+    );
+    assert_eq!(
+        fragment(
+            "RUST_RELEASE_RUST_STD_VERSION := 1.98.1",
+            "RUST_RELEASE_RUST_STD_VERSION := 1.98.0"
         ),
-        (
-            "another rust-std release",
-            dockerfile.clone(),
-            fragment.replace("RUST_STD_VERSION := 1.98.1", "RUST_STD_VERSION := 1.98.0"),
+        [
+            "Dockerfile: writes ARG RUST_VERSION as [\"1.98.1\"], want once as \
+             .mk/rust-release.mk's 1.98.0"
+        ]
+    );
+    assert_eq!(
+        release_check(
+            BG_DOCKERFILE,
+            &format!("{BG_RELEASE_MK}RUST_RELEASE_RUST_STD_VERSION := 1.98.0\n")
+        )
+        .len(),
+        1,
+        "make's last assignment wins"
+    );
+    let changed = format!("{}0", &std_amd64[..63]);
+    assert_eq!(
+        docker(std_amd64, &changed),
+        [std_arms(&format!(
+            "{{(\"amd64\", \"x86_64-unknown-linux-musl\", \"{changed}\"), (\"arm64\", \
+                 \"aarch64-unknown-linux-musl\", \"{std_arm64}\")}}"
+        )),]
+    );
+    assert_eq!(
+        fragment(std_amd64, &changed).len(),
+        1,
+        "a changed digest in the fragment"
+    );
+}
+
+/// The arms of bitgauge's Dockerfile against its release fragment: swapped, dropped and junk arms,
+/// a digest the fragment holds for no arm, a stray sha256 and empty pins each fail.
+#[test]
+fn release_pin_arm_rules() {
+    let std_arm64 = "7e0ad2e67817f224b7a6331e48d6397303fc050edaccf81784ed786ffddc884a";
+    let changed = format!("{}0", &std_arm64[..63]);
+    let docker = |from: &str, to: &str| {
+        assert!(BG_DOCKERFILE.contains(from), "{from:?} is gone");
+        release_check(&BG_DOCKERFILE.replacen(from, to, 1), BG_RELEASE_MK)
+    };
+    assert_eq!(
+        docker(
+            "amd64) triple=x86_64-unknown-linux-musl",
+            "arm64) triple=x86_64-unknown-linux-musl"
+        )
+        .len(),
+        1,
+        "swapped arms"
+    );
+    assert_eq!(
+        docker(
+            "\t\tarm64) triple=aarch64-unknown-linux-musl;",
+            "\t\t*) triple=aarch64-unknown-linux-musl;"
+        )
+        .len(),
+        1,
+        "a dropped aarch64 arm"
+    );
+    assert_eq!(
+        docker(
+            "\t\t*) echo \"no Rust target",
+            "\t\triscv64) triple=riscv64gc-unknown-linux-musl; std_sha256=00 ;; \\\n\t\t*) echo \
+             \"no Rust target"
+        )
+        .len(),
+        1,
+        "a junk riscv64 arm"
+    );
+    assert_eq!(
+        release_check(
+            BG_DOCKERFILE,
+            &format!(
+                "{BG_RELEASE_MK}RUST_RELEASE_RUST_STD_SHA256_riscv64gc-unknown-linux-musl := \
+                 {std_arm64}\n"
+            )
         ),
-        (
-            "a changed digest in the Dockerfile",
-            dockerfile.replace(DIGEST, &changed),
-            fragment.clone(),
-        ),
-        (
-            "a changed digest in the fragment",
-            dockerfile.clone(),
-            fragment.replace(DIGEST, &changed),
-        ),
-        (
-            "an archive the fragment does not name",
-            dockerfile.replace(
-                "esac\n",
-                &format!(
-                    "esac && case x in riscv64) triple=riscv64; std_sha256={DIGEST} ;; esac\n"
-                ),
-            ),
-            fragment.clone(),
-        ),
-        (
-            "a stray sha256",
-            format!("{dockerfile}# {changed}\n"),
-            fragment.clone(),
-        ),
-    ] {
-        assert!(
-            !check(&dockerfile, &fragment).is_empty(),
-            "{name} was accepted"
-        );
-    }
-    assert!(
-        strings(&check("FROM scratch\n", &fragment))
-            .iter()
-            .any(|problem| problem == "Dockerfile: checks no zig_sha256"),
-        "a Dockerfile that checks nothing"
+        [
+            ".mk/rust-release.mk: sets RUST_RELEASE_RUST_STD_SHA256_riscv64gc-unknown-linux-musl, \
+             which no required arm names"
+        ]
+    );
+    assert_eq!(
+        release_check(&format!("{BG_DOCKERFILE}# {changed}\n"), BG_RELEASE_MK),
+        [
+            "Dockerfile: writes 8 sha256s: 6 release archives and 1 image digests account for \
+             the rest, so one is not .mk/rust-release.mk's"
+        ]
+    );
+    assert_eq!(
+        strings(&release_pin_problems(
+            "Dockerfile",
+            BG_DOCKERFILE,
+            ".mk/rust-release.mk",
+            BG_RELEASE_MK,
+            &ReleasePins {
+                versions: &[],
+                archives: &[],
+            },
+        )),
+        ["the release pins name no version and no archive; the check would pass on nothing"]
     );
 }
 
@@ -522,5 +679,18 @@ fn trivy_rules() {
             ("scheduled-scan.yaml".to_owned(), scan),
         ])),
         ["Trivy is not one value: v0.73.0 in scheduled-scan.yaml; v0.74.0 in release.yaml"]
+    );
+    assert_eq!(
+        strings(&trivy_problems(&[])),
+        ["no scanning workflow is given; the Trivy check would pass on nothing"]
+    );
+    assert_eq!(
+        strings(&one(&good.replace("  TRIVY_VERSION: v0.74.0\n", ""))),
+        ["release.yaml: writes TRIVY_VERSION 0 times, want once"]
+    );
+    assert_eq!(
+        one(&good.replace("v0.74.0", "v0.74.0 # pinned with the scan")),
+        [],
+        "a trailing comment is read past"
     );
 }

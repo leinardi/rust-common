@@ -37,7 +37,7 @@
 //! and extra values, every toolchain action and the toolchains scripts name, the release pins as
 //! maps of archives with no stray digest).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -123,9 +123,15 @@ impl PinValue {
 
 /// What is wrong unless every required source writes the pin and all the values found, `extra`
 /// included, are one value: a problem per required source that is unreadable or writes nothing,
-/// and one listing the values when there are several.
+/// one listing the values when there are several, and one when there is neither a source nor a
+/// value.
 #[must_use]
 pub fn one_value(what: &str, sources: &[PinSource], extra: &[PinValue]) -> Vec<Problem> {
+    if sources.is_empty() && extra.is_empty() {
+        return vec![Problem::new(format!(
+            "{what}: no source and no value; the check would pass on nothing"
+        ))];
+    }
     let mut problems = Vec::new();
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for value in extra {
@@ -183,8 +189,9 @@ static RUST_VERSION: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"(?m)^rust-version\s*=\s*"([^"]*)"\s*$"#));
 /// A Rust release with its patch: 1.98.1, never 1.98 or stable.
 static EXACT_RUST: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d+\.\d+\.\d+$"));
-/// The exact Rust release of a `dhi.io/rust` image tag.
-static RUST_IMAGE: LazyLock<Regex> = LazyLock::new(|| regex(r"dhi\.io/rust:(\d+\.\d+\.\d+)-"));
+/// The Rust release of a `dhi.io/rust` base's tag, on a FROM line.
+static RUST_IMAGE: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"(?mi)^[ \t]*FROM[ \t]+(?:--\S+[ \t]+)*dhi\.io/rust:([0-9][\w.]*?)-"));
 /// The release a build stage's musl standard libraries are downloaded for.
 static RUST_VERSION_ARG: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?m)^ARG RUST_VERSION=(\S+)\s*$"));
@@ -282,12 +289,20 @@ pub fn rust_version_problems(
         .collect()
 }
 
-/// What is wrong with an image's Rust against `release`: the `dhi.io/rust` tag of its build stage
-/// and its `ARG RUST_VERSION` (the release its musl standard libraries are downloaded for) must
-/// each be written once, as exactly the release.
+/// What is wrong with an image's Rust against `release`: the `dhi.io/rust` tag of its build
+/// stage's FROM and its `ARG RUST_VERSION` (the release its musl standard libraries are
+/// downloaded for) are each written once, as an exact `X.Y.Z` release, and are the same release;
+/// and that release is `release` ([`RustVersion::Exact`]) or of its line ([`RustVersion::Line`],
+/// awtrix-controller and swarm-rootless-docker, whose image may take a later patch).
 #[must_use]
-pub fn image_rust_problems(file: &str, dockerfile: &str, release: &str) -> Vec<Problem> {
+pub fn image_rust_problems(
+    file: &str,
+    dockerfile: &str,
+    release: &str,
+    policy: RustVersion,
+) -> Vec<Problem> {
     let mut problems = Vec::new();
+    let mut written = Vec::new();
     for (what, pattern) in [
         ("the dhi.io/rust tag", &*RUST_IMAGE),
         ("ARG RUST_VERSION", &*RUST_VERSION_ARG),
@@ -297,15 +312,43 @@ pub fn image_rust_problems(file: &str, dockerfile: &str, release: &str) -> Vec<P
             .filter_map(|captures| captures.get(1).map(|version| version.as_str()))
             .collect();
         match found.as_slice() {
-            [version] if *version == release => {}
-            [] => problems.push(Problem::at(
+            [version] if EXACT_RUST.is_match(version) => written.push(*version),
+            [] => problems.push(Problem::at(file, format!("writes no {what}"))),
+            [version] => problems.push(Problem::at(
                 file,
-                format!("writes no exact release in {what}"),
+                format!("{what} is {version:?}, not an exact X.Y.Z release"),
             )),
             found => problems.push(Problem::at(
                 file,
-                format!("names {found:?} in {what}, but rust-toolchain.toml pins {release}"),
+                format!("writes {what} {} times ({found:?}), want once", found.len()),
             )),
+        }
+    }
+    if let [tag, argument] = written.as_slice() {
+        if tag != argument {
+            problems.push(Problem::at(
+                file,
+                format!(
+                    "the dhi.io/rust tag's release {tag} is not ARG RUST_VERSION's {argument}, so \
+                     the musl standard libraries are another release's"
+                ),
+            ));
+        }
+        let line = |version: &str| {
+            version
+                .rsplit_once('.')
+                .map_or(version, |(line, _)| line)
+                .to_owned()
+        };
+        let matches = match policy {
+            RustVersion::Exact => *tag == release,
+            RustVersion::Line => line(tag) == line(release),
+        };
+        if !matches {
+            problems.push(Problem::at(
+                file,
+                format!("builds with Rust {tag}, but rust-toolchain.toml pins {release}"),
+            ));
         }
     }
     problems
@@ -332,18 +375,32 @@ static SCRIPT_TOOLCHAIN: LazyLock<Regex> = LazyLock::new(|| {
     ))
 });
 
+/// Where a toolchain action's toolchain may be read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolchainRef {
+    /// Its `toolchain` input only: an action without one names no toolchain, whatever its `@`
+    /// reference says. The actions are pinned by commit, and dtolnay's action pinned by commit
+    /// takes the toolchain from the input alone (swarm-device-access).
+    Input,
+    /// Its `toolchain` input, or else its `@` reference when that is not a commit (dtolnay's
+    /// `@1.98.1` form; bitgauge).
+    InputOrRef,
+}
+
 /// Every Rust toolchain the CI documents (path and parsed YAML) name, and a problem for every
 /// toolchain action that names none and does not read `rust-toolchain.toml`, or when no step sets
-/// up Rust at all. An action's toolchain is its `toolchain` input, or its `@` reference when that
-/// is not a commit (dtolnay's `@1.98.1` form); a script's is a `RUSTUP_TOOLCHAIN` variable, or a
-/// `rustup` or `cargo +` command in any string.
+/// up Rust at all. An action's toolchain is read as `refs` says; a script's is a
+/// `RUSTUP_TOOLCHAIN` variable, or a `rustup` or `cargo +` command in any string.
 #[must_use]
-pub fn ci_rust_toolchains(documents: &[(String, Value)]) -> (Vec<PinValue>, Vec<Problem>) {
+pub fn ci_rust_toolchains(
+    documents: &[(String, Value)],
+    refs: ToolchainRef,
+) -> (Vec<PinValue>, Vec<Problem>) {
     let steps: Vec<ActionStep> = documents
         .iter()
         .flat_map(|(file, document)| action_steps(file, document))
         .collect();
-    let (mut values, mut problems) = action_rust_toolchains(&steps);
+    let (mut values, mut problems) = action_rust_toolchains(&steps, refs);
     if !steps.iter().any(|step| {
         RUST_TOOLCHAIN_ACTIONS
             .iter()
@@ -359,7 +416,10 @@ pub fn ci_rust_toolchains(documents: &[(String, Value)]) -> (Vec<PinValue>, Vec<
     (values, problems)
 }
 
-fn action_rust_toolchains(steps: &[ActionStep]) -> (Vec<PinValue>, Vec<Problem>) {
+fn action_rust_toolchains(
+    steps: &[ActionStep],
+    refs: ToolchainRef,
+) -> (Vec<PinValue>, Vec<Problem>) {
     let mut values = Vec::new();
     let mut problems = Vec::new();
     for step in steps {
@@ -371,7 +431,10 @@ fn action_rust_toolchains(steps: &[ActionStep]) -> (Vec<PinValue>, Vec<Problem>)
         };
         if let Some(toolchain) = step.with.get("toolchain") {
             values.push(PinValue::new(toolchain, &step.file));
-        } else if !step.reference.is_empty() && !COMMIT_REF.is_match(&step.reference) {
+        } else if refs == ToolchainRef::InputOrRef
+            && !step.reference.is_empty()
+            && !COMMIT_REF.is_match(&step.reference)
+        {
             values.push(PinValue::new(&step.reference, &step.file));
         } else if !reads_file {
             problems.push(Problem::at(
@@ -411,11 +474,16 @@ fn script_rust_toolchains(file: &str, document: &Value) -> Vec<PinValue> {
     values
 }
 
-/// What is wrong with the Rust toolchains CI names ([`ci_rust_toolchains`]) against `release`:
-/// each must be exactly the release, never a channel or a release without its patch.
+/// What is wrong with the Rust toolchains CI names ([`ci_rust_toolchains`], read as `refs` says)
+/// against `release`: each must be exactly the release, never a channel or a release without its
+/// patch.
 #[must_use]
-pub fn ci_toolchain_problems(documents: &[(String, Value)], release: &str) -> Vec<Problem> {
-    let (values, mut problems) = ci_rust_toolchains(documents);
+pub fn ci_toolchain_problems(
+    documents: &[(String, Value)],
+    release: &str,
+    refs: ToolchainRef,
+) -> Vec<Problem> {
+    let (values, mut problems) = ci_rust_toolchains(documents, refs);
     problems.extend(
         values
             .into_iter()
@@ -449,7 +517,7 @@ static SHA256: LazyLock<Regex> = LazyLock::new(|| regex(r"^[0-9a-f]{64}$"));
 /// text of `file`, such as make-common's `.mk/rust-release.mk`) against the exact release and the
 /// targets of `rust-toolchain.toml`: the rust-std release is the toolchain's, each target has one
 /// well-formed digest and no other target has one, and the release platforms build exactly those
-/// targets, in that order.
+/// targets, in that order. Where make reads the last assignment of a variable, so does this.
 #[must_use]
 pub fn rust_std_problems(
     file: &str,
@@ -463,7 +531,7 @@ pub fn rust_std_problems(
             "rust-toolchain.toml installs no target; the check would see nothing",
         ));
     }
-    match RUST_STD_VERSION.captures(fragment) {
+    match RUST_STD_VERSION.captures_iter(fragment).last() {
         Some(version) if version[1] == *release => {}
         Some(version) => problems.push(Problem::at(
             file,
@@ -514,7 +582,8 @@ pub fn rust_std_problems(
         }
     }
     let platforms: Vec<&str> = RELEASE_PLATFORMS
-        .captures(fragment)
+        .captures_iter(fragment)
+        .last()
         .and_then(|captures| captures.get(1))
         .map(|platforms| {
             platforms
@@ -537,8 +606,10 @@ pub fn rust_std_problems(
 }
 
 /// One archive a Dockerfile's build stage downloads and checks: the shell variable that names it
-/// in a `case` arm (`zig_arch`), the one that holds its digest (`zig_sha256`), and the prefix of
-/// the release fragment's variable for it, whose suffix is the name (`RUST_RELEASE_ZIG_SHA256_`).
+/// in a `case` arm (`zig_arch`), the one that holds its digest (`zig_sha256`), the prefix of the
+/// release fragment's variable for it, whose suffix is the name (`RUST_RELEASE_ZIG_SHA256_`), and
+/// the arms the stage must have: each platform the `case` switches on, with the archive's name
+/// for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReleaseArchive<'pins> {
     /// The variable naming the archive: `zig_arch=x86_64;`.
@@ -547,6 +618,8 @@ pub struct ReleaseArchive<'pins> {
     pub sha: &'pins str,
     /// The fragment's variable prefix: `RUST_RELEASE_ZIG_SHA256_<name> := <sha256>`.
     pub prefix: &'pins str,
+    /// The required arms, as (Docker architecture, name): `("amd64", "x86_64")`.
+    pub arms: &'pins [(&'pins str, &'pins str)],
 }
 
 /// The release toolchain pins a Dockerfile repeats from the release fragment.
@@ -559,7 +632,8 @@ pub struct ReleasePins<'pins> {
 }
 
 /// The pins of make-common's `.mk/rust-release.mk` and the consumers' build stages: zig,
-/// cargo-zigbuild and the musl rust-std, each version and each archive's digest.
+/// cargo-zigbuild and the musl rust-std, each version, and each archive's digest for amd64 and
+/// arm64.
 pub const RUST_RELEASE_PINS: ReleasePins<'static> = ReleasePins {
     versions: &[
         ("ZIG_VERSION", "RUST_RELEASE_ZIG_VERSION"),
@@ -574,16 +648,25 @@ pub const RUST_RELEASE_PINS: ReleasePins<'static> = ReleasePins {
             key: "zig_arch",
             sha: "zig_sha256",
             prefix: "RUST_RELEASE_ZIG_SHA256_",
+            arms: &[("amd64", "x86_64"), ("arm64", "aarch64")],
         },
         ReleaseArchive {
             key: "zigbuild_asset",
             sha: "zigbuild_sha256",
             prefix: "RUST_RELEASE_CARGO_ZIGBUILD_SHA256_",
+            arms: &[
+                ("amd64", "x86_64-unknown-linux-musl"),
+                ("arm64", "aarch64-unknown-linux-gnu"),
+            ],
         },
         ReleaseArchive {
             key: "triple",
             sha: "std_sha256",
             prefix: "RUST_RELEASE_RUST_STD_SHA256_",
+            arms: &[
+                ("amd64", "x86_64-unknown-linux-musl"),
+                ("arm64", "aarch64-unknown-linux-musl"),
+            ],
         },
     ],
 };
@@ -592,11 +675,102 @@ static ANY_SHA256: LazyLock<Regex> = LazyLock::new(|| regex(r"\b[0-9a-f]{64}\b")
 /// An image or frontend digest: its pin is the Dockerfile's own, not a release archive's.
 static IMAGE_DIGEST: LazyLock<Regex> = LazyLock::new(|| regex(r"@sha256:[0-9a-f]{64}\b"));
 
+/// The value of make's last `<variable> :=` (or `=`) assignment in `text`, the one that wins.
+fn last_assignment<'text>(text: &'text str, variable: &str) -> Option<&'text str> {
+    pattern(&format!(
+        r"(?m)^{}[ \t]*:?=[ \t]*(\S*)[ \t]*$",
+        regex::escape(variable)
+    ))
+    .captures_iter(text)
+    .last()
+    .and_then(|captures| captures.get(1))
+    .map(|value| value.as_str())
+}
+
+/// One `(platform, name, digest)` arm.
+type Arm = (String, String, String);
+
+/// The arms of one archive against the fragment: how many well-formed digests the Dockerfile's
+/// arms carry, and the problems ([`release_pin_problems`]).
+fn archive_problems(
+    dockerfile_file: &str,
+    dockerfile: &str,
+    fragment_file: &str,
+    fragment: &str,
+    archive: &ReleaseArchive<'_>,
+) -> (usize, Vec<Problem>) {
+    let mut problems = Vec::new();
+    if archive.arms.is_empty() {
+        problems.push(Problem::new(format!(
+            "{}: no arm is required; the check would pass on nothing",
+            archive.sha
+        )));
+        return (0, problems);
+    }
+    let found: BTreeSet<Arm> = pattern(&format!(
+        r"(?:^|[\s;])([A-Za-z0-9_*]+)\)\s*{}=([^;\s]+);\s*{}=([^;\s]+)",
+        regex::escape(archive.key),
+        regex::escape(archive.sha)
+    ))
+    .captures_iter(dockerfile)
+    .map(|arm| (arm[1].to_owned(), arm[2].to_owned(), arm[3].to_owned()))
+    .collect();
+    let mut recorded: BTreeMap<String, String> = BTreeMap::new();
+    for captures in pattern(&format!(
+        r"(?m)^{}([\w.-]+)[ \t]*:?=[ \t]*(\S*)[ \t]*$",
+        regex::escape(archive.prefix)
+    ))
+    .captures_iter(fragment)
+    {
+        recorded.insert(captures[1].to_owned(), captures[2].to_owned());
+    }
+    let mut want = BTreeSet::new();
+    for (platform, name) in archive.arms {
+        match recorded.get(*name) {
+            Some(digest) if SHA256.is_match(digest) => {
+                want.insert(((*platform).to_owned(), (*name).to_owned(), digest.clone()));
+            }
+            Some(digest) => problems.push(Problem::at(
+                fragment_file,
+                format!("{}{name} is {digest:?}, not a sha256", archive.prefix),
+            )),
+            None => problems.push(Problem::at(
+                fragment_file,
+                format!("sets no {}{name}", archive.prefix),
+            )),
+        }
+    }
+    for name in recorded.keys() {
+        if !archive.arms.iter().any(|(_, wanted)| wanted == name) {
+            problems.push(Problem::at(
+                fragment_file,
+                format!("sets {}{name}, which no required arm names", archive.prefix),
+            ));
+        }
+    }
+    if found != want {
+        problems.push(Problem::at(
+            dockerfile_file,
+            format!(
+                "{} is chosen by the arms {found:?}, want exactly {want:?} from {fragment_file}",
+                archive.sha
+            ),
+        ));
+    }
+    let paired = found
+        .iter()
+        .filter(|(_, _, digest)| SHA256.is_match(digest))
+        .count();
+    (paired, problems)
+}
+
 /// What is wrong with the release pins `dockerfile` (the text of `dockerfile_file`) repeats from
-/// `fragment` (the text of `fragment_file`): each version is the fragment's, both files name the
-/// same archives of each kind with the same digests, and every other sha256 in the Dockerfile is
-/// an image or frontend digest, so no download is checked against a digest the record does not
-/// hold.
+/// `fragment` (the text of `fragment_file`): each version is the fragment's (make's last
+/// assignment); each archive's `case` arms are exactly its required arms, each platform with its
+/// name and the fragment's digest for that name, so a swapped, dropped or extra arm fails; the
+/// fragment holds a well-formed digest for each required name and none for another; and every
+/// other sha256 in the Dockerfile is an image or frontend digest, so no download is checked
+/// against a digest the record does not hold. Pins with no version and no archive are a problem.
 #[must_use]
 pub fn release_pin_problems(
     dockerfile_file: &str,
@@ -605,55 +779,44 @@ pub fn release_pin_problems(
     fragment: &str,
     pins: &ReleasePins<'_>,
 ) -> Vec<Problem> {
+    if pins.versions.is_empty() && pins.archives.is_empty() {
+        return vec![Problem::new(
+            "the release pins name no version and no archive; the check would pass on nothing",
+        )];
+    }
     let mut problems = Vec::new();
     for (argument, variable) in pins.versions {
-        problems.extend(one_value(
-            argument,
-            &[
-                PinSource::new(
-                    dockerfile_file,
-                    dockerfile,
-                    &format!(r"(?m)^ARG {}=(\S+)\s*$", regex::escape(argument)),
+        let in_docker: Vec<&str> =
+            pattern(&format!(r"(?m)^ARG {}=(\S+)\s*$", regex::escape(argument)))
+                .captures_iter(dockerfile)
+                .filter_map(|captures| captures.get(1).map(|value| value.as_str()))
+                .collect();
+        let in_fragment = last_assignment(fragment, variable);
+        match (in_docker.as_slice(), in_fragment) {
+            ([docker], Some(record)) if docker == &record => {}
+            (_, None) => problems.push(Problem::at(
+                fragment_file,
+                format!("does not set {variable}"),
+            )),
+            (found, Some(record)) => problems.push(Problem::at(
+                dockerfile_file,
+                format!(
+                    "writes ARG {argument} as {found:?}, want once as {fragment_file}'s {record}"
                 ),
-                PinSource::new(
-                    fragment_file,
-                    fragment,
-                    &format!(r"(?m)^{}\s*:?=\s*(\S+)\s*$", regex::escape(variable)),
-                ),
-            ],
-            &[],
-        ));
+            )),
+        }
     }
     let mut paired = 0;
     for archive in pins.archives {
-        let in_docker: BTreeMap<String, String> = pattern(&format!(
-            r"\b{}=([\w.-]+);\s*{}=([0-9a-f]{{64}})\b",
-            regex::escape(archive.key),
-            regex::escape(archive.sha)
-        ))
-        .captures_iter(dockerfile)
-        .map(|captures| (captures[1].to_owned(), captures[2].to_owned()))
-        .collect();
-        let in_fragment: BTreeMap<String, String> = pattern(&format!(
-            r"(?m)^{}([\w.-]+)\s*:?=\s*([0-9a-f]{{64}})\s*$",
-            regex::escape(archive.prefix)
-        ))
-        .captures_iter(fragment)
-        .map(|captures| (captures[1].to_owned(), captures[2].to_owned()))
-        .collect();
-        if in_docker.is_empty() {
-            problems.push(Problem::at(
-                dockerfile_file,
-                format!("checks no {}", archive.sha),
-            ));
-        }
-        if in_docker != in_fragment {
-            problems.push(Problem::new(format!(
-                "{}: {dockerfile_file} has {in_docker:?}, {fragment_file} has {in_fragment:?}",
-                archive.sha
-            )));
-        }
-        paired += in_docker.len();
+        let (found, archive_problems) = archive_problems(
+            dockerfile_file,
+            dockerfile,
+            fragment_file,
+            fragment,
+            archive,
+        );
+        paired += found;
+        problems.extend(archive_problems);
     }
     let digests = IMAGE_DIGEST.find_iter(dockerfile).count();
     let hashes = ANY_SHA256.find_iter(dockerfile).count();
@@ -702,10 +865,10 @@ pub fn zigbuild_action_problems(
     record: ZigRecord<'_>,
 ) -> Vec<Problem> {
     let action_patterns = [
-        r#"(?m)^\s*ZIG_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*$"#,
-        r"(?m)^\s*ZIG_SHA256:\s*([0-9a-f]{64})\s*$",
-        r#"(?m)^\s*CARGO_ZIGBUILD_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*$"#,
-        r"(?m)^\s*CARGO_ZIGBUILD_SHA256:\s*([0-9a-f]{64})\s*$",
+        r#"(?m)^\s*ZIG_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*(?:#.*)?$"#,
+        r"(?m)^\s*ZIG_SHA256:\s*([0-9a-f]{64})\s*(?:#.*)?$",
+        r#"(?m)^\s*CARGO_ZIGBUILD_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*(?:#.*)?$"#,
+        r"(?m)^\s*CARGO_ZIGBUILD_SHA256:\s*([0-9a-f]{64})\s*(?:#.*)?$",
     ];
     let (file, content, record_patterns) = match record {
         ZigRecord::Fragment { file, content } => (
@@ -782,15 +945,21 @@ pub fn shellcheck_problems(
 /// The action that installs Trivy.
 pub const SETUP_TRIVY: &str = "aquasecurity/setup-trivy";
 static TRIVY_VERSION: LazyLock<Regex> =
-    LazyLock::new(|| regex(r#"(?m)^\s*TRIVY_VERSION:\s*["']?([^"'\s]*)["']?\s*$"#));
+    LazyLock::new(|| regex(r#"(?m)^\s*TRIVY_VERSION:\s*["']?([^"'\s#]*)["']?\s*(?:#.*)?$"#));
 static EXACT_TRIVY: LazyLock<Regex> = LazyLock::new(|| regex(r"^v\d+\.\d+\.\d+$"));
 
 /// What is wrong with the Trivy the scanning `workflows` (path and text) install: each writes
 /// `TRIVY_VERSION` once, as an exact `vX.Y.Z`, has a setup-trivy step, and every such step
 /// installs exactly `${{ env.TRIVY_VERSION }}`; and all of them write one version, so a finding
-/// means the same in every scan.
+/// means the same in every scan. No workflow at all is a problem. A trailing comment after the
+/// version is read past.
 #[must_use]
 pub fn trivy_problems(workflows: &[(String, String)]) -> Vec<Problem> {
+    if workflows.is_empty() {
+        return vec![Problem::new(
+            "no scanning workflow is given; the Trivy check would pass on nothing",
+        )];
+    }
     let mut problems = Vec::new();
     let mut extra = Vec::new();
     for (file, content) in workflows {
@@ -835,7 +1004,9 @@ pub fn trivy_problems(workflows: &[(String, String)]) -> Vec<Problem> {
             }
         }
     }
-    problems.extend(one_value("Trivy", &[], &extra));
+    if !extra.is_empty() {
+        problems.extend(one_value("Trivy", &[], &extra));
+    }
     problems
 }
 

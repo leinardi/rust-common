@@ -22,7 +22,8 @@
 //! pins, since this repository builds no image.
 
 use repo_meta::toolchain::{
-    RustVersion, ci_toolchain_problems, rust_release, rust_version_problems, shellcheck_problems,
+    RustVersion, ToolchainRef, ci_toolchain_problems, rust_release, rust_version_problems,
+    shellcheck_problems,
 };
 use repo_meta::{Problem, report, strings, yaml};
 
@@ -72,7 +73,7 @@ fn rust_version_is_the_toolchain_line() {
 
 #[test]
 fn ci_installs_the_toolchain_release() {
-    let problems = ci_toolchain_problems(&ci_documents(), &release());
+    let problems = ci_toolchain_problems(&ci_documents(), &release(), ToolchainRef::Input);
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
@@ -130,8 +131,9 @@ fn a_rust_version_off_the_line_is_refused() {
     assert_eq!(check("[package]\n"), ["Cargo.toml: sets no rust-version"]);
 }
 
-/// Negative control: a step that installs another toolchain or a channel is refused, and a
-/// workflow set that sets up no Rust at all is a problem too.
+/// Negative control: a step that installs another toolchain or a channel is refused, a step that
+/// names its toolchain only by `@<release>` names none here, and a workflow set that sets up no
+/// Rust at all is a problem too.
 #[test]
 fn another_ci_toolchain_is_refused() {
     let step = |toolchain: &str| {
@@ -143,15 +145,31 @@ fn another_ci_toolchain_is_refused() {
     };
     let file = ".github/workflows/ci.yaml";
     assert_eq!(
-        ci_toolchain_problems(&[workflow(file, &step("1.98.1"))], "1.98.1"),
+        ci_toolchain_problems(
+            &[workflow(file, &step("1.98.1"))],
+            "1.98.1",
+            ToolchainRef::Input
+        ),
         []
     );
     for toolchain in ["stable", "1.98", "1.97.0"] {
-        let problems = ci_toolchain_problems(&[workflow(file, &step(toolchain))], "1.98.1");
+        let problems = ci_toolchain_problems(
+            &[workflow(file, &step(toolchain))],
+            "1.98.1",
+            ToolchainRef::Input,
+        );
         assert_eq!(problems.len(), 1, "{toolchain}: {problems:?}");
     }
+    let by_ref = workflow(
+        file,
+        "jobs:\n  rust:\n    steps:\n      - uses: dtolnay/rust-toolchain@1.98.1\n",
+    );
+    assert_eq!(
+        ci_toolchain_problems(&[by_ref], "1.98.1", ToolchainRef::Input).len(),
+        1
+    );
     let none = workflow(file, "jobs:\n  lint:\n    steps:\n      - run: make lint\n");
-    assert!(!ci_toolchain_problems(&[none], "1.98.1").is_empty());
+    assert!(!ci_toolchain_problems(&[none], "1.98.1", ToolchainRef::Input).is_empty());
 }
 
 /// Negative control: the hook and the action on different ShellCheck releases.
