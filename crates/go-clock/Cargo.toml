@@ -1,0 +1,27 @@
+[package]
+name = "go-clock"
+description = "An injected wall clock: the system's, one that follows tokio's clock, and one set by hand"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "go_clock"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Timestamps, as in go-compat: no tzdb or system feature, only arithmetic on instants.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+# TokioClock reads tokio's clock (tokio::time::Instant), which a paused runtime controls. Only
+# `time`: no runtime, no I/O.
+tokio = { version = "1.54.1", default-features = false, features = ["time"] }
+
+# The paused-clock tests (start_paused needs test-util, #[tokio::test] needs macros and rt).
+[dev-dependencies]
+tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt", "test-util", "time"] }

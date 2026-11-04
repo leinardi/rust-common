@@ -16,12 +16,13 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. **Available:** `go-compat`. The others are planned for `v0.1.0` and land one at a time.
+it. **Available:** `go-compat`, `go-clock`. The others are planned for `v0.1.0` and land one at a
+time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
 | `go-compat` (available) | Go standard-library behaviour the projects' output depends on, ported byte for byte: number and duration formatting, `strconv` quoting, the errno table, `path.Clean`, `net` address parsing, RFC 3339 time | – |
-| `go-clock` | The injected clock (`Clock`, a tokio-backed one and a `FakeClock`) | – |
+| `go-clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `go-slog` | `log/slog`-compatible text and JSON handlers | style and level-parsing parameters; a global logger or a `LogHandle` |
 | `go-prom` | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation | expfmt version as a parameter; `testing` |
 | `http-framing` | HTTP/1 request-head framing, std only | – |
@@ -58,6 +59,20 @@ under `crates/go-compat/tests/testdata`). One module per Go package area:
 | `net_ip`, `host_port` | `net.ParseIP`, `ParseCIDR`, `IP.Equal`, `IPNet.Contains`; `net.SplitHostPort` and `JoinHostPort` |
 
 Its only dependency is `jiff`, with `default-features = false` and `std`.
+
+### go-clock
+
+Go's `time.Now` behind a trait, so a program reads the wall clock only through a `Clock` it was
+handed:
+
+| Item | What it is |
+| --- | --- |
+| `Clock` | `now() -> jiff::Timestamp`; any `Fn() -> Timestamp + Send + Sync` closure is one |
+| `SystemClock` | the system's wall clock, the one real read |
+| `TokioClock` | a base time plus the `tokio::time` elapsed since it was made, so it moves with a paused runtime's clock; saturates at `Timestamp::MAX` |
+| `FakeClock` | set and advanced by hand; clones share the time |
+
+It depends on `jiff` (as `go-compat`) and on `tokio` with only the `time` feature.
 
 ## Using a crate
 
