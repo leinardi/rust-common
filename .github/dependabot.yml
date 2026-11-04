@@ -30,3 +30,34 @@ updates:
       pre-commit-hooks:
         patterns:
           - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    # fix, not chore: the release version is derived from commit types, and a
+    # crate bump (security fixes included) changes what the consumers build
+    # when they move to the next tag, so it produces a patch release. The
+    # other ecosystems stay chore(deps) and bump nothing. Dev-dependencies
+    # (the meta crate's test helpers) never reach a consumer, so their bumps
+    # are chore(deps) and in a group of their own: one grouped PR carries a
+    # single prefix, so mixing them would release crates that did not change.
+    # The meta crate's own regex and toml are normal dependencies of an
+    # unpublished crate, so their bumps are fix(deps) too; the planned
+    # testenv-core and repo-meta crates depend on both, so they ship anyway.
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps)"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]
+    groups:
+      cargo-crates:
+        dependency-type: "production"
+        patterns:
+          - "*"
+      cargo-dev-crates:
+        dependency-type: "development"
+        patterns:
+          - "*"

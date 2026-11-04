@@ -18,17 +18,30 @@ permissions:
   contents: read
 
 jobs:
-  # The authoritative lint gate: every pre-commit hook over every file. The hooks bring their own
-  # tools (pre-commit installs them); actionlint also runs the runner's preinstalled shellcheck over
-  # the workflows' run: scripts. A repository that adds a hook needing a system tool installs that
-  # tool here, and one whose hook runs in a dedicated job lists it in SKIP with the job's name.
+  # The authoritative lint gate: every pre-commit hook over every file, with the versions pinned in
+  # .pre-commit-config.yaml. Skipped hooks, each run by the rust job below: cargo-test and
+  # cargo-deny (which needs the network).
   pre-commit-all:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # For the cargo-fmt, cargo-clippy and cargo-machete hooks and the language: system hooks that
+      # run cargo (docs links). The Rust cache is saved only on a pull request, so a push to main
+      # does not write a cache scope every pull request would then restore.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'pull_request' }}
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -38,6 +51,11 @@ jobs:
       - name: Install pre-commit
         run: pip install --no-cache-dir pre-commit==4.6.2
 
+      # actionlint runs the shellcheck on PATH over the workflows' run: scripts: the pinned one, not
+      # the runner's.
+      - name: Set up ShellCheck
+        uses: ./.github/actions/setup-shellcheck
+
       # Restore only: pre-commit-warmup.yaml saves the entry on main under the same key.
       - name: Restore the pre-commit cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -46,6 +64,8 @@ jobs:
           key: pre-commit|${{ runner.os }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Run every pre-commit hook on every file
+        env:
+          SKIP: cargo-test,cargo-deny
         run: pre-commit run --all-files --show-diff-on-failure
 
       # pre-commit fails a hook that modifies a tracked file, which covers the auto-fixing hooks
@@ -94,12 +114,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The core file hooks only: the Rust hooks need the toolchain, which this job does not set
+      # up, and pre-commit-all runs them.
       - name: Run pre-commit hooks + reviewdog diff
         uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          hooks: |
+            check-merge-conflict
+            end-of-file-fixer
+            trailing-whitespace
+            check-yaml
+            check-json
+            check-toml
+            check-added-large-files
 
   markdownlint:
     if: github.event_name == 'pull_request'
@@ -186,14 +216,84 @@ jobs:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
 
+  # The Rust workspace: the same workspace-wide commands as make verify and the pre-commit hooks,
+  # plus cargo-deny (advisories, licences, bans and sources; the advisory database needs the
+  # network). The toolchain matches rust-toolchain.toml. The cache is saved only on a pull
+  # request, as in pre-commit-all.
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'pull_request' }}
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      # --all-features: the code behind every crate feature is linted too.
+      - name: Lint with clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run the tests
+        run: cargo test --workspace --locked
+
+      - name: Check Rust documentation
+        run: make rust-doc
+
+      - name: Check dependencies with cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          # Every member's graph, not only one package's.
+          arguments: --workspace
+          command: check
+
+  # Each crate built and tested on its own under every feature set feature-sets.toml lists for it
+  # (make rust-feature-matrix), so a feature that only compiles because another member enables
+  # something is caught. A file that lists no crate passes with a message saying so; one that lists
+  # a crate without a manifest fails.
+  feature-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.98.1
+
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'pull_request' }}
+
+      - name: Build and test every feature set
+        run: make rust-feature-matrix
+
   # The single required check: green only when every gating job succeeded. conventional-commits
-  # only runs on pull requests, so it may be skipped on a push or a dispatch. A repository that adds
-  # a gating job (tests, build, audit) adds it to needs.
+  # only runs on pull requests, so it may be skipped on a push or a dispatch. A new gating job is
+  # added to needs.
   ci-result:
     if: always()
     needs:
       - pre-commit-all
       - conventional-commits
+      - rust
+      - feature-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
