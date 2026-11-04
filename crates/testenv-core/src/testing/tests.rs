@@ -263,6 +263,11 @@ async fn a_test_after_the_deadline() {
     let ran = Rc::new(RefCell::new(false));
 
     let (runner, buffer) = make_runner(SDA);
+    // The value printed is the one the runner read through its getenv, not the process's.
+    assert_eq!(
+        runner.suite_timeout(|name| (name == "SDA_IT_SUITE_TIMEOUT").then(|| "90s".to_owned())),
+        Ok(Duration::from_secs(90))
+    );
     let flag = Rc::clone(&ran);
     let outcome = runner
         .run_test(
@@ -280,7 +285,7 @@ async fn a_test_after_the_deadline() {
     assert!(
         buffer
             .text()
-            .contains("    integration suite deadline exceeded (SDA_IT_SUITE_TIMEOUT="),
+            .contains("    integration suite deadline exceeded (SDA_IT_SUITE_TIMEOUT=90s)\n"),
         "{}",
         buffer.text()
     );
@@ -388,16 +393,6 @@ fn suite_timeouts() {
         "invalid SDA_IT_SUITE_TIMEOUT=\"0s\": want a positive duration\n\
          invalid SDA_IT_SUITE_TIMEOUT=\"soon\": want a positive duration\n"
     );
-}
-
-/// The suite context ends at its deadline; the signals are watched on the runtime.
-#[tokio::test(start_paused = true)]
-async fn the_suite_context_ends_at_the_deadline() {
-    let (runner, _) = make_runner(SSE);
-    let ctx = runner.suite_context(Duration::from_secs(5)).unwrap();
-    assert_eq!(ctx.err(), None);
-    tokio::time::sleep(Duration::from_secs(6)).await;
-    assert!(ctx.err().is_some());
 }
 
 static STATE: Suite<u32> = Suite::new("the suite is used before bring-up");

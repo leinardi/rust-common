@@ -149,13 +149,37 @@ impl Gate {
         path: Option<OsString>,
         required: bool,
     ) -> Result<Option<PathBuf>, Required> {
+        match self.resolve(tool, start, path, required)? {
+            Resolved::Found(found) => Ok(Some(found)),
+            Resolved::Missing { note, text } => {
+                match note {
+                    Note::Stderr => {
+                        // Nowhere left to report a failed write to standard error.
+                        let _ = writeln!(io::stderr(), "{text}");
+                    }
+                    Note::Captured => captured_note(&text),
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// [`Gate::lookup_in`] without the note written: the tool found, or the note a missing one
+    /// gets and where it goes.
+    fn resolve(
+        &self,
+        tool: &str,
+        start: &Path,
+        path: Option<OsString>,
+        required: bool,
+    ) -> Result<Resolved, Required> {
         assert!(
             self.tools.contains(&tool),
             "toolgate: {tool:?} is not one of the gated tools {:?}",
             self.tools
         );
         let reason = match self.find(tool, start, path) {
-            Ok(found) => return Ok(Some(found)),
+            Ok(found) => return Ok(Resolved::Found(found)),
             Err(reason) => reason,
         };
         if required {
@@ -165,7 +189,7 @@ impl Gate {
                 reason,
             });
         }
-        let note = match &reason {
+        let text = match &reason {
             None => format!(
                 "{tool} not found on PATH: this check did not run; set {}=1 to make it a failure",
                 self.require_env
@@ -175,14 +199,10 @@ impl Gate {
                 self.require_env
             ),
         };
-        match self.note {
-            Note::Stderr => {
-                // Nowhere left to report a failed write to standard error.
-                let _ = writeln!(io::stderr(), "{note}");
-            }
-            Note::Captured => captured_note(&note),
-        }
-        Ok(None)
+        Ok(Resolved::Missing {
+            note: self.note,
+            text,
+        })
     }
 
     /// The tool, or why it is missing (`None` on `PATH`, which needs no reason).
@@ -217,6 +237,15 @@ impl Gate {
     }
 }
 
+/// What [`Gate::resolve`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Resolved {
+    /// The tool's path.
+    Found(PathBuf),
+    /// The tool is missing and not required: the note, and where it goes.
+    Missing { note: Note, text: String },
+}
+
 #[expect(
     clippy::print_stderr,
     reason = "libtest captures eprintln!, so the note shows only for a failing test, as \
@@ -238,7 +267,7 @@ fn is_executable(candidate: &Path) -> bool {
 #[macro_export]
 macro_rules! repo_root {
     () => {
-        ::std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+        ::std::path::Path::new(::core::env!("CARGO_MANIFEST_DIR")).join("..")
     };
 }
 

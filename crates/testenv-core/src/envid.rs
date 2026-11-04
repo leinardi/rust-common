@@ -23,7 +23,8 @@
 //! Extracted from swarm-scheduler-exporter/testenv/src/envid.rs at c9e79afa8810 and
 //! swarm-device-access/testenv/src/envid.rs at 8b4ab3a3e417 (the same code, four and six bytes),
 //! with bitgauge/testenv/src/envid.rs at 600fc3905200 (the docker CLI's `label=` filter and the
-//! bare `io::Result`). bitgauge's owner label helpers are [`crate::sweep_rules`]'s.
+//! bare `io::Result`). bitgauge keeps its own owner label helpers; it shares only the
+//! `<hostname>:<pid>` form of an owner with [`crate::sweep_rules::Owner`].
 
 use std::fmt::Write as _;
 use std::fs::File;

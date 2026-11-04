@@ -412,6 +412,7 @@ pub struct RunnerConfig {
     pub timeout_rule: TimeoutRule,
     /// Whether a test that starts after the deadline fails at once, as Go's `testCtx` does,
     /// with `integration suite deadline exceeded (<VAR>=<value>)`, instead of running its body.
+    /// The value is the one [`Runner::suite_timeout`] read, through its `getenv`.
     pub deadline_check: bool,
     /// How the last line counts.
     pub tally: TallyStyle,
@@ -430,11 +431,13 @@ pub struct Tally {
     pub failed: usize,
 }
 
-/// A suite's runner: its configuration and where it writes.
+/// A suite's runner: its configuration, where it writes, and the deadline variable's value as
+/// [`Runner::suite_timeout`] read it. Clones share that value.
 #[derive(Clone)]
 pub struct Runner {
     config: RunnerConfig,
     out: Output,
+    timeout_raw: Rc<RefCell<String>>,
 }
 
 impl Runner {
@@ -447,7 +450,11 @@ impl Runner {
     /// A runner writing to `out`.
     #[must_use]
     pub fn with_output(config: RunnerConfig, out: Output) -> Self {
-        Self { config, out }
+        Self {
+            config,
+            out,
+            timeout_raw: Rc::default(),
+        }
     }
 
     /// The configuration.
@@ -515,7 +522,7 @@ impl Runner {
     }
 
     /// The suite deadline, from the variable as `getenv` reads it (unset is empty), by the
-    /// configured rule.
+    /// configured rule. The value read is kept: [`Runner::run_test`]'s deadline message prints it.
     ///
     /// # Errors
     ///
@@ -523,6 +530,7 @@ impl Runner {
     pub fn suite_timeout(&self, getenv: impl Fn(&str) -> Option<String>) -> Result<Duration, u8> {
         let name = self.config.timeout_env;
         let raw = getenv(name).unwrap_or_default();
+        raw.clone_into(&mut self.timeout_raw.borrow_mut());
         if raw.is_empty() {
             return Ok(self.config.default_timeout);
         }
@@ -598,7 +606,7 @@ impl Runner {
         // instead of reaching a wait that would report the dead context as something else.
         if self.config.deadline_check && ctx.err().is_some() {
             let name = self.config.timeout_env;
-            let deadline = std::env::var(name).unwrap_or_default();
+            let deadline = self.timeout_raw.borrow().clone();
             let body = async |test: TestHandle| -> TestResult {
                 Err(test.fatal(format!(
                     "integration suite deadline exceeded ({name}={deadline})"

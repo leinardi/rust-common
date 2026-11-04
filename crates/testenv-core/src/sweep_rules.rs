@@ -20,8 +20,8 @@
 //! - swarm-device-access: `swarm-device-access-it.` and the same three; `SDA_IT_STALE_AFTER`.
 //!
 //! Each with [`DEFAULT_STALE_AFTER`], an hour. bitgauge's sweep is another design (a keep marker,
-//! no PID namespace, jiff's friendly durations, six hours) and stays its own; it shares the
-//! [`Owner`] label helpers.
+//! no PID namespace, jiff's friendly durations, six hours) and stays its own, and so do its owner
+//! label helpers: it shares only the `<hostname>:<pid>` form of an owner, which [`Owner`] writes.
 //!
 //! Extracted from swarm-scheduler-exporter/testenv/src/sweep_rules.rs at c9e79afa8810 and
 //! swarm-device-access/testenv/src/sweep_rules.rs at 8b4ab3a3e417 (the same rules, other labels).

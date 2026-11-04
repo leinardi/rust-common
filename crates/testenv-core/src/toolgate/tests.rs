@@ -21,7 +21,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
-use super::{Gate, Locate, Note};
+use super::{Gate, Locate, Note, Resolved};
 
 const AWTRIX: Gate = Gate {
     require_env: "AWTRIX_CONTROLLER_REQUIRE_TOOLS",
@@ -122,6 +122,38 @@ fn path_finds_executables_only() {
     assert_eq!(
         AWTRIX.lookup_in("droast", dir.path(), None, false).unwrap(),
         None
+    );
+}
+
+/// A missing tool that is not required gets each project's note, at each project's destination:
+/// straight to standard error past libtest's capture (awtrix-controller, swarm-rootless-docker),
+/// or captured with the reason (bitgauge).
+#[test]
+fn a_missing_tool_gets_the_project_s_note() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        AWTRIX.resolve("droast", dir.path(), None, false).unwrap(),
+        Resolved::Missing {
+            note: Note::Stderr,
+            text: "droast not found on PATH: this check did not run; set \
+                   AWTRIX_CONTROLLER_REQUIRE_TOOLS=1 to make it a failure"
+                .to_owned(),
+        }
+    );
+    assert_eq!(
+        BITGAUGE.resolve("fallow", dir.path(), None, false).unwrap(),
+        Resolved::Missing {
+            note: Note::Captured,
+            text: "note: fallow not found (web/node_modules/.bin/fallow: not installed; run npm \
+                   ci in web/); set BITGAUGE_REQUIRE_TOOLS=1 to make this a failure"
+                .to_owned(),
+        }
+    );
+    let found = dir.path().join("web/node_modules/.bin/fallow");
+    write_file(&found, 0o755);
+    assert_eq!(
+        BITGAUGE.resolve("fallow", dir.path(), None, false).unwrap(),
+        Resolved::Found(found)
     );
 }
 

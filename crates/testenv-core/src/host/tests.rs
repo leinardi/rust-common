@@ -226,6 +226,29 @@ async fn the_sweep_removes_only_the_abandoned_run() {
         .await;
 
     let wire: Vec<String> = wire.lock().unwrap().clone();
+    // The listings that find the runs select every resource carrying the envid label, whatever
+    // its value: containers and, in this shape, networks.
+    let listings: Vec<(&str, &str)> = wire
+        .iter()
+        .filter(|line| line.starts_with("GET") && !line.contains("it.envid=old"))
+        .map(|line| {
+            let target = line.trim_start_matches("GET ");
+            target.split_once('?').unwrap_or((target, ""))
+        })
+        .collect();
+    assert_eq!(
+        listings.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
+        ["/containers/json", "/networks"],
+        "{wire:#?}"
+    );
+    for (path, query) in &listings {
+        assert!(
+            query
+                .split('&')
+                .any(|pair| pair == r#"filters={"label":["it.envid"]}"#),
+            "{path}?{query}"
+        );
+    }
     let deletes: Vec<&String> = wire
         .iter()
         .filter(|line| line.starts_with("DELETE"))

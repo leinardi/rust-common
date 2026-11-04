@@ -210,7 +210,7 @@ The suites' tests, clusters, images, label names and variables stay theirs; they
 | `identity` | `IDENTITY_FLAG` (`-help`), `Answer` and `Text` (an implementation's whole answer), `excerpt` (Go or Rust quoting), `is_static_elf` |
 | `context` (`async`) | Go's `context.Context` on tokio: `with_timeout`, `with_cancel`, `without_cancel`, `run` |
 | `testing` (`async`) | `TestHandle` (`log`, `error`, `fatal`, `skip`, `cleanup`, `run`), `Fatal`, `OrFatal`, `Outcome`, `Test`, `Suite<S>`, and `Runner` over a `RunnerConfig` (`--run`, the suite deadline, SIGINT and SIGTERM, the tally) |
-| `runner` (`sync`) | bitgauge's runner: `TestCase<S>`, `Test`, `main`, `main_selected`, `run`, `run_selected`; libtest's flags accepted |
+| `runner` (`sync`) | bitgauge's runner: `TestCase<S>`, `Test`, `main`, `main_selected`, `run`, `run_selected`, each given the prefix of the tests' temporary directories (bitgauge's `bitgauge-test-`); libtest's flags accepted |
 | `redact` (`redact`) | `RedactingLogger` (Go's text handler at debug, the caller's clock and zone), `Secret`, `redact_env` |
 | `host` (`bollard`) | `HostSweep {labels, resources, op_timeout}`: `sweep`, `list_environments`, `cleanup`, the removals; `sweep_rules`, `process_alive`, `with_timeout`, `OpError` |
 

@@ -39,9 +39,13 @@
 //!   `--run` is held to selecting a test.
 //! - Anything else is a usage error, exit 2.
 //!
+//! The suite names the prefix of its tests' temporary directories (bitgauge's is
+//! `bitgauge-test-`), the first argument of [`main`], [`main_selected`], [`run`] and
+//! [`run_selected`].
+//!
 //! Extracted from bitgauge/testenv/src/runner.rs at 600fc3905200 (itself adapted from
 //! swarm-scheduler-exporter's async runner), its output unchanged; the temporary directories'
-//! `bitgauge-test-` prefix included.
+//! prefix, `bitgauge-test-` there, made a parameter.
 
 use std::env;
 use std::fmt::{Display, Write as _};
@@ -91,6 +95,7 @@ type Cleanup = Box<dyn FnOnce(&Test) + Send>;
 
 struct Inner {
     path: Vec<String>,
+    temp_prefix: &'static str,
     filter: Arc<RunFilter>,
     out: Sink,
     failed: AtomicBool,
@@ -102,9 +107,15 @@ struct Inner {
 pub struct Test(Arc<Inner>);
 
 impl Test {
-    fn new(path: Vec<String>, filter: Arc<RunFilter>, out: Sink) -> Self {
+    fn new(
+        path: Vec<String>,
+        temp_prefix: &'static str,
+        filter: Arc<RunFilter>,
+        out: Sink,
+    ) -> Self {
         Self(Arc::new(Inner {
             path,
+            temp_prefix,
             filter,
             out,
             failed: AtomicBool::new(false),
@@ -172,14 +183,15 @@ impl Test {
             .push(Box::new(cleanup));
     }
 
-    /// Go's `t.TempDir`: a new directory, removed when the test ends.
+    /// Go's `t.TempDir`: a new directory, named with the suite's prefix, removed when the test
+    /// ends.
     ///
     /// # Errors
     ///
     /// [`Fatal`], recorded, when the directory cannot be created.
     pub fn temp_dir(&self) -> Result<PathBuf, Fatal> {
         let dir = tempfile::Builder::new()
-            .prefix("bitgauge-test-")
+            .prefix(self.0.temp_prefix)
             .tempdir()
             .map_err(|error| self.fatal(format!("create a temporary directory: {error}")))?;
         let path = dir.path().to_path_buf();
@@ -197,7 +209,12 @@ impl Test {
         if !self.0.filter.matches(&names) {
             return true;
         }
-        let sub = Self::new(path, Arc::clone(&self.0.filter), Arc::clone(&self.0.out));
+        let sub = Self::new(
+            path,
+            self.0.temp_prefix,
+            Arc::clone(&self.0.filter),
+            Arc::clone(&self.0.out),
+        );
         execute(&sub, body);
         if sub.failed() {
             self.0.failed.store(true, Ordering::SeqCst);
@@ -326,38 +343,47 @@ fn libtest_keeps(args: &Args, name: &str) -> bool {
     (args.filters.is_empty() || args.filters.iter().any(matches)) && !args.skip.iter().any(matches)
 }
 
-/// Runs the suite on this process's command line and exits as [`run`] says.
-pub fn main<S>(tests: &[TestCase<S>], setup: impl FnOnce() -> Result<S, String>) -> ExitCode {
-    main_selected(tests, |_| setup())
+/// Runs the suite on this process's command line and exits as [`run`] says; `temp_prefix` starts
+/// the name of every [`Test::temp_dir`].
+pub fn main<S>(
+    temp_prefix: &'static str,
+    tests: &[TestCase<S>],
+    setup: impl FnOnce() -> Result<S, String>,
+) -> ExitCode {
+    main_selected(temp_prefix, tests, |_| setup())
 }
 
 /// [`main`] whose setup is told the names of the tests about to run, for a suite whose
 /// tests need different preparation (bitgauge's harness checks its image only for the runs that
 /// start it).
 pub fn main_selected<S>(
+    temp_prefix: &'static str,
     tests: &[TestCase<S>],
     setup: impl FnOnce(&[&'static str]) -> Result<S, String>,
 ) -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
-    ExitCode::from(run_selected(&args, tests, setup, io::stderr()))
+    ExitCode::from(run_selected(temp_prefix, &args, tests, setup, io::stderr()))
 }
 
 /// Runs the suite: selects the tests by `args`, runs `setup` once before the first of them,
 /// runs them in order with the setup's value, drops that value (its teardown), and prints the
-/// counts to `out`. Returns the exit status: 0 when every selected test passed (or nothing was
+/// counts to `out`; `temp_prefix` starts the name of every [`Test::temp_dir`]. Returns the exit
+/// status: 0 when every selected test passed (or nothing was
 /// selected by a libtest filter), 1 on a failure, a failed setup or a `--run` pattern that
 /// selects nothing, 2 for a usage error.
 pub fn run<S>(
+    temp_prefix: &'static str,
     args: &[String],
     tests: &[TestCase<S>],
     setup: impl FnOnce() -> Result<S, String>,
     out: impl Write + Send + 'static,
 ) -> u8 {
-    run_selected(args, tests, |_| setup(), out)
+    run_selected(temp_prefix, args, tests, |_| setup(), out)
 }
 
 /// [`run`] whose setup is given the names of the selected tests.
 pub fn run_selected<S>(
+    temp_prefix: &'static str,
     args: &[String],
     tests: &[TestCase<S>],
     setup: impl FnOnce(&[&'static str]) -> Result<S, String>,
@@ -432,6 +458,7 @@ pub fn run_selected<S>(
     for test in &selected {
         let handle = Test::new(
             vec![test.name.to_owned()],
+            temp_prefix,
             Arc::clone(&filter),
             Arc::clone(&out),
         );
@@ -546,6 +573,26 @@ mod tests {
         Err(test.fatal("stopped"))
     }
 
+    /// The suite's temporary-directory prefix.
+    const PREFIX: &str = "scratch-suite-";
+
+    /// Creates a temporary directory in a subtest, records its name, and checks it is gone once
+    /// the subtest ends.
+    fn makes_a_temp_dir(test: &super::Test, journal: &Journal) -> TestResult {
+        let mut made = None;
+        test.run("sub", |sub| {
+            let dir = sub.temp_dir()?;
+            assert!(dir.is_dir(), "{}", dir.display());
+            made = Some(dir);
+            Ok(())
+        });
+        let made = made.ok_or_else(|| test.fatal("the subtest made no directory"))?;
+        assert!(!made.exists(), "{} outlived its subtest", made.display());
+        let name = made.file_name().unwrap().to_string_lossy().into_owned();
+        note(journal, name);
+        Ok(())
+    }
+
     const TESTS: &[TestCase<Journal>] = &[
         TestCase {
             name: "TestPasses",
@@ -563,7 +610,21 @@ mod tests {
             name: "TestFatal",
             run: fatal,
         },
+        TestCase {
+            name: "TestTempDir",
+            run: makes_a_temp_dir,
+        },
     ];
+
+    /// A test's temporary directory is named with the suite's prefix, in its subtests too, and
+    /// removed when the test ends.
+    #[test]
+    fn temp_dirs_carry_the_suite_s_prefix() {
+        let (status, journal, out) = suite(&["--run", "^TestTempDir$"]);
+        assert_eq!(status, 0, "{out}");
+        assert_eq!(journal.len(), 2, "{journal:?}");
+        assert!(journal[1].starts_with(PREFIX), "{journal:?}");
+    }
 
     /// Runs the suite with `args`, returning the status, the journal and the output.
     fn suite(args: &[&str]) -> (u8, Vec<String>, String) {
@@ -572,6 +633,7 @@ mod tests {
         let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
         let setup_journal = Arc::clone(&journal);
         let status = run(
+            PREFIX,
             &args,
             TESTS,
             move || {
@@ -591,6 +653,7 @@ mod tests {
         let setup_journal = Arc::clone(&journal);
         let args = ["--run".to_owned(), "^Test(Passes|Fatal)$".to_owned()];
         let status = super::run_selected(
+            PREFIX,
             &args,
             TESTS,
             move |selected| {
@@ -690,6 +753,7 @@ mod tests {
         let journal: Journal = Arc::default();
         let buffer = Buffer::default();
         let status = run(
+            PREFIX,
             &[],
             TESTS,
             || Err::<Journal, _>("the identity check failed".to_owned()),
@@ -713,7 +777,7 @@ mod tests {
         assert!(journal.is_empty());
         assert_eq!(
             out,
-            "TestPasses: test\nTestSubtests: test\nTestFatal: test\n"
+            "TestPasses: test\nTestSubtests: test\nTestFatal: test\nTestTempDir: test\n"
         );
         let (_, _, out) = suite(&["--list", "--exact", "TestFatal"]);
         assert_eq!(out, "TestFatal: test\n");

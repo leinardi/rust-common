@@ -15,6 +15,12 @@ name = "testenv_core"
 [lints]
 workspace = true
 
+# The suite context watches SIGINT and SIGTERM, which installs process-wide signal handlers: its
+# test runs in a binary of its own, not beside the library's unit tests.
+[[test]]
+name = "suite_context"
+required-features = ["async"]
+
 [features]
 # Go's context and testing packages on tokio, for an async `harness = false` suite
 # (swarm-scheduler-exporter's and swarm-device-access's): TestHandle, Outcome, Suite, and the
