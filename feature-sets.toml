@@ -1,0 +1,28 @@
+# The per-crate feature matrix: `make rust-feature-matrix` (meta/src/bin/feature-matrix.rs) builds
+# and tests each crate listed here under each of its sets, one package at a time:
+#
+#   cargo build --locked --all-targets --manifest-path crates/<name>/Cargo.toml -p <name> <flags>
+#   cargo test  --locked               --manifest-path crates/<name>/Cargo.toml -p <name> <flags>
+#
+# Format: one key per crate (the directory name under crates/, which is also the package name),
+# holding a non-empty array of sets. A set is an inline table with any of:
+#
+#   no-default-features = true        -> --no-default-features
+#   features = ["a", "b"]             -> --features a,b
+#   all-features = true               -> --all-features
+#
+# `{}` is the default features. Any other key, an empty array, or a crate whose manifest is
+# missing fails the run. Example:
+#
+#   docker-engine = [
+#       { no-default-features = true },
+#       { features = ["tcp", "tls"] },      # swarm-scheduler-exporter
+#       { features = ["write", "attach"] }, # swarm-device-access
+#       { all-features = true },
+#   ]
+#
+# meta/tests/feature_sets.rs holds the file to the crates: every crate under crates/ has an entry,
+# with a --no-default-features set and an --all-features set, and every feature it declares is
+# named in at least one set. Add the exact set each consumer uses.
+#
+# No crate yet: the library crates arrive one change at a time, each with its entry here.

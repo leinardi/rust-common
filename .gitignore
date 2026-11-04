@@ -17,6 +17,9 @@ out/
 *.swp
 *~
 
+# Build outputs: cargo's
+/target/
+
 # Logs
 *.log
 

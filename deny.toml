@@ -1,0 +1,48 @@
+# cargo-deny: the dependency gate for the Rust workspace. `cargo deny --workspace check` runs every
+# section; the advisories section needs the network to be current.
+#
+# Extracted from swarm-device-access/deny.toml at 8b4ab3a3e417 (itself adapted from
+# swarm-scheduler-exporter's): the advisory, ban and source policy unchanged, the licence list
+# rebuilt for this workspace's graph.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every vulnerability and unsound advisory fails; "unmaintained" fails for direct and transitive
+# crates alike unless ignored here by advisory ID, with a reason. An ignore written as
+# `{ crate = "name" }` would only ignore yanked versions, so none is.
+version = 2
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Only the licences the Cargo.lock graph needs, each added by the change that brings in the crate
+# needing it. The workspace's own crates are MIT OR Apache-2.0, and so are most dependencies.
+#
+# cargo-deny 0.20.2 leaves the workspace members' dev-dependencies out of its graph, so it checks
+# none of their licences (tempfile and its graph here, under the meta crate's tests). Those are
+# still decided here, by hand, rather than by omission: tempfile and everything under it (fastrand,
+# getrandom, rustix, linux-raw-sys, libc, bitflags, cfg-if, once_cell) offer MIT or Apache-2.0
+# (rustix and linux-raw-sys also Apache-2.0 WITH LLVM-exception, which is not needed).
+allow = [
+    "Apache-2.0",
+    # winnow (MIT only), under the meta crate's toml; memchr and aho-corasick (Unlicense OR MIT),
+    # under its regex.
+    "MIT",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only. A consumer's deny.toml allows this repository as a git source; this one needs no
+# git source of its own.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
