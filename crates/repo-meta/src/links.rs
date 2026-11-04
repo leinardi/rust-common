@@ -21,6 +21,12 @@
 //! Go's `path.Clean`, headings lower-cased with Go's `strings.ToLower` and targets quoted with
 //! Go's `strconv.Quote`, from go-compat.
 //!
+//! The lower-casing is Go's on purpose, where GitHub's slugger lower-cases with JavaScript's
+//! `toLowerCase`: the check is the consumers' Go checker, ported, and keeps its verdicts. The two
+//! differ only on the few characters with context-dependent lower cases, such as a final capital
+//! sigma (JavaScript `ς`, Go `σ`); an anchor to a heading with one resolves as the Go checker
+//! resolved it, which GitHub may not. No consumer's heading has one.
+//!
 //! Extracted from bitgauge/meta/tests/docs/links.rs at 600fc3905200 (the RE2 classes, Go's
 //! lower-casing, quoting and `path.Dir`, and [`Checker::check_text`], which checks a text as if it
 //! were a file of the repository), the same reader as
@@ -37,7 +43,7 @@ use go_compat::quote::quote;
 use go_compat::strings::to_lower;
 use regex::Regex;
 
-use crate::{Problem, regex};
+use crate::{Problem, Repo, regex};
 
 static INLINE_LINK: LazyLock<Regex> = LazyLock::new(|| {
     regex(concat!(
@@ -164,6 +170,28 @@ pub fn is_markdown(path: &str) -> bool {
     Path::new(path)
         .extension()
         .is_some_and(|extension| extension == "md")
+}
+
+/// Checks every tracked Markdown file of `repo` (`git ls-files '*.md'`, so an untracked scratch
+/// file stays out): every problem, and one when git lists no Markdown, on which the check would
+/// pass on nothing.
+///
+/// # Panics
+///
+/// git cannot list the files ([`Repo::tracked`]).
+#[must_use]
+pub fn check_repository(repo: &Repo) -> Vec<Problem> {
+    let files = repo.tracked(&["*.md"]);
+    if files.is_empty() {
+        return vec![Problem::new(
+            "git lists no Markdown file; the link check would pass on nothing",
+        )];
+    }
+    let mut checker = Checker::new(repo.root());
+    files
+        .iter()
+        .flat_map(|file| checker.check_file(file))
+        .collect()
 }
 
 /// Resolves links against a repository root, caching each target file's anchors.

@@ -22,6 +22,7 @@
 use std::fmt::Write as _;
 
 use super::{CiGates, MAKE_COMMON_RUSTDOC, always_run_problems};
+use crate::strings;
 use crate::yaml::{jobs, parse, pre_commit_hooks};
 
 const GATES: CiGates<'static> = CiGates {
@@ -233,4 +234,29 @@ fn always_run_rules() {
             "{name} was not refused once"
         );
     }
+}
+
+/// A workflow with nothing but the aggregator, and no whole-tree hook to check, are problems, not
+/// passes on nothing.
+#[test]
+fn empty_inputs_are_problems() {
+    let gates = CiGates {
+        result_job: "ci-result",
+        pre_commit_job: "pre-commit-all",
+        annotate_only: &["actionlint"],
+        skipped_hook_runners: &[],
+    };
+    let document = parse(
+        "ci.yaml",
+        "jobs:\n  ci-result:\n    steps: []\n  actionlint:\n    steps: []\n",
+    )
+    .unwrap();
+    assert_eq!(
+        strings(&gates.result_problems(&jobs(&document))),
+        ["the CI workflow has no gate job beside ci-result; the check would pass on nothing"]
+    );
+    assert_eq!(
+        strings(&always_run_problems(&[], &[])),
+        ["no whole-tree hook is named; the check would pass on nothing"]
+    );
 }

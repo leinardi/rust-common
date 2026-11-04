@@ -24,9 +24,14 @@ use crate::{Problem, pattern};
 
 /// The files of `files` (path and text, the meta crate's sources) that look a tool up on `PATH`
 /// (`split_paths(`, `var_os("PATH"`, `Command::new("which"`) or name one of `switches` (such as
-/// `SDA_REQUIRE_TOOLS`) as a whole word.
+/// `SDA_REQUIRE_TOOLS`) as a whole word; and no file is a problem.
 #[must_use]
 pub fn tool_lookup_problems(files: &[(String, String)], switches: &[&str]) -> Vec<Problem> {
+    if files.is_empty() {
+        return vec![Problem::new(
+            "no meta-test source to scan; the check would pass on nothing",
+        )];
+    }
     let mut alternatives = vec![
         r"\bsplit_paths\(".to_owned(),
         r"\bvar_os\(\s*\x22PATH\x22".to_owned(),
@@ -79,5 +84,14 @@ mod tests {
         assert_eq!(tool_lookup_problems(&files, &[switch]), []);
         let plain = [("meta/tests/x.rs".to_owned(), "let x = 1;".to_owned())];
         assert_eq!(tool_lookup_problems(&plain, &[]), []);
+    }
+
+    /// No file is a problem, not a pass on nothing.
+    #[test]
+    fn no_file_is_a_problem() {
+        assert_eq!(
+            crate::strings(&tool_lookup_problems(&[], &[])),
+            ["no meta-test source to scan; the check would pass on nothing"]
+        );
     }
 }

@@ -86,14 +86,25 @@ struct Compiled<'rules> {
 
 /// What is wrong with how `files` (each path and its text) name the allowlisted `lints` and the
 /// `groups` (such as `clippy::style` and `clippy::all` for the clippy bans): every mention of a
-/// group, every mention of a lint outside an accepted form in an allowlisted place, and every
-/// exemption used more than once.
+/// group, every mention of a lint outside an accepted form in an allowlisted place, every
+/// exemption used more than once, and every exemption that matches nothing, so it cannot outlive
+/// the code it excuses. No file or no lint is a problem.
 #[must_use]
 pub fn allowlist_problems(
     files: &BTreeMap<String, String>,
     lints: &[LintAllowlist<'_>],
     groups: &[&str],
 ) -> Vec<Problem> {
+    if files.is_empty() {
+        return vec![Problem::new(
+            "no file to scan; the allowlist check would pass on nothing",
+        )];
+    }
+    if lints.is_empty() {
+        return vec![Problem::new(
+            "no allowlisted lint; the allowlist check would pass on nothing",
+        )];
+    }
     let compiled: Vec<Compiled<'_>> = lints
         .iter()
         .map(|allowlist| {
@@ -165,14 +176,42 @@ pub fn allowlist_problems(
             }
         }
     }
+    problems.extend(exemption_count_problems(lints, &used));
+    problems
+}
+
+/// Every exemption of `lints` that `used` (each exemption with the times it lifted its lint)
+/// never saw, and every one used more than once.
+fn exemption_count_problems(
+    lints: &[LintAllowlist<'_>],
+    used: &BTreeMap<(&str, Exemption<'_>), usize>,
+) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    for allowlist in lints {
+        for exemption in allowlist.exemptions {
+            if !used.contains_key(&(allowlist.lint, *exemption)) {
+                let (file, place) = match exemption {
+                    Exemption::FileLevel { file } => (*file, "file-level".to_owned()),
+                    Exemption::Item { file, item } => (*file, format!("on {item}")),
+                };
+                problems.push(Problem::at(
+                    file,
+                    format!(
+                        "the exemption for {} {place} matches nothing; remove it",
+                        allowlist.lint
+                    ),
+                ));
+            }
+        }
+    }
     for ((lint, exemption), count) in used {
-        if count > 1 {
+        if *count > 1 {
             let (file, place) = match exemption {
                 Exemption::FileLevel { file } => (file, "file-level".to_owned()),
                 Exemption::Item { file, item } => (file, format!("on {item}")),
             };
             problems.push(Problem::at(
-                file,
+                *file,
                 format!("lifts {lint} {place} {count} times; at most once"),
             ));
         }

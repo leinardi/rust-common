@@ -11,9 +11,10 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! No gate passes on nothing: the files that define gates (the Makefile and its fragments, the
-//! pre-commit configuration, every YAML file under `.github`, and a project's scripts) carry none
-//! of the flags that turn a gate with nothing to check, or a failing one, into a pass.
+//! No gate passes on nothing: the files a project passes as its gates (the Makefile and its
+//! fragments, the pre-commit configuration and every YAML file under `.github`, and its scripts
+//! where it chooses to) carry none of the flags that turn a gate with nothing to check, or a
+//! failing one, into a pass.
 //!
 //! The flags come in sets: the core set every project uses (`|| true`, make's `-` prefix and
 //! `.IGNORE` and `--ignore-errors`, `continue-on-error`, `if: false`); the Rust set (a test run
@@ -188,13 +189,18 @@ impl VacuousFlags {
     }
 
     /// Every flag in `files` (path and text) outside the `allowed` fragments, and every exception
-    /// that matched no line.
+    /// that matched no line; no file is a problem.
     #[must_use]
     pub fn problems(
         &self,
         files: &[(String, String)],
         allowed: &[AllowedFragment<'_>],
     ) -> Vec<Problem> {
+        if files.is_empty() {
+            return vec![Problem::new(
+                "no gate file to scan; the check would pass on nothing",
+            )];
+        }
         let mut used = vec![false; allowed.len()];
         let mut problems = Vec::new();
         for (file, content) in files {

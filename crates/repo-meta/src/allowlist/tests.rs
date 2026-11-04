@@ -62,12 +62,46 @@ const LINTS: [LintAllowlist<'static>; 3] = [
     },
 ];
 
-fn check(entries: &[(&str, &str)]) -> Vec<String> {
+fn check_all(entries: &[(&str, &str)]) -> Vec<String> {
     let files: BTreeMap<String, String> = entries
         .iter()
         .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
         .collect();
     strings(&allowlist_problems(&files, &LINTS, &GROUPS))
+}
+
+/// The problems but the unused exemptions, which a scan of one file always has; those are
+/// [`an_unused_exemption_is_refused`]'s.
+fn check(entries: &[(&str, &str)]) -> Vec<String> {
+    check_all(entries)
+        .into_iter()
+        .filter(|problem| !problem.ends_with("matches nothing; remove it"))
+        .collect()
+}
+
+fn allowlisted_files() -> Vec<(&'static str, String)> {
+    let methods = expect_line(METHODS);
+    vec![
+        (
+            BPF,
+            format!("//! Docs.\n\n#![expect({UNSAFE}, reason = \"raw bpf(2) calls\")]\n"),
+        ),
+        (
+            "src/healthcheck.rs",
+            format!("{methods}\nfn connect(address: SocketAddr) {{}}\n"),
+        ),
+        (
+            "src/test_support.rs",
+            format!(
+                "/// Dials.\n{methods}\n#[must_use]\npub(crate) async fn dial_loopback() {{}}\n"
+            ),
+        ),
+        (
+            "src/clock.rs",
+            format!("{methods}\nimpl Clock for SystemClock {{}}\n"),
+        ),
+        ("src/lib.rs", "pub mod server;\n".to_owned()),
+    ]
 }
 
 fn expect_line(lint: &str) -> String {
@@ -76,30 +110,38 @@ fn expect_line(lint: &str) -> String {
 
 #[test]
 fn the_allowlisted_exemptions_pass() {
-    let methods = expect_line(METHODS);
+    let files = allowlisted_files();
+    let entries: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    assert_eq!(check_all(&entries), Vec::<String>::new());
+}
+
+/// An exemption no file uses is refused, so it cannot outlive the code it excuses; no file and no
+/// lint are refused too.
+#[test]
+fn an_unused_exemption_is_refused() {
+    let files = allowlisted_files();
+    let entries: Vec<(&str, &str)> = files
+        .iter()
+        .filter(|(path, _)| *path != "src/clock.rs")
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
     assert_eq!(
-        check(&[
-            (
-                BPF,
-                &format!("//! Docs.\n\n#![expect({UNSAFE}, reason = \"raw bpf(2) calls\")]\n")
-            ),
-            (
-                "src/healthcheck.rs",
-                &format!("{methods}\nfn connect(address: SocketAddr) {{}}\n"),
-            ),
-            (
-                "src/test_support.rs",
-                &format!(
-                    "/// Dials.\n{methods}\n#[must_use]\npub(crate) async fn dial_loopback() {{}}\n"
-                ),
-            ),
-            (
-                "src/clock.rs",
-                &format!("{methods}\nimpl Clock for SystemClock {{}}\n"),
-            ),
-            ("src/lib.rs", "pub mod server;\n"),
-        ]),
-        Vec::<String>::new()
+        check_all(&entries),
+        [format!(
+            "src/clock.rs: the exemption for {METHODS} on SystemClock matches nothing; remove it"
+        )]
+    );
+    assert_eq!(
+        strings(&allowlist_problems(&BTreeMap::new(), &LINTS, &GROUPS)),
+        ["no file to scan; the allowlist check would pass on nothing"]
+    );
+    let files: BTreeMap<String, String> = [("src/lib.rs".to_owned(), String::new())].into();
+    assert_eq!(
+        strings(&allowlist_problems(&files, &[], &GROUPS)),
+        ["no allowlisted lint; the allowlist check would pass on nothing"]
     );
 }
 

@@ -182,9 +182,14 @@ pub fn cargo_test_commands(content: &str) -> usize {
 
 /// The files of `files` (path and text) that drive Docker: one of the `clients` crates imported
 /// or named in code (not in a comment or a string, as a boundary test's own fixtures do), or the
-/// docker CLI started as a child.
+/// docker CLI started as a child. No file or no client is a problem.
 #[must_use]
 pub fn docker_drivers(files: &[(String, String)], clients: &[&str]) -> Vec<Problem> {
+    if files.is_empty() || clients.is_empty() {
+        return vec![Problem::new(
+            "no file or no Docker client to look for; the check would pass on nothing",
+        )];
+    }
     let names = clients
         .iter()
         .map(|client| regex::escape(client))
@@ -347,5 +352,17 @@ mod tests {
             cargo_test_commands("\tcargo test\n\t$(CARGO) test -p x\n\tcargo build\n"),
             2
         );
+    }
+
+    /// No file or no client is a problem, not a pass on nothing.
+    #[test]
+    fn docker_drivers_need_files_and_clients() {
+        let files = [("src/x.rs".to_owned(), "use bollard::Docker;\n".to_owned())];
+        for (files, clients) in [(&files[..], &[][..]), (&[][..], &["bollard"][..])] {
+            assert_eq!(
+                crate::strings(&super::docker_drivers(files, clients)),
+                ["no file or no Docker client to look for; the check would pass on nothing"]
+            );
+        }
     }
 }

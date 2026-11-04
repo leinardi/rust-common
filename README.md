@@ -229,26 +229,27 @@ It depends on `go-compat`, `jiff` (as `go-compat`) and `regex`; `async` adds `to
 
 The checks the projects' meta-tests repeat. Each takes the repository (`Repo::new(root)`, the root
 from `testenv_core::repo_root!()`) or the text it checks and returns `Vec<Problem>`, empty when
-the repository passes; a check never panics on what it reads. The caller asserts with
+the repository passes; a check never panics on what it reads, and input on which it would pass
+having checked nothing (no file, no rule) is itself a problem. The caller asserts with
 `assert!(problems.is_empty(), "{}", report(&problems))`. What differs between the projects (the
 members, the pins, the jobs, the hooks, the exemptions) is a parameter; every check is as strict
 as the strictest project's.
 
 | Module | What it checks |
 | --- | --- |
-| `Repo`, `Problem`, `report` | the tracked files (`tracked`, `tracked_or_new`, `files_under`), reads that become problems (`try_read`); `file:line: message` problems |
+| `Repo`, `Problem`, `report` | the repository under test (`Repo::new`, git with the process's environment, so a commit hook's index) or a scratch one (`Repo::scratch`, git isolated); the tracked files (`tracked`, `tracked_or_new`, `files_under`), reads that become problems (`try_read`); `file:line: message` problems |
 | `workspace` | `lint_opt_in` (the root's `[workspace.lints]`, every member's `[lints] workspace = true`, the expected members), `lint_level_problems`, `override_problems`, `layout_problems` (crates under one directory, nothing else tracked there) |
-| `links` | `Checker`: every relative Markdown link resolves to a tracked file, and every `#anchor` to a heading, as the Go link checker the projects ported reads them |
+| `links` | `check_repository` (every tracked Markdown file, none at all a problem) and `Checker`: every relative link resolves to a file, and every `#anchor` to a heading, as the Go link checker the projects ported reads them |
 | `dockerfile` | the parser (`parse`, `Stage`, `Instruction`, `syntax`), `tag_pinned`, `digest_pinned`, `from_dhi`, `base_pinned`, `repository`, `tag`, `labels` |
-| `image` | `only_dockerfile_problems`, `syntax_problems`, `stage_problems`, `BuildStage`, `Stamps` (the build stamps from Dockerfile to `version.rs`, Makefile and fragment), `RuntimeStage`, `label_problems`, `platform_problems`, `label_policy_problems` |
-| `toolchain` | `one_value` (one pin read from several files), `RustVersion::{Exact, Line}`, `image_rust_problems`, `ci_toolchain_problems`, `rust_std_problems`, `ReleasePins` and `release_pin_problems` (no stray `sha256`), `zigbuild_action_problems`, `shellcheck_problems`, `trivy_problems` |
+| `image` | `dockerfiles` (tracked or new, `Dockerfile.<name>` included), `only_dockerfile_problems`, `syntax_problems` (required or optional), `stage_problems` with a `BasePolicy` (`DhiTagElseDigest`, `DhiOnly`, `TagOnly`), `BuildStage` (a `BuildBase` repository or exact image, each `Download` checked in its RUN: release, platform argument, exact arms, sha256 check; no other download), `Stamps` (in the building RUN, the Makefile's winning prefix, `rust.mk`'s `RUST_VERSION_ENV` and `rust-build`, the release recipe), `RuntimeStage`, `label_problems`, `platform_problems` (in the named workflow), `label_policy_problems` |
+| `toolchain` | `one_value` (one pin read from several files), `RustVersion::{Exact, Line}`, `image_rust_problems` (the FROM tag equal to `ARG RUST_VERSION`), `ci_toolchain_problems` with a `ToolchainRef` (`Input`, or `InputOrRef` for dtolnay's `@<release>`), `rust_std_problems`, `ReleasePins` and `release_pin_problems` (exact `(platform, name, digest)` arms, no stray `sha256`), `zigbuild_action_problems`, `shellcheck_problems`, `trivy_problems` |
 | `ci` | `CiGates` (the result job needs every job, the pre-commit job's `SKIP` list is exactly the hooks other jobs run), `RustdocGate`, `always_run_problems` |
-| `allowlist` | `LintAllowlist`: a lint (`unsafe_code`, a `clippy` group) allowed only where an exemption names the file or item, and every exemption used |
+| `allowlist` | `LintAllowlist`: a lint (`unsafe_code`, a clippy ban) lifted only where an exemption names the file or item, at most once there, every exemption used, and a group that contains the lint never named |
 | `vacuous` | `VacuousFlags` (`core`, `with_rust`, `with_javascript`): what turns a failing gate into a pass (an `or true`, `continue-on-error`, `if: false`, make's `-` prefix, `--cap-lints`, cargo's `--skip`, `--passWithNoTests`, …) and a clippy run without `-D warnings`, with `AllowedFragment` exceptions that must each be used |
 | `integration` | `IntegrationGate` (integration modules behind a feature, the suite's manifest entry), `cargo_test_commands`, `docker_drivers` |
-| `tools` | `tool_lookup_problems`: the meta-tests' tool lookups go through the tool gate |
+| `tools` | `tool_lookup_problems`: no meta-test looks a tool up on `PATH` or reads a switch that turns a missing tool into a skip, for a project whose meta-tests fail without their tools (one on `toolgate::Gate` does not run it) |
 | `yaml` | workflows and the pre-commit configuration as `serde_json::Value`: `action_steps`, `jobs`, `pre_commit_hooks` |
-| `scratch` | `ScratchRepo` (a git-isolated temporary repository), `HeaderHarness` and `HeaderCase` (`scripts/check-license-headers.sh` on the repository and on scratch cases), `SuppressionHarness` and `RatchetCase` (`scripts/check-suppressions.sh` and its baseline) |
+| `scratch` | `ScratchRepo` (a git-isolated temporary repository, `repo()` a `Repo::scratch`), `HeaderHarness` and `HeaderCase` (`scripts/check-license-headers.sh` on the repository and on scratch cases, at least one accepted and one rejected), `SuppressionHarness` and `RatchetCase` (`scripts/check-suppressions.sh` and its baseline) |
 
 It depends on `go-compat` (Go's quoting, `path.Clean`, `ToLower`), `testenv-core` (default
 features: git isolation), `regex`, `serde-saphyr` and `serde_json` (the YAML), `toml` and `tempfile`.

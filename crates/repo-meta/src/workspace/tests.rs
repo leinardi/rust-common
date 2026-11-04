@@ -285,3 +285,15 @@ fn a_matching_layout_passes() {
     assert_eq!(crate_of_manifest("crates", "cratesx/a/Cargo.toml"), None);
     assert_eq!(crate_of_manifest("crates", "crates//Cargo.toml"), None);
 }
+
+/// No file or no token is a problem, not a pass on nothing.
+#[test]
+fn an_empty_override_scan_is_a_problem() {
+    let files = [("Makefile".to_owned(), "all:\n".to_owned())];
+    for (files, tokens) in [(&files[..], &[][..]), (&[][..], &["--cap-lints"][..])] {
+        assert_eq!(
+            strings(&override_problems(files, tokens)),
+            ["no file or no token to look for; the override check would pass on nothing"]
+        );
+    }
+}

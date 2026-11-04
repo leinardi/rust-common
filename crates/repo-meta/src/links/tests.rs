@@ -20,7 +20,8 @@
 
 use std::fs;
 
-use super::{Checker, anchors, is_markdown, slug, targets};
+use super::{Checker, anchors, check_repository, is_markdown, slug, targets};
+use crate::scratch::ScratchRepo;
 use crate::strings;
 
 fn scratch(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -173,4 +174,22 @@ fn readers() {
     let found = anchors("# A\n```\n# Not\n```\n# A\n");
     assert!(found.contains("a") && found.contains("a-1") && !found.contains("not"));
     assert!(is_markdown("docs/x.md") && !is_markdown("docs/x.MD"));
+}
+
+/// The listing entry point: a repository with no tracked Markdown is a problem; a broken link in a
+/// tracked file is found, and an untracked file is not read.
+#[test]
+fn the_repository_check_needs_tracked_markdown() {
+    let scratch = ScratchRepo::new();
+    scratch.write("a.md", "[gone](gone.md)\n");
+    assert_eq!(
+        strings(&check_repository(&scratch.repo())),
+        ["git lists no Markdown file; the link check would pass on nothing"]
+    );
+    scratch.git(&["add", "a.md"]);
+    scratch.write("untracked.md", "[gone](also-gone.md)\n");
+    assert_eq!(
+        strings(&check_repository(&scratch.repo())),
+        [r#"a.md:1: link "gone.md": gone.md does not exist"#]
+    );
 }

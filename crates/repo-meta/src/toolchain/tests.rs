@@ -495,8 +495,10 @@ fn release_pin_arm_rules() {
             "amd64) triple=x86_64-unknown-linux-musl",
             "arm64) triple=x86_64-unknown-linux-musl"
         )
-        .len(),
-        1,
+        .iter()
+        .map(|problem| problem.starts_with("Dockerfile: std_sha256 is chosen by the arms "))
+        .collect::<Vec<_>>(),
+        [true],
         "swapped arms"
     );
     assert_eq!(
@@ -504,8 +506,10 @@ fn release_pin_arm_rules() {
             "\t\tarm64) triple=aarch64-unknown-linux-musl;",
             "\t\t*) triple=aarch64-unknown-linux-musl;"
         )
-        .len(),
-        1,
+        .iter()
+        .map(|problem| problem.starts_with("Dockerfile: std_sha256 is chosen by the arms "))
+        .collect::<Vec<_>>(),
+        [true],
         "a dropped aarch64 arm"
     );
     assert_eq!(
@@ -514,8 +518,10 @@ fn release_pin_arm_rules() {
             "\t\triscv64) triple=riscv64gc-unknown-linux-musl; std_sha256=00 ;; \\\n\t\t*) echo \
              \"no Rust target"
         )
-        .len(),
-        1,
+        .iter()
+        .map(|problem| problem.starts_with("Dockerfile: std_sha256 is chosen by the arms "))
+        .collect::<Vec<_>>(),
+        [true],
         "a junk riscv64 arm"
     );
     assert_eq!(

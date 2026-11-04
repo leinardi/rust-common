@@ -212,9 +212,14 @@ pub fn lint_level_problems(root: &Table, required: &[LintLevel<'_>]) -> Vec<Prob
 /// that names one of `tokens`: a lint name, a group, `--cap-lints` or `CLIPPY_CONF_DIR`. Flags
 /// from there are passed after the manifest's `[lints]`, so they win. The match is on the text,
 /// so a comment counts too: the rule is about the name, and no form this scan does not model can
-/// slip past it.
+/// slip past it. No file or no token is a problem.
 #[must_use]
 pub fn override_problems(files: &[(String, String)], tokens: &[&str]) -> Vec<Problem> {
+    if files.is_empty() || tokens.is_empty() {
+        return vec![Problem::new(
+            "no file or no token to look for; the override check would pass on nothing",
+        )];
+    }
     files
         .iter()
         .flat_map(|(path, text)| {

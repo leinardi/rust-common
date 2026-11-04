@@ -43,7 +43,8 @@ pub struct CiGates<'gates> {
 }
 
 impl CiGates<'_> {
-    /// Every gate job (neither the aggregator nor an annotation) the aggregator does not need.
+    /// Every gate job (neither the aggregator nor an annotation) the aggregator does not need; and
+    /// a workflow with no gate job beside the aggregator, on which the check would pass.
     #[must_use]
     pub fn result_problems(&self, jobs: &BTreeMap<String, Job>) -> Vec<Problem> {
         let Some(result) = jobs.get(self.result_job) else {
@@ -52,8 +53,18 @@ impl CiGates<'_> {
                 self.result_job
             ))];
         };
-        jobs.keys()
+        let gates: Vec<&String> = jobs
+            .keys()
             .filter(|name| *name != self.result_job && !self.annotate_only.contains(&name.as_str()))
+            .collect();
+        if gates.is_empty() {
+            return vec![Problem::new(format!(
+                "the CI workflow has no gate job beside {}; the check would pass on nothing",
+                self.result_job
+            ))];
+        }
+        gates
+            .into_iter()
             .filter(|name| !result.needs.contains(name))
             .map(|name| Problem::new(format!("{} does not need the {name} job", self.result_job)))
             .collect()
@@ -215,9 +226,14 @@ impl RustdocGate<'_> {
 /// What is wrong with the whole-tree hooks `ids` among `hooks` (the pre-commit configuration's):
 /// each appears once, takes no file list (`pass_filenames: false`), always runs (a commit that
 /// only deletes a file passes it none), and runs at exactly the pre-commit stage (`always_run`
-/// makes a hook eligible at every installed stage, commit-msg included).
+/// makes a hook eligible at every installed stage, commit-msg included). No id is a problem.
 #[must_use]
 pub fn always_run_problems(hooks: &[(String, Value)], ids: &[&str]) -> Vec<Problem> {
+    if ids.is_empty() {
+        return vec![Problem::new(
+            "no whole-tree hook is named; the check would pass on nothing",
+        )];
+    }
     let mut problems = Vec::new();
     for id in ids {
         let found: Vec<&Value> = hooks

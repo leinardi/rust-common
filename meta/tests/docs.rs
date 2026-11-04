@@ -17,25 +17,15 @@
 //!
 //! Extracted from swarm-scheduler-exporter/meta/tests/docs.rs at c9e79afa8810.
 
-use repo_meta::links::{Checker, slug};
+use repo_meta::links::{Checker, check_repository, slug};
 use repo_meta::scratch::ScratchRepo;
 use repo_meta::{report, strings};
 
 /// Every relative link and fragment in the tracked Markdown. The list comes from git, which keeps
-/// an untracked scratch file out.
+/// an untracked scratch file out, and a listing with no Markdown is a problem.
 #[test]
 fn relative_links_resolve() {
-    let repo = meta::repo();
-    let files = repo.tracked(&["*.md"]);
-    assert!(
-        !files.is_empty(),
-        "git ls-files lists no Markdown; the check would pass on nothing"
-    );
-    let mut checker = Checker::new(repo.root());
-    let problems: Vec<_> = files
-        .iter()
-        .flat_map(|file| checker.check_file(file))
-        .collect();
+    let problems = check_repository(&meta::repo());
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 

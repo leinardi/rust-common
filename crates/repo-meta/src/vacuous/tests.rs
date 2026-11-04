@@ -161,3 +161,12 @@ fn problems_name_the_line_and_the_unused_exceptions() {
         ]
     );
 }
+
+/// No file is a problem, not a pass on nothing.
+#[test]
+fn no_file_is_a_problem() {
+    assert_eq!(
+        strings(&VacuousFlags::core().problems(&[], &[])),
+        ["no gate file to scan; the check would pass on nothing"]
+    );
+}
