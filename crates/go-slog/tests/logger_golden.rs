@@ -203,7 +203,13 @@ fn compare(directory: &str, plain_style: PlainStyle, format: Format, include_tim
         rest.is_empty(),
         "{directory}/{file}: Go wrote more: {rest:?}"
     );
-    assert!(compared > 0, "{directory}/{file}: no record compared");
+    // Every record but the invalid-UTF-8 ones the quoted corpus skips (3 of its 54).
+    let expected = match directory {
+        "quoted" => 51,
+        "raw" => 54,
+        other => panic!("unknown corpus {other}"),
+    };
+    assert_eq!(compared, expected, "{directory}/{file}: records compared");
 }
 
 #[test]
@@ -284,7 +290,18 @@ fn plain_files_need_their_own_style() {
             let result = std::panic::catch_unwind(|| {
                 compare(directory, other, Format::Plain, include_time);
             });
-            assert!(result.is_err(), "{directory} matched under {other:?}");
+            let Err(payload) = result else {
+                panic!("{directory} matched under {other:?}");
+            };
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or_default();
+            assert!(
+                message.contains("differs"),
+                "{directory} under {other:?} failed for another reason: {message}"
+            );
         }
     }
 }

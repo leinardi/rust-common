@@ -470,15 +470,22 @@ impl LogHandle {
     /// with Go's fallbacks ([`Config::parse`]), writing to stdout, with the clock, the zone and
     /// the plain style of the current one.
     pub fn configure(&self, format: &str, level: &str, include_time: bool) {
-        let plain_style = self
-            .current
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .plain_style();
-        self.configure_to(
+        // One read of the current logger, so the style, the zone and the clock come from the
+        // same one even if another clone sets a logger meanwhile.
+        let (plain_style, zone, now) = {
+            let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
+            (
+                current.plain_style(),
+                current.zone().clone(),
+                current.clock(),
+            )
+        };
+        self.set(Logger::new(
             Config::parse(format, level, include_time, plain_style),
             Box::new(io::stdout()),
-        );
+            zone,
+            now,
+        ));
     }
 
     /// [`LogHandle::configure`] with options and a sink of the caller's: Go's
