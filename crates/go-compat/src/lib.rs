@@ -43,7 +43,8 @@
 //! The ports were checked against Go programs: the unit tests carry Go's answers, and
 //! `tests/go_compat_golden.rs` replays the corpora Go printed (`tests/testdata`).
 //!
-//! Extracted from swarm-device-access/src/go_compat/mod.rs at 8b4ab3a3e417, with `net_ip` from
+//! Extracted from swarm-device-access/src/go_compat/mod.rs at 8b4ab3a3e417 (that copy itself
+//! adapted from swarm-scheduler-exporter at d57dcc220d29), with `net_ip` from
 //! swarm-scheduler-exporter/src/go_compat/net_ip.rs at c9e79afa8810.
 
 pub mod duration;

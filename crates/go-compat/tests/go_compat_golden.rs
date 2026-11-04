@@ -12,7 +12,7 @@
  */
 
 //! The Go formatters against values Go printed, each file a capture from a throwaway Go program
-//! (go1.26) made when the formatter was ported:
+//! (go1.26):
 //!
 //! - `floats/go-corpus.tsv`: bits, `FormatFloat(f, 'g', -1, 64)`, expfmt's `writeFloat` and a
 //!   note, for 34 edge values;
@@ -28,7 +28,8 @@
 //!   comparison, which is not a strict weak order;
 //! - `net/go-ip.tsv` (go1.26.10): `net.ParseIP` (16 bytes, or `nil`) of 36 texts, `net.ParseCIDR`
 //!   (network/mask, or `err`) of 20, and Docker's `node.ip` placement constraint's `==` and `!=`
-//!   for every text against 6 node addresses.
+//!   for every text against 6 node addresses. The `match` rows are kept for
+//!   swarm-scheduler-exporter's constraint test and are not read here.
 //!
 //! Extracted from swarm-scheduler-exporter/tests/go_compat_golden.rs at c9e79afa8810 (with the
 //! `net` corpus) and swarm-device-access/tests/go_compat_golden.rs at 8b4ab3a3e417 (the same
