@@ -103,7 +103,7 @@ fn sanitize_code_follows_promhttp() {
 }
 
 /// Registering twice is refused, as `prometheus.Register` would (promhttp reuses the existing
-/// collectors there; a program that registers once, so it never reaches that path).
+/// collectors there; a program that registers once never reaches that path).
 #[test]
 fn registering_twice_is_refused() {
     let registry = Registry::new();
