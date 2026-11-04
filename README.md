@@ -1,56 +1,99 @@
-# template-default
+# rust-common
 
-Default @leinardi repository template: the scaffolding every `leinardi/*` repository shares, before
-any language or stack is added.
+The Rust code shared by the `leinardi/*` Rust projects: [swarm-scheduler-exporter],
+[swarm-device-access], [bitgauge], awtrix-controller and swarm-rootless-docker. Each was ported from
+Go or written in Rust on its own, and large parts were copied between them and then drifted: a fix
+that reached one copy did not reach the others. This repository is one Cargo workspace of small
+library crates that the projects depend on as a git dependency, so a fix lands once.
 
-## What it contains
+The crates are not published on crates.io. They are consumed by git tag, and every crate in a tag
+shares the workspace version.
 
-- **Tooling:** a Makefile on [make-common](https://github.com/leinardi/make-common) (`make check`,
-  `make pre-commit-install`, `make help`), and a pre-commit config with the core hooks, checkmake,
-  actionlint, markdownlint, shellcheck, prettier for YAML, yamllint, and `conventional-pre-commit`
-  on `commit-msg` with `--force-scope`.
-- **CI:** a `pre-commit-all` job that runs every hook on every file, a `conventional-commits` job
-  that checks every commit of a pull request, and a `ci-result` job that aggregates them into the
-  one required check, on pull requests and on pushes to `main`. The reviewdog jobs from
-  [gha-pre-commit-reviewdog-actions](https://github.com/leinardi/gha-pre-commit-reviewdog-actions)
-  comment on pull requests. The pre-commit cache warm-up runs on `main` when the hook config
-  changes and weekly, and prunes the older cache entries.
-- **Release:** a **Release** workflow on
-  [`simple-tag-and-release`](https://github.com/leinardi/gh-reusable-workflows/blob/main/.github/workflows/simple-tag-and-release.md):
-  the version is optional and derived from the commits when empty, with a dry run.
-- **GitHub:** dependabot for the actions and the hooks, CODEOWNERS, a pull request template, and
-  issue templates with blank issues off and a link to the security policy.
-- **Docs:** [AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
-  and an `adversarial-review` skill in `.agents/skills/` (symlinked as `.claude/skills`).
-- **License headers:** `scripts/check-license-headers.sh`, off until the repository has a license
-  (see [AGENTS.md](AGENTS.md#license-headers)).
+[swarm-scheduler-exporter]: https://github.com/leinardi/swarm-scheduler-exporter
+[swarm-device-access]: https://github.com/leinardi/swarm-device-access
+[bitgauge]: https://github.com/leinardi/bitgauge
 
-Every action and reusable workflow is pinned by commit SHA, with the version in a comment;
-dependabot keeps them current.
+## Crates
 
-## After creating a repository from this template
+Planned for `v0.1.0`; each one lands under `crates/<name>` with its tests. A crate depends only on
+crates listed above it.
 
-1. Replace `template-default` everywhere it names this repository: `git grep -n template-default`
-   lists every place, including the security link in `.github/ISSUE_TEMPLATE/config.yml`.
-2. Rewrite this README and the "What this is" and "Layout" sections of `AGENTS.md` for the project.
-3. Add a `LICENSE`. The template has none on purpose: the repositories do not all use the same one.
-   Then enable the license-header check, as [AGENTS.md](AGENTS.md#license-headers) describes, or
-   delete `scripts/check-license-headers.sh` and its mentions in the docs.
-4. Add the stack, following the repository closest to it (e.g. swarm-scheduler-exporter for Go,
-   adversarial-review-loop for Python):
-    - its pre-commit hooks, the toolchains they need in `pre-commit-all`, and the matching reviewdog
-      and test jobs in `ci.yaml`, each gating job added to `ci-result`'s `needs`;
-    - its dependabot ecosystem, with the `fix(deps)` prefix for dependencies that ship with a
-      release and `chore(deps)` for the rest;
-    - make-common snippets in `MK_COMMON_FILES`, and project targets in a local `.mk/<name>.mk`
-      listed in `MK_LOCAL_FILES`, never as recipes in the Makefile;
-    - its sections in `.editorconfig` and `.prettierignore`.
-5. Keep, extend or delete `release.yaml`: pass `artifact_name` to attach built files, replace it
-   with a stack-specific release (e.g. swarm-scheduler-exporter's for images and binaries), or
-   delete it, and the release sections of the docs, if the project never releases. The first release
-   needs an explicit version, since there is no tag to derive it from.
-6. Tailor `.agents/skills/adversarial-review/SKILL.md`: replace "template-default" with the
-   project's name in its description and title, then adapt its invariants and verification gates.
-7. Run `make pre-commit-install`, then `make check`.
-8. Add the repository to gh-leinardi-iac, with `ci-result` as its required check, and enable
-   private vulnerability reporting, which `SECURITY.md` points to.
+| Crate | What it is | Features |
+| --- | --- | --- |
+| `go-compat` | Go standard-library behaviour the projects' output depends on, ported byte for byte: number and duration formatting, `strconv` quoting, the errno table, `path.Clean`, `net` address parsing, RFC 3339 time | – |
+| `go-clock` | The injected clock (`Clock`, a tokio-backed one and a `FakeClock`) | – |
+| `go-slog` | `log/slog`-compatible text and JSON handlers | style and level-parsing parameters; a global logger or a `LogHandle` |
+| `go-prom` | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation | expfmt version as a parameter; `testing` |
+| `http-framing` | HTTP/1 request-head framing, std only | – |
+| `go-http` | Go `net/http` server behaviours on hyper: the timeouts, `bind` and `parse_port`, `serve` | the listen-error prefix as a parameter |
+| `docker-engine` | A Docker Engine API client over HTTP/1: transport, version negotiation, events, decoding | `tcp`, `tls`, `write`, `attach`, `test-util` |
+| `testenv-core` | Test-environment helpers: run filters, environment IDs, sweep rules, the tool gate, scratch git repositories | `async`, `sync`, `bollard`, `redact` |
+| `repo-meta` | Repository meta-test checks: workspace lints, Markdown links, licence headers, suppressions, Dockerfiles, toolchain pins, CI gates | – |
+| `tracing-setup` | A `tracing` subscriber set up the way the projects log | `log-bridge` |
+| `service-kit` | Process plumbing: shutdown and hangup signals, the runtime builder, `buildinfo!` | – |
+
+Where the projects legitimately differ, the shared code takes a parameter; one project's behaviour
+is never forced on another.
+
+## Using a crate
+
+Depend on a crate by tag. The `version` requirement is checked against the crate's own version, and
+keeps cargo-deny's `wildcards = "deny"` satisfied:
+
+```toml
+[dependencies]
+go-compat = { git = "https://github.com/leinardi/rust-common", tag = "vX.Y.Z", version = "0.1" }
+```
+
+A consumer's `deny.toml` allows the git source:
+
+```toml
+[sources]
+allow-git = ["https://github.com/leinardi/rust-common"]
+```
+
+`Cargo.lock` records the commit the tag pointed at. Releases are `vX.Y.Z` tags, never moved once
+published (see [SECURITY.md](SECURITY.md)).
+
+The workspace's `rust-version` is the language line (`1.98`), so a consumer on any 1.98 patch
+release builds it; this repository itself pins its toolchain in `rust-toolchain.toml`.
+
+## Working on a crate and a consumer together
+
+To try an unreleased change from a consumer, point the consumer's dependency at a local clone with a
+`[patch]` section in the consumer's root `Cargo.toml`, keyed by this repository's URL:
+
+```toml
+[patch."https://github.com/leinardi/rust-common"]
+go-compat = { path = "../rust-common/crates/go-compat" }
+```
+
+Every rust-common crate the consumer uses, directly or through another rust-common crate, needs its
+own line, or Cargo resolves two copies. Remove the section before committing: CI cannot see the
+path.
+
+## Development
+
+`make verify` builds, formats, lints, tests and documents the workspace, and `make check` runs every
+pre-commit hook. [CONTRIBUTING.md](CONTRIBUTING.md) lists the prerequisites and the commit
+conventions; [AGENTS.md](AGENTS.md) has the layout, the rules the crates keep and the validation
+matrix.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+
+at your option.
+
+Most of the code here is extracted from the author's own projects, which are licensed MIT
+(swarm-scheduler-exporter, awtrix-controller, swarm-rootless-docker), Apache-2.0
+(swarm-device-access) and GPL-3.0 (bitgauge). As the sole author of that code, Roberto Leinardi
+relicenses it here under MIT OR Apache-2.0. The projects themselves keep their own licenses.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+this repository by you, as defined in the Apache-2.0 license, shall be dual-licensed as above,
+without any additional terms or conditions.

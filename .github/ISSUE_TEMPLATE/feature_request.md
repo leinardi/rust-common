@@ -50,8 +50,8 @@ assignees: []
 
 ## 5. Impact and scope
 
-* **Who benefits from this feature?** (e.g., all users, specific roles, specific environments)
-* **Does this introduce any breaking changes or require migration?**
+* **Which crates, and which consuming projects, does it affect?**
+* **Does it change a public API or a default, so a consumer needs a migration or a new parameter?**
 
 *
 
@@ -67,8 +67,8 @@ assignees: []
 
 ## 7. Optional: Pseudo-code / configuration sketch
 
-<!-- If applicable, include a rough example of how this might look in code, config, CLI, or UI. -->
+<!-- If applicable, include a rough example of the API: a signature, a feature flag, a call site. -->
 
-```text
+```rust
 # Example (replace with your own sketch)
 ```
