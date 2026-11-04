@@ -92,9 +92,12 @@ two Go versions. It is checked against Go captures of both (`crates/go-slog/test
 | `global`, `set_global`, `configure` | a process-wide logger instead |
 | `MemorySink` | a sink that keeps what is written, for tests |
 
-Every constructor takes the clock (`go_clock::Clock`) and the sink; `LogHandle::stdout` and
-`configure` take `getenv` to resolve the local zone. Only `global()` before any `configure` or
-`set_global` reads the system clock and `TZ` itself, as Go's default logger does.
+Every constructor takes the clock (`go_clock::Clock`); `LogHandle::stdout` and `configure` take
+`getenv` to resolve the local zone. The sink is the caller's, except where Go writes to stdout:
+`LogHandle::stdout`, `LogHandle::configure`, `configure` and the default `global()` write to the
+process's stdout (`Logger::new`, `LogHandle::configure_to` and `set_global` take a sink). Only
+`global()` before any `configure` or `set_global` reads the system clock and `TZ` itself, as Go's
+default logger does.
 
 It depends on `go-compat`, `go-clock` and `jiff` (as `go-compat`).
 

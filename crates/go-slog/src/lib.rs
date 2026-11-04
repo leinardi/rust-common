@@ -33,8 +33,11 @@
 //!   process-wide logger of [`global`], [`set_global`] and [`configure`].
 //!
 //! A program that bans reading the wall clock or the environment outside its own seams passes them
-//! in: every constructor here takes the clock ([`Now`]) and the sink, and [`LogHandle::stdout`]
-//! and [`configure`] take `getenv` for the zone. Only [`global`] before any [`configure`] or
+//! in: every constructor here takes the clock ([`Now`]), and [`LogHandle::stdout`] and
+//! [`configure`] take `getenv` for the zone. The sink is the caller's too, except where Go's
+//! writes to stdout: [`LogHandle::stdout`], [`LogHandle::configure`], [`configure`] and the
+//! default [`global`] write to the process's stdout ([`LogHandle::configure_to`],
+//! [`Logger::new`] and [`set_global`] take a sink). Only [`global`] before any [`configure`] or
 //! [`set_global`] reads the system clock and `TZ` itself, as Go's default logger does.
 //!
 //! Extracted from swarm-device-access/src/logger/mod.rs at 8b4ab3a3e417 (`LogHandle`,
