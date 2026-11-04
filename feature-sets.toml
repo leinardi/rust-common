@@ -58,6 +58,14 @@ go-slog = [
     { all-features = true },
 ]
 
+# go-http: swarm-scheduler-exporter and swarm-device-access build it with no features (each passes
+# its own Timeouts and ListenError prefix) and add `testing` for their Go wire-capture tests.
+go-http = [
+    { no-default-features = true },
+    { features = ["testing"] },
+    { all-features = true },
+]
+
 # http-framing has no features; swarm-scheduler-exporter and swarm-device-access use it through
 # go-http, and bitgauge directly.
 http-framing = [

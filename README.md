@@ -16,8 +16,8 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`, `service-kit`.
-The others are planned for `v0.1.0` and land one at a time.
+it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`, `go-http`,
+`service-kit`. The others are planned for `v0.1.0` and land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ The others are planned for `v0.1.0` and land one at a time.
 | `go-slog` (available) | A `log/slog`-compatible logger: slog's text and JSON handlers and a plain format, byte for byte | – (the plain style, the level parsing and the global logger or a `LogHandle` are parameters) |
 | `go-prom` (available) | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation and the process collector | `testing` (the expfmt version is a parameter) |
 | `http-framing` (available) | HTTP/1 request framing over the bytes a connection read, as hyper frames them, std only | – |
-| `go-http` | Go `net/http` server behaviours on hyper: the timeouts, `bind` and `parse_port`, `serve` | the listen-error prefix as a parameter |
+| `go-http` (available) | Go `net/http` server behaviours on hyper: the mux's answers, header order and framing, the four timeouts, `bind` and `parse_port`, `serve` and its drain | `testing` (the timeouts, the routes, the log callback and the listen-error prefix are parameters) |
 | `docker-engine` | A Docker Engine API client over HTTP/1: transport, version negotiation, events, decoding | `tcp`, `tls`, `write`, `attach`, `test-util` |
 | `testenv-core` | Test-environment helpers: run filters, environment IDs, sweep rules, the tool gate, scratch git repositories | `async`, `sync`, `bollard`, `redact` |
 | `repo-meta` | Repository meta-test checks: workspace lints, Markdown links, licence headers, suppressions, Dockerfiles, toolchain pins, CI gates | – |
@@ -137,6 +137,27 @@ connection, as Go's server does with `bufr.Peek`. It only counts: parsing and re
 stays hyper's.
 
 It has no dependency beyond the standard library.
+
+### go-http
+
+A Go `http.ServeMux` behind an `http.Server`, on hyper's HTTP/1 server, byte for byte where hyper
+can (go1.26). The routes, the handlers and what the program logs stay the program's: it has no
+dependency on `go-slog` or `go-prom`.
+
+| Item | What it is |
+| --- | --- |
+| `Mux`, `Reply`, `Handler` | exact one-segment routes (`route`, `route_async`), any method; `OPTIONS *`, `CONNECT`, Go's 404, the 307 to the cleaned path and the 400 as Go's mux answers them; a reply's headers in Go's order, `Reply::sniffed` for a type Go sniffs, `Reply::metrics` for promhttp's answer |
+| `MetricsRequest` | what promhttp reads from a scrape (`Accept`, `Accept-Encoding`, `name[]`), for the program's own `/metrics` handler |
+| `Server`, `connection` | the mux, the clock `Date` is read from and a log callback, served on one connection with Go's header case, order and chunking |
+| `Timeouts`, `ConnState`, `TimedIo` | `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout` and `IdleTimeout` kept by an I/O wrapper, with `http-framing` telling a pipelined request from an idle connection; no default, each program passes its own |
+| `serve`, `Served`, `Drained` | the accept loop with Go's retry (logged through the callback, `log_printf_line` gives Go's prefix), a fatal accept error handed to `on_error`, and the drain to the caller's deadline |
+| `bind`, `parse_port`, `ListenError` | `net.Listen("tcp", …)`: the dual-stack wildcard (an empty host and the unspecified literals), IPv4-mapped addresses, IPv6 zones, names, Go's built-in TCP service names and Go's error texts, after the caller's prefix |
+| `gopath` | `net/url`'s escaping and `ParseQuery`, the mux's `cleanPath` (on `go_compat::filepath::clean`), `escape_host` |
+| `testing` (feature) | Go wire captures (`Capture`, `read_captures`) replayed against a `Server` (`replay`, `exchange`) |
+
+It depends on `http-framing`, `go-compat`, `go-clock`, `jiff` (as `go-compat`), `hyper` (`http1`,
+`server`), `hyper-util` (`tokio`, `http1`, `server`, `server-graceful`), `bytes`, `tokio` (`net`,
+`time`, `rt`, `macros`), `socket2` and `rustix` (`net`, for a zone's interface index).
 
 ### service-kit
 
