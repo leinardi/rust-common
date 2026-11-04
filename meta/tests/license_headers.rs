@@ -187,7 +187,8 @@ fn header_cases_for_each_file_kind() {
     ]);
 }
 
-/// What is never governed: untracked files, make-common's files, and Markdown, YAML and JSON.
+/// What is never governed: untracked files, make-common's files, and Markdown, YAML and JSON;
+/// and a file beside an exemption, which is.
 #[test]
 fn header_cases_for_the_exemptions() {
     run_cases(&[
@@ -209,6 +210,11 @@ fn header_cases_for_the_exemptions() {
             "bootstrap script",
             &[("scripts/bootstrap-mk-common.sh", "#!/bin/sh\n")],
             true,
+        ),
+        HeaderCase::new(
+            "a neighbour of the bootstrap script is governed",
+            &[("scripts/bootstrap-mk-common-local.sh", "#!/bin/sh\n")],
+            false,
         ),
         HeaderCase::new(
             "markdown, yaml and json",

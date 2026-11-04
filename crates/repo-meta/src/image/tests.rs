@@ -373,7 +373,7 @@ fn the_walk_finds_every_dockerfile_but_generated_ones() {
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(file, "FROM scratch\n").unwrap();
     }
-    let found = dockerfiles(&Repo::new(scratch.path())).unwrap();
+    let found = dockerfiles(&Repo::scratch(scratch.path())).unwrap();
     assert_eq!(
         found,
         ["deployments/docker/Dockerfile", "test/x.Dockerfile"]

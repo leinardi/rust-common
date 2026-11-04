@@ -19,7 +19,7 @@
 
 use repo_meta::scratch::ScratchRepo;
 use repo_meta::workspace::{layout_problems, tracked_crates};
-use repo_meta::{Repo, report, strings};
+use repo_meta::{report, strings};
 
 #[test]
 fn members_are_meta_and_the_tracked_crates() {
@@ -43,7 +43,7 @@ fn layout_check_is_not_blind() {
         "[package]\nname = \"untracked\"\n",
     );
     scratch.git(&["add", "Cargo.toml", "crates/alpha", "crates/beta"]);
-    let repo = Repo::new(scratch.path());
+    let repo = scratch.repo();
 
     let crates = tracked_crates(&repo, "crates");
     assert_eq!(crates, ["alpha", "beta"]);
@@ -66,11 +66,6 @@ fn a_matching_layout_passes() {
         "[workspace]\nmembers = [\"crates/alpha\", \"meta\"]\n",
     );
 
-    let problems = layout_problems(
-        &Repo::new(scratch.path()),
-        "crates",
-        &["meta"],
-        &["alpha".to_owned()],
-    );
+    let problems = layout_problems(&scratch.repo(), "crates", &["meta"], &["alpha".to_owned()]);
     assert!(problems.is_empty(), "{}", report(&problems));
 }

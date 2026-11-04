@@ -134,7 +134,7 @@ fn the_repository_run_reports_a_rejection() {
     )
     .unwrap();
     scratch.git(&["add", "-A"]);
-    let problems = HEADERS.check_repository(&Repo::new(scratch.path()));
+    let problems = HEADERS.check_repository(&Repo::scratch(scratch.path()));
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].message.contains("src/x.rs"), "{problems:?}");
 }

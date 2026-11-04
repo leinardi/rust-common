@@ -35,17 +35,51 @@ use std::process::Command;
 
 use crate::Problem;
 
-/// A repository root.
+/// A repository root, and whether its git commands keep the process's git environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repo {
     root: PathBuf,
+    isolated: bool,
 }
 
 impl Repo {
-    /// The repository at `root`.
+    /// The repository under test at `root`. Its git commands keep the process's git environment:
+    /// under a commit hook, git exports the index being committed (`GIT_INDEX_FILE`, and `GIT_DIR`
+    /// in a worktree), and the listings read that index.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            isolated: false,
+        }
+    }
+
+    /// A scratch repository at `root`, for a negative control. Its git commands go through
+    /// [`testenv_core::gitenv::isolate`], so a commit hook's environment, which names the real
+    /// repository, never reaches them and the listings read the scratch repository's own index.
+    #[must_use]
+    pub fn scratch(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            isolated: true,
+        }
+    }
+
+    /// Whether this is a scratch repository whose git commands are isolated ([`Repo::scratch`]).
+    #[must_use]
+    pub fn is_isolated(&self) -> bool {
+        self.isolated
+    }
+
+    /// A git command run at the root, isolated for a scratch repository.
+    #[must_use]
+    pub fn git_command(&self) -> Command {
+        let mut command = Command::new("git");
+        command.current_dir(&self.root);
+        if self.isolated {
+            testenv_core::gitenv::isolate(&mut command);
+        }
+        command
     }
 
     /// The root.
@@ -95,8 +129,9 @@ impl Repo {
     }
 
     /// The tracked files matching `pathspecs`, as slash-separated paths relative to the root, in
-    /// git's order. Run with the repository's own git environment: under the commit hook it names
-    /// the index being committed.
+    /// git's order. A repository under test ([`Repo::new`]) lists with the process's own git
+    /// environment, so under the commit hook it names the index being committed; a scratch one
+    /// ([`Repo::scratch`]) lists its own index whatever the environment says.
     ///
     /// # Panics
     ///
@@ -124,14 +159,17 @@ impl Repo {
             .collect()
     }
 
+    /// The names git lists. A name that is not UTF-8 fails the listing, naming its bytes: a
+    /// lossy conversion would hand a check a path that does not exist, and the file would escape
+    /// it.
     fn ls_files(&self, options: &[&str], pathspecs: &[&str]) -> Vec<String> {
-        let output = Command::new("git")
+        let output = self
+            .git_command()
             .arg("ls-files")
             .arg("-z")
             .args(options)
             .arg("--")
             .args(pathspecs)
-            .current_dir(&self.root)
             .output()
             .unwrap_or_else(|error| panic!("run git ls-files: {error}"));
         assert!(
@@ -139,10 +177,18 @@ impl Repo {
             "git ls-files failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        String::from_utf8_lossy(&output.stdout)
-            .split('\0')
+        output
+            .stdout
+            .split(|byte| *byte == 0)
             .filter(|name| !name.is_empty())
-            .map(str::to_owned)
+            .map(|name| {
+                String::from_utf8(name.to_vec()).unwrap_or_else(|_| {
+                    panic!(
+                        "git lists a path that is not UTF-8, which no check can read: {}",
+                        name.escape_ascii()
+                    )
+                })
+            })
             .collect()
     }
 
@@ -182,16 +228,20 @@ impl Repo {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::process::Command;
 
     use super::Repo;
 
     fn git(repo: &Repo, args: &[&str]) {
-        let status =
-            testenv_core::gitenv::isolate(Command::new("git").args(args).current_dir(repo.root()))
-                .status()
-                .unwrap();
+        let status = repo.git_command().args(args).status().unwrap();
         assert!(status.success(), "git {args:?}");
+    }
+
+    fn write(repo: &Repo, path: &str, content: &str) {
+        let file = repo.path(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, content).unwrap();
     }
 
     /// The listings over a scratch repository: tracked only, tracked or new (sorted, without the
@@ -199,16 +249,15 @@ mod tests {
     #[test]
     fn listings_see_what_they_promise() {
         let scratch = tempfile::tempdir().unwrap();
-        let repo = Repo::new(scratch.path());
+        let repo = Repo::scratch(scratch.path());
+        assert!(repo.is_isolated() && !Repo::new(scratch.path()).is_isolated());
         for (path, content) in [
             ("b.rs", "b"),
             ("a/x.rs", "x"),
             ("gone.rs", "g"),
             (".gitignore", "ignored.rs\n"),
         ] {
-            let file = repo.path(path);
-            fs::create_dir_all(file.parent().unwrap()).unwrap();
-            fs::write(file, content).unwrap();
+            write(&repo, path, content);
         }
         git(&repo, &["init", "--quiet"]);
         git(&repo, &["add", "b.rs", "gone.rs", ".gitignore"]);
@@ -239,6 +288,87 @@ mod tests {
     #[should_panic(expected = "list missing")]
     fn a_missing_directory_fails_the_walk() {
         let scratch = tempfile::tempdir().unwrap();
-        let _ = Repo::new(scratch.path()).files_under("missing", &[".rs"]);
+        let _ = Repo::scratch(scratch.path()).files_under("missing", &[".rs"]);
+    }
+
+    /// A tracked name that is not UTF-8 fails the listing rather than reach a check mangled.
+    #[test]
+    #[should_panic(expected = "not UTF-8")]
+    fn a_name_that_is_not_utf8_fails_the_listing() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let scratch = tempfile::tempdir().unwrap();
+        let repo = Repo::scratch(scratch.path());
+        git(&repo, &["init", "--quiet"]);
+        let name = std::ffi::OsStr::from_bytes(b"bad-\xff.rs");
+        fs::write(scratch.path().join(name), "x").unwrap();
+        let status = repo
+            .git_command()
+            .arg("add")
+            .arg("--")
+            .arg(name)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let _ = repo.tracked_or_new(&["*.rs"]);
+    }
+
+    /// The child half of [`a_commit_hook_environment_does_not_reach_a_scratch_repository`]: a
+    /// scratch repository lists its own index. Under the parent's environment, a repository
+    /// under test at the same root lists the decoy's instead, which shows the environment
+    /// arrived.
+    #[test]
+    #[ignore = "run by a_commit_hook_environment_does_not_reach_a_scratch_repository"]
+    fn scratch_listing_under_a_hook_environment() {
+        let scratch = tempfile::tempdir().unwrap();
+        let repo = Repo::scratch(scratch.path());
+        git(&repo, &["init", "--quiet"]);
+        write(&repo, "own.rs", "o");
+        git(&repo, &["add", "own.rs"]);
+        assert_eq!(repo.tracked(&["*.rs"]), ["own.rs"]);
+        assert_eq!(repo.tracked_or_new(&["*.rs"]), ["own.rs"]);
+        if std::env::var_os("GIT_INDEX_FILE").is_some() {
+            assert_eq!(Repo::new(scratch.path()).tracked(&["*.rs"]), ["decoy.rs"]);
+        }
+    }
+
+    fn decoy() -> tempfile::TempDir {
+        let decoy = tempfile::tempdir().unwrap();
+        let repo = Repo::scratch(decoy.path());
+        git(&repo, &["init", "--quiet"]);
+        write(&repo, "decoy.rs", "d");
+        git(&repo, &["add", "decoy.rs"]);
+        decoy
+    }
+
+    fn run_child(env: &[(&str, &Path)]) {
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child.args([
+            "--exact",
+            "repo::tests::scratch_listing_under_a_hook_environment",
+            "--include-ignored",
+            "--quiet",
+        ]);
+        for (name, value) in env {
+            child.env(name, value);
+        }
+        let output = child.output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && text.contains("1 passed"),
+            "{text}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Under a commit hook, git exports the real repository's index (`GIT_INDEX_FILE`, absolute)
+    /// and, in a worktree, its git directory (`GIT_DIR`). A scratch repository's listing must not
+    /// read either.
+    #[test]
+    fn a_commit_hook_environment_does_not_reach_a_scratch_repository() {
+        let decoy = decoy();
+        let git_dir = decoy.path().join(".git");
+        let index = git_dir.join("index");
+        run_child(&[("GIT_INDEX_FILE", &index)]);
+        run_child(&[("GIT_DIR", &git_dir), ("GIT_INDEX_FILE", &index)]);
     }
 }

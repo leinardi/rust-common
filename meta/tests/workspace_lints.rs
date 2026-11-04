@@ -26,7 +26,7 @@ use repo_meta::scratch::ScratchRepo;
 use repo_meta::workspace::{
     LintLevel, lint_level_problems, lint_opt_in, override_problems, root_lint_problems,
 };
-use repo_meta::{Repo, report, strings};
+use repo_meta::{report, strings};
 
 /// The lints whose level this repository's rules depend on (AGENTS.md): no unsafe code, a silence
 /// only through `#[expect]` with a reason, no panic or print outside tests, every enum variant
@@ -122,7 +122,7 @@ fn lint_check_is_not_blind() {
     );
 
     assert_eq!(
-        strings(&lint_opt_in(&Repo::new(scratch.path()), None)),
+        strings(&lint_opt_in(&scratch.repo(), None)),
         [
             "[workspace.lints.clippy] is missing",
             "crates/alpha/Cargo.toml does not declare [lints] workspace = true",
@@ -144,7 +144,7 @@ fn a_workspace_whose_members_opt_in_passes() {
         "[package]\nname = \"alpha\"\n\n[lints]\nworkspace = true\n",
     );
 
-    let problems = lint_opt_in(&Repo::new(scratch.path()), None);
+    let problems = lint_opt_in(&scratch.repo(), None);
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 

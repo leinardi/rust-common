@@ -59,7 +59,7 @@ fn lint_check_is_not_blind() {
         "crates/alpha/Cargo.toml",
         "[package]\nname = \"alpha\"\n\n[lints.clippy]\npedantic = \"warn\"\n",
     );
-    let problems = strings(&lint_opt_in(&Repo::new(root), None));
+    let problems = strings(&lint_opt_in(&Repo::scratch(root), None));
     assert_eq!(problems.len(), 4, "{problems:#?}");
     assert_eq!(problems[0], "[workspace.lints.clippy] is missing");
     assert_eq!(
@@ -91,7 +91,7 @@ fn a_workspace_whose_members_opt_in_passes() {
         "crates/alpha/Cargo.toml",
         "[package]\nname = \"alpha\"\n\n[lints]\nworkspace = true\n",
     );
-    let repo = Repo::new(root);
+    let repo = Repo::scratch(root);
     assert_eq!(lint_opt_in(&repo, None), []);
     assert_eq!(lint_opt_in(&repo, Some(&[".", "crates/alpha"])), []);
     assert_eq!(
@@ -245,7 +245,7 @@ fn layout_check_is_not_blind() {
     );
     assert_eq!(
         strings(&layout_problems(
-            &Repo::new(root),
+            &Repo::scratch(root),
             "crates",
             &["meta"],
             &["alpha".to_owned(), "beta".to_owned()]
@@ -269,7 +269,12 @@ fn a_matching_layout_passes() {
         "[workspace]\nmembers = [\"crates/alpha\", \"meta\"]\n",
     );
     assert_eq!(
-        layout_problems(&Repo::new(root), "crates", &["meta"], &["alpha".to_owned()]),
+        layout_problems(
+            &Repo::scratch(root),
+            "crates",
+            &["meta"],
+            &["alpha".to_owned()]
+        ),
         []
     );
     assert_eq!(

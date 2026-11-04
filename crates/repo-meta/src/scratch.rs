@@ -20,16 +20,18 @@
 //! Every git command and every script run in a scratch repository goes through
 //! [`testenv_core::gitenv::isolate`]: under a commit hook, git exports the location of the
 //! repository being committed, and a `git add` in a scratch repository with that environment
-//! would write into the real index. A repository's own run of its script
-//! ([`HeaderHarness::check_repository`]) keeps that environment instead, so it names the index
-//! being committed.
+//! would write into the real index. [`ScratchRepo::repo`] hands a check the scratch repository as
+//! a [`Repo::scratch`], whose listings are isolated the same way. A repository under test's own
+//! run of its script ([`HeaderHarness::check_repository`] on a [`Repo::new`]) keeps that
+//! environment instead, so it names the index being committed.
 //!
 //! Like [`crate::Repo`], the scratch helpers panic when git or the file system fails: a harness
 //! that cannot build its fixture has nothing to say about the script. The verdicts are problems.
 //!
 //! Extracted from swarm-scheduler-exporter/meta/tests/license_headers.rs at c9e79afa8810
-//! (`scratch_repo`, `run_checker`, `HeaderCase`, `run_cases`), `bitgauge/meta/tests/license_headers.rs`
-//! at 600fc3905200 (the cases run in parallel, and a rejection names the exit status) and
+//! (`scratch_repo`, `run_checker`, `HeaderCase`, `run_cases`),
+//! `bitgauge/meta/tests/license_headers.rs` at 600fc3905200 (the cases run in parallel, and a
+//! rejection names the exit status) and
 //! swarm-scheduler-exporter/meta/tests/suppressions.rs at c9e79afa8810 with
 //! swarm-device-access/meta/tests/suppressions.rs at 8b4ab3a3e417 (`Scratch`, its baseline and
 //! commits under any file name, `ratchet`, the cases and `run_cases`).
@@ -75,6 +77,14 @@ impl ScratchRepo {
     #[must_use]
     pub fn path(&self) -> &Path {
         self.dir.path()
+    }
+
+    /// The repository as a [`Repo::scratch`]: its listings read its own index whatever git
+    /// environment the process carries, so a check run on it as a negative control never sees the
+    /// real repository's.
+    #[must_use]
+    pub fn repo(&self) -> Repo {
+        Repo::scratch(self.path())
     }
 
     /// Writes one file, creating the directories above it.
@@ -188,14 +198,18 @@ impl HeaderCase {
 }
 
 impl HeaderHarness<'_> {
-    /// Runs the checker on `repo` itself, with the process's own git environment (under the commit
-    /// hook it names the index being committed): a problem unless it accepts the repository.
+    /// Runs the checker on `repo` itself: a problem unless it accepts the repository. A
+    /// repository under test ([`Repo::new`]) keeps the process's git environment, so under the
+    /// commit hook it names the index being committed; a scratch one ([`Repo::scratch`]) runs
+    /// isolated.
     #[must_use]
     pub fn check_repository(&self, repo: &Repo) -> Vec<Problem> {
-        match Command::new(repo.path(self.script))
-            .current_dir(repo.root())
-            .output()
-        {
+        let mut command = Command::new(repo.path(self.script));
+        command.current_dir(repo.root());
+        if repo.is_isolated() {
+            gitenv::isolate(&mut command);
+        }
+        match command.output() {
             Ok(output) if output.status.success() => Vec::new(),
             Ok(output) => vec![Problem::at(
                 self.script,
@@ -211,8 +225,10 @@ impl HeaderHarness<'_> {
 
     /// Runs each case in a scratch repository holding the checker copied from `repo`, the base
     /// files and the case's files, every one added but those under the untracked prefix; the cases
-    /// run in parallel. A problem for every case whose verdict is wrong, and one when the checker
-    /// cannot be read.
+    /// run in parallel. A problem for every case whose verdict is wrong, one when the checker
+    /// cannot be read, and one unless the cases hold at least one the checker must accept and
+    /// one it must reject: a checker that accepted, or refused, everything would pass a one-sided
+    /// set.
     ///
     /// # Panics
     ///
@@ -223,6 +239,12 @@ impl HeaderHarness<'_> {
             Ok(script) => script,
             Err(problem) => return vec![problem],
         };
+        if !cases.iter().any(|case| case.pass) || cases.iter().all(|case| case.pass) {
+            return vec![Problem::at(
+                self.script,
+                "the cases need one the checker must accept and one it must reject",
+            )];
+        }
         parallel_map(cases, |case| self.case_problem(&script, case))
             .into_iter()
             .flatten()
@@ -339,14 +361,36 @@ impl SuppressionHarness<'_> {
     }
 
     /// Runs each case: a fresh scratch repository, the case's set-up, then the ratchet with no
-    /// argument. A problem for every case whose verdict or refusal text is wrong.
+    /// argument. A problem for every case whose verdict or refusal text is wrong, for a refusal
+    /// text that is empty (it would match any refusal), when the ratchet is not a file, and when
+    /// there is no case.
     ///
     /// # Panics
     ///
     /// A set-up step or the ratchet cannot run.
     #[must_use]
     pub fn run_cases(&self, repo: &Repo, cases: &[RatchetCase]) -> Vec<Problem> {
+        if !repo.path(self.script).is_file() {
+            return vec![Problem::at(self.script, "is not a file in the repository")];
+        }
+        if cases.is_empty() {
+            return vec![Problem::at(
+                self.script,
+                "no case; the harness would pass on nothing",
+            )];
+        }
         let mut problems = Vec::new();
+        for (name, _, refusal) in cases {
+            if *refusal == Some("") {
+                problems.push(Problem::at(
+                    *name,
+                    "expects a refusal with empty text, which any refusal matches",
+                ));
+            }
+        }
+        if !problems.is_empty() {
+            return problems;
+        }
         for (name, set_up, refusal) in cases {
             let scratch = self.scratch(repo);
             set_up(&scratch);
