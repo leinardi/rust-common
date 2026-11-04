@@ -14,16 +14,16 @@
 # Resolve repository root (Makefile can live anywhere)
 REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-MK_COMMON_REPO    ?= leinardi/make-common
-MK_COMMON_VERSION ?= v1
+MK_COMMON_REPO        ?= leinardi/make-common
+MK_COMMON_VERSION     ?= v1
 
-MK_COMMON_DIR := $(REPO_ROOT)/.mk
+MK_COMMON_DIR         := $(REPO_ROOT)/.mk
 
 # Shared snippets coming from make-common
-MK_COMMON_FILES := help.mk pre-commit.mk password.mk
+MK_COMMON_FILES       := help.mk password.mk pre-commit.mk rust.mk
 
 # Repo-local snippets that are NOT in make-common
-MK_LOCAL_FILES :=
+MK_LOCAL_FILES        := audit-deps.mk feature-matrix.mk verify.mk
 
 MK_COMMON_BOOTSTRAP_SCRIPT := $(REPO_ROOT)/scripts/bootstrap-mk-common.sh
 
@@ -33,6 +33,14 @@ MK_COMMON_BOOTSTRAP := $(shell "$(MK_COMMON_BOOTSTRAP_SCRIPT)" \
   "$(MK_COMMON_VERSION)" \
   "$(MK_COMMON_DIR)" \
   "$(MK_COMMON_FILES)")
+
+# -----------------------------------------------------------------------------
+# Project-specific config
+# -----------------------------------------------------------------------------
+# A library workspace: no binary, so rust.mk's rust-run and rust-dist do not apply, and nothing is
+# version-stamped (RUST_STAMP_PREFIX stays empty). rust.mk's other defaults (every command
+# workspace-wide and --locked, RUST_FEATURES=--all-features for build, clippy and doc,
+# RUST_DENY_ARGS=--workspace) are what this repository wants.
 
 # -----------------------------------------------------------------------------
 # Include shared make logic (fetched from make-common)
