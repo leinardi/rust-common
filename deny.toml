@@ -34,9 +34,9 @@ allow = [
     # under its regex; jiff and jiff-core (Unlicense OR MIT), under go-compat; tokio (MIT only),
     # under go-clock.
     "MIT",
-    # unicode-ident ((MIT OR Apache-2.0) AND Unicode-3.0), under proc-macro2 and syn, which
-    # tokio-macros needs for the tests' #[tokio::test]. A dev-only feature, but checked: tokio is
-    # also a normal dependency, and the graph unifies its features.
+    # unicode-ident ((MIT OR Apache-2.0) AND Unicode-3.0), through tokio-macros -> syn ->
+    # proc-macro2 -> unicode-ident. tokio's `macros` feature needs it, both for the tests'
+    # #[tokio::test] and for service-kit's `runtime` feature, whose signal helpers use select!.
     "Unicode-3.0",
 ]
 confidence-threshold = 0.9

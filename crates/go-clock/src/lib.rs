@@ -58,9 +58,9 @@ impl Clock for SystemClock {
 /// wall time and the timers agree.
 ///
 /// The time saturates at [`Timestamp::MAX`] rather than wrapping or failing. jiff's range ends in
-/// the year 9999, so no real run gets there; the two copies this was extracted from disagreed only
-/// on that unreachable case (one kept the base time, the other saturated), and saturating is the
-/// answer that keeps the clock monotonic.
+/// the year 9999, so no real run gets there. Both copies this was extracted from saturated there
+/// too: they differed only in the fallback of a `saturating_add` that cannot fail (one fell back
+/// to the base time, the other to `Timestamp::MAX`), so neither fallback was reachable.
 #[derive(Debug, Clone, Copy)]
 pub struct TokioClock {
     base: Timestamp,

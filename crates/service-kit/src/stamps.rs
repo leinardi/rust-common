@@ -19,7 +19,7 @@
 //! must expand in the program's crate, not in this one: [`buildinfo!`](crate::buildinfo!) is a
 //! macro for that reason, and [`BuildInfo::resolve`] only applies the defaults.
 //!
-//! Extracted from swarm-scheduler-exporter/src/version.rs at c9e79afa8810 (the same file as
+//! Extracted from swarm-scheduler-exporter/src/version.rs at c9e79afa8810 (with the same rules as
 //! swarm-device-access/src/version.rs at 8b4ab3a3e417, awtrix-controller/src/version.rs at
 //! afcd9ca26324 and swarm-rootless-docker/src/version.rs at 3bb0fd8a615b: an empty stamp is kept)
 //! and bitgauge/src/buildinfo.rs at 600fc3905200 (an empty stamp counts as unstamped).
