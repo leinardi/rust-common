@@ -20,9 +20,12 @@
 //! silently builds the default features.
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use toml::{Table, Value};
 
@@ -234,8 +237,9 @@ pub fn load(root: &Path) -> Result<Vec<CrateSets>, Vec<String>> {
 }
 
 /// The cargo commands of the matrix for the repository at `root`, in file order: for each crate
-/// and each of its sets, a `build` and then a `test` of that one package, through its own
-/// manifest. Empty when the file lists no crate.
+/// and each of its sets, a `clippy` of every target with warnings as errors (so code that compiles
+/// in a subset but leaves, say, an unused import fails), then a `test` of that one package,
+/// through its own manifest. Empty when the file lists no crate.
 ///
 /// # Errors
 ///
@@ -256,17 +260,26 @@ pub fn plan(root: &Path) -> Result<Vec<Vec<String>>, Vec<String>> {
     for entry in &crates {
         let manifest = manifest(&entry.name);
         for set in &entry.sets {
-            for command in ["build", "test"] {
-                let mut args = vec![command.to_owned(), "--locked".to_owned()];
-                args.extend([
-                    "--manifest-path".to_owned(),
-                    manifest.clone(),
-                    "-p".to_owned(),
-                    entry.name.clone(),
-                ]);
-                args.extend(set.args());
-                commands.push(args);
-            }
+            let package = [
+                "--manifest-path".to_owned(),
+                manifest.clone(),
+                "-p".to_owned(),
+                entry.name.clone(),
+            ];
+            let mut clippy = vec![
+                "clippy".to_owned(),
+                "--locked".to_owned(),
+                "--all-targets".to_owned(),
+            ];
+            clippy.extend(package.iter().cloned());
+            clippy.extend(set.args());
+            clippy.extend(["--".to_owned(), "-D".to_owned(), "warnings".to_owned()]);
+            commands.push(clippy);
+
+            let mut test = vec!["test".to_owned(), "--locked".to_owned()];
+            test.extend(package);
+            test.extend(set.args());
+            commands.push(test);
         }
     }
     Ok(commands)
@@ -387,4 +400,58 @@ pub fn coverage_problems(root: &Path, crates: &[String]) -> Vec<String> {
         }
     }
     problems
+}
+
+/// Runs the matrix for the repository at `root` with `cargo`, in [`plan`] order, and stops at the
+/// first command that fails. Progress goes to `out` and failures to `err`; the commands' own output
+/// is inherited when `show_output` is set and discarded otherwise. Returns whether every command
+/// passed; a file listing no crate passes, and says so.
+///
+/// # Errors
+///
+/// Writing to `out` or `err` fails, or a command cannot be started.
+pub fn run(
+    root: &Path,
+    cargo: &OsStr,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    show_output: bool,
+) -> io::Result<bool> {
+    let commands = match plan(root) {
+        Ok(commands) => commands,
+        Err(problems) => {
+            for problem in problems {
+                writeln!(err, "feature-matrix: {problem}")?;
+            }
+            return Ok(false);
+        }
+    };
+    if commands.is_empty() {
+        writeln!(
+            out,
+            "feature-matrix: {FILE} lists no crate, so there is nothing to check or test."
+        )?;
+        return Ok(true);
+    }
+    for args in &commands {
+        let line = format!("cargo {}", args.join(" "));
+        writeln!(out, "==> {line}")?;
+        out.flush()?;
+        let mut command = Command::new(cargo);
+        command.args(args).current_dir(root);
+        if !show_output {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+        let status = command.status()?;
+        if !status.success() {
+            writeln!(err, "feature-matrix: {line} failed ({status})")?;
+            return Ok(false);
+        }
+    }
+    writeln!(
+        out,
+        "feature-matrix: all {} commands passed.",
+        commands.len()
+    )?;
+    Ok(true)
 }

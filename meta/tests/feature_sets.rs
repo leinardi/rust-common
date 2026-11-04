@@ -17,10 +17,12 @@
 //! The negative controls run the same checks over scratch trees, so the check on this repository
 //! is not trusted on the strength of having found nothing to check.
 
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 
-use meta::feature_sets::{coverage_problems, parse, plan};
+use meta::feature_sets::{coverage_problems, parse, plan, run};
 use meta::repo;
 
 fn write(root: &Path, relative: &str, content: &str) {
@@ -144,7 +146,7 @@ fn parse_refuses_sets_that_would_select_nothing_they_say() {
 }
 
 #[test]
-fn plan_builds_and_tests_one_package_at_a_time() {
+fn plan_lints_and_tests_one_package_at_a_time() {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let root = scratch.path();
     write(root, "crates/alpha/Cargo.toml", ALPHA_MANIFEST);
@@ -163,9 +165,12 @@ fn plan_builds_and_tests_one_package_at_a_time() {
     assert_eq!(
         commands,
         [
-            format!("build --locked {target} --no-default-features --features a,b"),
+            format!(
+                "clippy --locked --all-targets {target} --no-default-features --features a,b \
+                 -- -D warnings"
+            ),
             format!("test --locked {target} --no-default-features --features a,b"),
-            format!("build --locked {target} --all-features"),
+            format!("clippy --locked --all-targets {target} --all-features -- -D warnings"),
             format!("test --locked {target} --all-features"),
         ]
     );
@@ -197,4 +202,71 @@ fn plan_refuses_a_missing_file_and_runs_nothing_for_an_empty_one() {
 
     write(root, "feature-sets.toml", "# no crate yet\n");
     assert_eq!(plan(root).expect("plan"), Vec::<Vec<String>>::new());
+}
+
+/// A scratch workspace whose one crate compiles cleanly with its default features, and leaves an
+/// unused import behind without them.
+fn warning_only_without_defaults(root: &Path, sets: &str) {
+    write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/alpha\"]\nresolver = \"3\"\n",
+    );
+    write(
+        root,
+        "Cargo.lock",
+        "version = 4\n\n[[package]]\nname = \"alpha\"\nversion = \"0.1.0\"\n",
+    );
+    write(
+        root,
+        "crates/alpha/Cargo.toml",
+        "[package]\nname = \"alpha\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [features]\ndefault = [\"fmt\"]\nfmt = []\n",
+    );
+    write(
+        root,
+        "crates/alpha/src/lib.rs",
+        "//! Scratch.\n\nuse std::fmt::Write as _;\n\n/// Greets.\n///\n/// # Errors\n///\n\
+         /// Never.\n#[cfg(feature = \"fmt\")]\n\
+         pub fn greet(text: &mut String) -> std::fmt::Result {\n    write!(text, \"hello\")\n}\n",
+    );
+    write(root, "feature-sets.toml", sets);
+}
+
+fn run_quietly(root: &Path) -> (bool, String) {
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let passed = run(root, &cargo, &mut out, &mut err, false)
+        .unwrap_or_else(|error| panic!("run the matrix: {error}"));
+    (passed, String::from_utf8_lossy(&err).into_owned())
+}
+
+/// The negative control for the matrix itself: a warning that only a subset of the features
+/// produces fails that set, as plain `cargo build` would not.
+#[test]
+fn matrix_fails_on_a_warning_in_one_feature_set() {
+    let scratch = tempfile::tempdir().expect("scratch directory");
+    let root = scratch.path();
+
+    warning_only_without_defaults(root, "alpha = [{}]\n");
+    let (passed, err) = run_quietly(root);
+    assert!(
+        passed,
+        "the default set is clean, yet the matrix failed: {err}"
+    );
+
+    warning_only_without_defaults(root, "alpha = [{}, { no-default-features = true }]\n");
+    let (passed, err) = run_quietly(root);
+    assert!(
+        !passed,
+        "the unused import without default features passed the matrix"
+    );
+    assert!(
+        err.contains(
+            "cargo clippy --locked --all-targets --manifest-path crates/alpha/Cargo.toml \
+             -p alpha --no-default-features -- -D warnings failed"
+        ),
+        "{err}"
+    );
 }

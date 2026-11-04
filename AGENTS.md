@@ -46,7 +46,7 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | `Cargo.toml` | the workspace: members listed explicitly (never a glob), `[workspace.package]`, the one `[workspace.lints]` set |
 | `crates/<name>/` | the library crates, one directory each, named as the package; each is a workspace member and has a `feature-sets.toml` entry |
 | `meta/` | the meta-tests, which check the repository rather than the crates (`meta/tests/`), their helpers (`meta/src`), and the `feature-matrix` runner (`meta/src/bin`) |
-| `feature-sets.toml` | the per-crate feature sets `make rust-feature-matrix` builds and tests; its format is documented at its top |
+| `feature-sets.toml` | the per-crate feature sets `make rust-feature-matrix` lints (`-D warnings`) and tests; its format is documented at its top |
 | `deny.toml`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | cargo-deny policy, clippy settings (no application bans), formatting, the pinned toolchain |
 | `Makefile`, `.mk/`, `scripts/bootstrap-mk-common.sh` | make-common: shared snippets in `MK_COMMON_FILES`, local ones in `MK_LOCAL_FILES` |
 | `.github/workflows/ci.yaml` | `pre-commit-all`, `rust`, `feature-matrix`, `conventional-commits` and the `ci-result` aggregator; the reviewdog jobs on pull requests |

@@ -1,8 +1,10 @@
-# The per-crate feature matrix: `make rust-feature-matrix` (meta/src/bin/feature-matrix.rs) builds
-# and tests each crate listed here under each of its sets, one package at a time:
+# The per-crate feature matrix: `make rust-feature-matrix` (meta/src/bin/feature-matrix.rs) lints
+# every target, warnings as errors, and runs the tests of each crate listed here under each of its
+# sets, one package at a time:
 #
-#   cargo build --locked --all-targets --manifest-path crates/<name>/Cargo.toml -p <name> <flags>
-#   cargo test  --locked               --manifest-path crates/<name>/Cargo.toml -p <name> <flags>
+#   cargo clippy --locked --all-targets --manifest-path crates/<name>/Cargo.toml -p <name> <flags> \
+#       -- -D warnings
+#   cargo test   --locked               --manifest-path crates/<name>/Cargo.toml -p <name> <flags>
 #
 # Format: one key per crate (the directory name under crates/, which is also the package name),
 # holding a non-empty array of sets. A set is an inline table with any of:
