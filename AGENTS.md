@@ -56,10 +56,12 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | `.agents/skills/` | project skills; `.claude/skills` is a symlink to it |
 
 The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git: every workspace member
-opts into the workspace lints (`workspace_lints.rs`), every relative Markdown link resolves
-(`docs.rs`), and `feature-sets.toml` covers every crate and every feature it declares
-(`feature_sets.rs`). Each check has a negative control over a scratch tree, so it is not trusted on
-the strength of having found nothing to check.
+opts into the workspace lints (`workspace_lints.rs`), every member is `meta` or `crates/<name>` and
+every tracked crate is a member (`workspace_layout.rs`), every relative Markdown link resolves
+(`docs.rs`), and `feature-sets.toml` covers every crate and every feature it declares, while the
+matrix fails a set that leaves a warning (`feature_sets.rs`). The checks live in `meta/src` and take
+the repository root, and each test file also runs them on a scratch tree with a planted violation,
+so none is trusted on the strength of having found nothing to check.
 
 ### Generated or vendored: never hand-edit
 
@@ -91,9 +93,10 @@ the strength of having found nothing to check.
   `{ all-features = true }` set and each exact set a consumer uses.
 - **Lints.** Every member opts in with `[lints] workspace = true`. Lints are silenced only with
   `#[expect(lint, reason = "...")]`: `allow_attributes` is denied, the reason is mandatory, and an
-  `#[expect]` that stops firing fails the build.
+  `#[expect]` that stops firing fails clippy with `-D warnings` (`make verify`, the hooks, CI).
 - **Versions.** Every crate takes `version.workspace = true`, so a tag carries one version for all
-  of them; a consumer pins the tag and requires `version = "0.1"`.
+  of them, and `[workspace.package] version` is the version being tagged; a consumer pins the tag
+  and requires its `<major>.<minor>` as `version`.
 
 ## Licence headers and suppressions
 

@@ -13,8 +13,9 @@ not say. README is the consumer-facing contract (crate table, tag dependency, `[
 - `crates/<name>/`: one library crate each (planned list in the README table); each is a workspace
   member and has a `feature-sets.toml` entry.
 - `meta/`: meta-tests over the repository (`tests/workspace_lints.rs`, `docs.rs`,
-  `feature_sets.rs`), helpers in `src/` (`repo`, `links`, `feature_sets`), and
-  `src/bin/feature-matrix.rs`, the runner behind `make rust-feature-matrix`.
+  `workspace_layout.rs`, `feature_sets.rs`), the checks in `src/` (`repo`, `links`,
+  `feature_sets`, `workspace`), and `src/bin/feature-matrix.rs`, the runner behind
+  `make rust-feature-matrix`.
 - `feature-sets.toml`: per-crate feature sets, format documented in the file.
 
 ## Non-obvious anchors

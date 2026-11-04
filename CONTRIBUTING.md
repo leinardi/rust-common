@@ -71,5 +71,6 @@ when it is the highest release. A failed run is finished by re-running it: it co
 earlier attempt left behind.
 
 Before releasing, bump `version` in the root `Cargo.toml`'s `[workspace.package]` to the version
-being tagged (the consumers' `version = "0.1"` requirement is checked against it), then move each
-consumer to the new `tag`.
+being tagged (each consumer's `version` requirement, the tag's `<major>.<minor>`, is checked
+against it), then move each consumer to the new `tag`, updating its `version` when the minor or
+major moved.

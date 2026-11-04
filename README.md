@@ -37,12 +37,13 @@ is never forced on another.
 
 ## Using a crate
 
-Depend on a crate by tag. The `version` requirement is checked against the crate's own version, and
-keeps cargo-deny's `wildcards = "deny"` satisfied:
+Depend on a crate by tag. The `version` requirement is the tag's `<major>.<minor>` (`"0.1"` for
+`v0.1.Z`); Cargo checks it against the crate's own version, and it keeps cargo-deny's
+`wildcards = "deny"` satisfied:
 
 ```toml
 [dependencies]
-go-compat = { git = "https://github.com/leinardi/rust-common", tag = "vX.Y.Z", version = "0.1" }
+go-compat = { git = "https://github.com/leinardi/rust-common", tag = "vX.Y.Z", version = "X.Y" }
 ```
 
 A consumer's `deny.toml` allows the git source:
