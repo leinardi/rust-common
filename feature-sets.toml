@@ -116,3 +116,11 @@ testenv-core = [
     { features = ["async", "bollard", "redact"] }, # swarm-scheduler-exporter, swarm-device-access
     { all-features = true },
 ]
+
+# repo-meta has no features: swarm-scheduler-exporter, swarm-device-access, bitgauge,
+# awtrix-controller, swarm-rootless-docker and this repository's meta crate build it as it is and
+# pick each check's strictness by parameter.
+repo-meta = [
+    { no-default-features = true },
+    { all-features = true },
+]

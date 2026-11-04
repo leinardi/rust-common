@@ -10,6 +10,7 @@ members = [
     "crates/go-slog",
     "crates/go-http",
     "crates/http-framing",
+    "crates/repo-meta",
     "crates/service-kit",
     "crates/testenv-core",
     "meta",

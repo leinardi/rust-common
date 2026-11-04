@@ -17,8 +17,8 @@ shares the workspace version.
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
 it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`, `go-http`,
-`docker-engine`, `testenv-core`, `service-kit`. The others are planned for `v0.1.0` and land one
-at a time.
+`docker-engine`, `testenv-core`, `repo-meta`, `service-kit`. The others are planned for `v0.1.0`
+and land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ at a time.
 | `go-http` (available) | Go `net/http` server behaviours on hyper: the mux's answers, header order and framing, the four timeouts, `bind` and `parse_port`, `serve` and its drain | `testing` (the timeouts, the routes, the log callback and the listen-error prefix are parameters) |
 | `docker-engine` (available) | A Docker Engine API client over HTTP/1 that sends what moby client v0.6.0 sends: transport, version negotiation, events, decoding, moby's error texts | `tcp`, `tls`, `write`, `attach`, `test-util` (the `User-Agent` and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
-| `repo-meta` | Repository meta-test checks: workspace lints, Markdown links, licence headers, suppressions, Dockerfiles, toolchain pins, CI gates | – |
+| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lints and layout, Markdown links, Dockerfiles and images, toolchain pins, CI gates, lint allowlists, vacuous flags, and the licence-header and suppression script harnesses | – (each check's strictness is a parameter) |
 | `tracing-setup` | A `tracing` subscriber set up the way the projects log | `log-bridge` |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals | `runtime` |
 
@@ -224,6 +224,34 @@ them on its own bollard dependency.
 It depends on `go-compat`, `jiff` (as `go-compat`) and `regex`; `async` adds `tokio` (`rt`,
 `time`, `signal`, `macros`) and `tokio-util`, `sync` adds `tempfile`, `redact` adds `go-slog`, and
 `bollard` adds `bollard` and `rustix` (`process`).
+
+### repo-meta
+
+The checks the projects' meta-tests repeat. Each takes the repository (`Repo::new(root)`, the root
+from `testenv_core::repo_root!()`) or the text it checks and returns `Vec<Problem>`, empty when
+the repository passes; a check never panics on what it reads. The caller asserts with
+`assert!(problems.is_empty(), "{}", report(&problems))`. What differs between the projects (the
+members, the pins, the jobs, the hooks, the exemptions) is a parameter; every check is as strict
+as the strictest project's.
+
+| Module | What it checks |
+| --- | --- |
+| `Repo`, `Problem`, `report` | the tracked files (`tracked`, `tracked_or_new`, `files_under`), reads that become problems (`try_read`); `file:line: message` problems |
+| `workspace` | `lint_opt_in` (the root's `[workspace.lints]`, every member's `[lints] workspace = true`, the expected members), `lint_level_problems`, `override_problems`, `layout_problems` (crates under one directory, nothing else tracked there) |
+| `links` | `Checker`: every relative Markdown link resolves to a tracked file, and every `#anchor` to a heading, as the Go link checker the projects ported reads them |
+| `dockerfile` | the parser (`parse`, `Stage`, `Instruction`, `syntax`), `tag_pinned`, `digest_pinned`, `from_dhi`, `base_pinned`, `repository`, `tag`, `labels` |
+| `image` | `only_dockerfile_problems`, `syntax_problems`, `stage_problems`, `BuildStage`, `Stamps` (the build stamps from Dockerfile to `version.rs`, Makefile and fragment), `RuntimeStage`, `label_problems`, `platform_problems`, `label_policy_problems` |
+| `toolchain` | `one_value` (one pin read from several files), `RustVersion::{Exact, Line}`, `image_rust_problems`, `ci_toolchain_problems`, `rust_std_problems`, `ReleasePins` and `release_pin_problems` (no stray `sha256`), `zigbuild_action_problems`, `shellcheck_problems`, `trivy_problems` |
+| `ci` | `CiGates` (the result job needs every job, the pre-commit job's `SKIP` list is exactly the hooks other jobs run), `RustdocGate`, `always_run_problems` |
+| `allowlist` | `LintAllowlist`: a lint (`unsafe_code`, a `clippy` group) allowed only where an exemption names the file or item, and every exemption used |
+| `vacuous` | `VacuousFlags` (`core`, `with_rust`, `with_javascript`): what turns a failing gate into a pass (an `or true`, `continue-on-error`, `if: false`, make's `-` prefix, `--cap-lints`, cargo's `--skip`, `--passWithNoTests`, …) and a clippy run without `-D warnings`, with `AllowedFragment` exceptions that must each be used |
+| `integration` | `IntegrationGate` (integration modules behind a feature, the suite's manifest entry), `cargo_test_commands`, `docker_drivers` |
+| `tools` | `tool_lookup_problems`: the meta-tests' tool lookups go through the tool gate |
+| `yaml` | workflows and the pre-commit configuration as `serde_json::Value`: `action_steps`, `jobs`, `pre_commit_hooks` |
+| `scratch` | `ScratchRepo` (a git-isolated temporary repository), `HeaderHarness` and `HeaderCase` (`scripts/check-license-headers.sh` on the repository and on scratch cases), `SuppressionHarness` and `RatchetCase` (`scripts/check-suppressions.sh` and its baseline) |
+
+It depends on `go-compat` (Go's quoting, `path.Clean`, `ToLower`), `testenv-core` (default
+features: git isolation), `regex`, `serde-saphyr` and `serde_json` (the YAML), `toml` and `tempfile`.
 
 ### service-kit
 

@@ -36,9 +36,9 @@ allow = [
     # bollard and bollard-stubs (Apache-2.0 only), under testenv-core's `bollard`; most other
     # crates offer it beside MIT.
     "Apache-2.0",
-    # winnow (MIT only), under the meta crate's toml; memchr and aho-corasick (Unlicense OR MIT),
-    # under its regex; jiff and jiff-core (Unlicense OR MIT), under go-compat; tokio (MIT only),
-    # under go-clock; hyper, hyper-util, http-body, bytes and mio (MIT only), under go-http.
+    # winnow (MIT only), under the meta crate's and repo-meta's toml; memchr and aho-corasick
+    # (Unlicense OR MIT), under their regex; jiff and jiff-core (Unlicense OR MIT), under go-compat;
+    # tokio (MIT only), under go-clock; hyper, hyper-util, http-body, bytes and mio (MIT only), under go-http.
     "MIT",
     # unicode-ident ((MIT OR Apache-2.0) AND Unicode-3.0), through tokio-macros -> syn ->
     # proc-macro2 -> unicode-ident. tokio's `macros` feature needs it, both for the tests'
@@ -51,7 +51,8 @@ allow = [
     # `tls` (rustls and tokio-rustls on ring), as in swarm-scheduler-exporter's deny.toml. No
     # webpki-roots (CDLA-Permissive-2.0): Docker TLS trusts the system pool and the user's ca.pem.
     "ISC",
-    # subtle, under rustls.
+    # subtle, under rustls; encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause), under repo-meta's
+    # serde-saphyr.
     "BSD-3-Clause",
 ]
 confidence-threshold = 0.9
