@@ -41,6 +41,14 @@ go-clock = [
     { all-features = true },
 ]
 
+# go-slog has no features: swarm-scheduler-exporter (the global logger, PlainStyle::Quoted, the
+# strict parsers) and swarm-device-access (LogHandle, PlainStyle::Raw, the fallback parsers) choose
+# by parameter, so both build it as it is.
+go-slog = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
 # service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
 # no-default-features set, as the default enables nothing); swarm-scheduler-exporter and
 # swarm-device-access also use the runtime and the signals, awtrix-controller the runtime only.

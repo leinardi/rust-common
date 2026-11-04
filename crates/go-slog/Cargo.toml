@@ -1,0 +1,26 @@
+[package]
+name = "go-slog"
+description = "A Go log/slog-compatible logger: slog's text and JSON handlers and a plain format, byte for byte"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "go_slog"
+
+[lints]
+workspace = true
+
+[dependencies]
+go-clock = { path = "../go-clock" }
+go-compat = { path = "../go-compat" }
+# Timestamps and zones, as in go-compat: no tzdb or system feature.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+
+# The golden test reads its corpora as JSON.
+[dev-dependencies]
+serde_json = "1.0.154"

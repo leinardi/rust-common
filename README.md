@@ -16,14 +16,14 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. **Available:** `go-compat`, `go-clock`, `service-kit`. The others are planned for `v0.1.0` and
-land one at a time.
+it. **Available:** `go-compat`, `go-clock`, `go-slog`, `service-kit`. The others are planned for
+`v0.1.0` and land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
 | `go-compat` (available) | Go standard-library behaviour the projects' output depends on, ported byte for byte: number and duration formatting, `strconv` quoting, the errno table, `path.Clean`, `net` address parsing, RFC 3339 time | – |
 | `go-clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
-| `go-slog` | `log/slog`-compatible text and JSON handlers | style and level-parsing parameters; a global logger or a `LogHandle` |
+| `go-slog` (available) | A `log/slog`-compatible logger: slog's text and JSON handlers and a plain format, byte for byte | – (the plain style, the level parsing and the global logger or a `LogHandle` are parameters) |
 | `go-prom` | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation | expfmt version as a parameter; `testing` |
 | `http-framing` | HTTP/1 request-head framing, std only | – |
 | `go-http` | Go `net/http` server behaviours on hyper: the timeouts, `bind` and `parse_port`, `serve` | the listen-error prefix as a parameter |
@@ -73,6 +73,30 @@ handed:
 | `FakeClock` | set and advanced by hand; clones share the time |
 
 It depends on `jiff` (as `go-compat`) and on `tokio` with only the `time` feature.
+
+### go-slog
+
+A Go `log/slog` logger, byte for byte: slog's `TextHandler` and `JSONHandler` (go1.26), and the
+plain format (`level=INFO message k=v`) of the Go programs the consumers replace, in either of its
+two Go versions. It is checked against Go captures of both (`crates/go-slog/tests/testdata`).
+
+| Item | What it is |
+| --- | --- |
+| `Logger`, `Config`, `Format`, `Level` | a logger with a minimum level, a format, whether the time is logged, a sink, a clock and a zone; `with_attrs` and `with_group` return a copy; one record is one write |
+| `Attr`, `Value`, `Time` | typed attributes: strings, integers, floats, bools, durations, times, `[]string` (nil or not), stringers, errors, nil, groups |
+| `PlainStyle::Quoted` | the plain format with one record per line: the message escaped, an unsafe key or value quoted with `strconv.Quote` |
+| `PlainStyle::Raw` | the plain format as `fmt.Fprint` writes it: message and keys raw, a string quoted only for a space or a tab, keyless attributes dropped |
+| `parse_level`, `parse_format`, `Config::parse` | Go's reading of a level or format name, any other value falling back to info or text |
+| `parse_level_strict`, `parse_format_strict`, `ParseError` | the same names, any other value refused with `invalid log level "…" (want one of …)` |
+| `LogHandle` | a cloned handle on one shared logger, swapped by `configure`, `configure_to` or `set` for every clone; `with_attrs` handles |
+| `global`, `set_global`, `configure` | a process-wide logger instead |
+| `MemorySink` | a sink that keeps what is written, for tests |
+
+Every constructor takes the clock (`go_clock::Clock`) and the sink; `LogHandle::stdout` and
+`configure` take `getenv` to resolve the local zone. Only `global()` before any `configure` or
+`set_global` reads the system clock and `TZ` itself, as Go's default logger does.
+
+It depends on `go-compat`, `go-clock` and `jiff` (as `go-compat`).
 
 ### service-kit
 
