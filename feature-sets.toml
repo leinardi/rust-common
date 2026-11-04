@@ -27,6 +27,25 @@
 # with a --no-default-features set and an --all-features set, and every feature it declares is
 # named in at least one set. Add the exact set each consumer uses.
 
+# docker-engine: swarm-scheduler-exporter builds it with `tcp` and `tls` (DOCKER_HOST, TCP, TLS,
+# gzip; its own User-Agent and a 30s response-header timeout by parameter), adding `test-util` for
+# its tests; swarm-device-access with `write` and `attach` (its launcher's writes, the hijacked
+# attach, stdcopy and the wait answer; moby's User-Agent, no header timeout), adding `test-util`
+# likewise. Every feature is also built alone; with none it speaks to a unix socket only.
+docker-engine = [
+    { no-default-features = true },
+    { features = ["tcp"] },
+    { features = ["tls"] },
+    { features = ["write"] },
+    { features = ["attach"] },
+    { features = ["test-util"] },
+    { features = ["tcp", "tls"] },                 # swarm-scheduler-exporter
+    { features = ["tcp", "tls", "test-util"] },    # swarm-scheduler-exporter's tests
+    { features = ["write", "attach"] },            # swarm-device-access
+    { features = ["write", "attach", "test-util"] }, # swarm-device-access's tests
+    { all-features = true },
+]
+
 # go-compat has no features: both sets build the same crate, and are listed because every crate has
 # them.
 go-compat = [

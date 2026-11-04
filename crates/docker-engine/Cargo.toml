@@ -1,0 +1,93 @@
+[package]
+name = "docker-engine"
+description = "A Docker Engine API client over HTTP/1 that sends what moby client v0.6.0 sends: transport, API version negotiation, events and decoding, worded as moby words its errors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "docker_engine"
+
+[lints]
+workspace = true
+
+[features]
+# DOCKER_HOST (Settings::from_env), TCP with Go's keep-alive, and the transparent gunzip Go's
+# transport gives a TCP connection.
+tcp = ["dep:socket2", "dep:flate2"]
+# TLS to a TCP (or unix) daemon from DOCKER_CERT_PATH and DOCKER_TLS_VERIFY: rustls on ring, TLS
+# 1.2 and 1.3, the system roots plus ca.pem.
+tls = [
+    "tcp",
+    "dep:rustls",
+    "dep:tokio-rustls",
+    "dep:rustls-pki-types",
+    "dep:rustls-native-certs",
+]
+# Client::exchange: a versioned request of any method and body on the shared pool.
+write = []
+# Client::exchange_upgrade (moby's hijacked attach), moby's stdcopy and the wait answer's parser.
+attach = ["write", "tokio/io-util"]
+# The fake engine, the request recorder and the small helpers the consumers' tests share.
+test-util = ["tokio/io-util"]
+
+[dependencies]
+go-compat = { path = "../go-compat" }
+# The `since` parameter's timestamp, as in go-compat: no tzdb or system feature.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+# HTTP/1 only, on connections the client dials and pools itself.
+hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+# The sockets, the connections' tasks, the negotiation's lock, the timers and select!.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "net",
+    "time",
+    "rt",
+    "sync",
+    "macros",
+] }
+# CancellationToken, Go's context cancellation (CallContext).
+tokio-util = { version = "0.7.20", default-features = false }
+# The Engine API's JSON: the error bodies, the event stream and the decoders.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Go's TCP keep-alive settings on a TCP connection.
+socket2 = { version = "0.6.5", features = ["all"], optional = true }
+# The transparent gunzip of a TCP body; the pure-Rust backend, so no C zlib.
+flate2 = { version = "1.1.10", default-features = false, features = [
+    "rust_backend",
+], optional = true }
+# TLS: ring, TLS 1.2 and 1.3, the system roots plus ca.pem, and PEM parsing through
+# rustls-pki-types rather than rustls-pemfile.
+rustls = { version = "0.23.46", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+], optional = true }
+tokio-rustls = { version = "0.26.6", default-features = false, features = [
+    "ring",
+    "tls12",
+], optional = true }
+rustls-pki-types = { version = "1.15.1", features = ["std"], optional = true }
+rustls-native-certs = { version = "0.8.5", optional = true }
+
+[dev-dependencies]
+# The paused clock (start_paused), the fake daemons' sockets and their I/O.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "net",
+    "time",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "io-util",
+    "test-util",
+] }
+# Test certificates for the TLS tests, made at run time as the Go tests make theirs.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }

@@ -17,7 +17,7 @@ shares the workspace version.
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
 it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`, `go-http`,
-`service-kit`. The others are planned for `v0.1.0` and land one at a time.
+`docker-engine`, `service-kit`. The others are planned for `v0.1.0` and land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`
 | `go-prom` (available) | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation and the process collector | `testing` (the expfmt version is a parameter) |
 | `http-framing` (available) | HTTP/1 request framing over the bytes a connection read, as hyper frames them, std only | – |
 | `go-http` (available) | Go `net/http` server behaviours on hyper: the mux's answers, header order and framing, the four timeouts, `bind` and `parse_port`, `serve` and its drain | `testing` (the timeouts, the routes, the log callback and the listen-error prefix are parameters) |
-| `docker-engine` | A Docker Engine API client over HTTP/1: transport, version negotiation, events, decoding | `tcp`, `tls`, `write`, `attach`, `test-util` |
+| `docker-engine` (available) | A Docker Engine API client over HTTP/1 that sends what moby client v0.6.0 sends: transport, version negotiation, events, decoding, moby's error texts | `tcp`, `tls`, `write`, `attach`, `test-util` (the `User-Agent` and the response-header timeout are parameters) |
 | `testenv-core` | Test-environment helpers: run filters, environment IDs, sweep rules, the tool gate, scratch git repositories | `async`, `sync`, `bollard`, `redact` |
 | `repo-meta` | Repository meta-test checks: workspace lints, Markdown links, licence headers, suppressions, Dockerfiles, toolchain pins, CI gates | – |
 | `tracing-setup` | A `tracing` subscriber set up the way the projects log | `log-bridge` |
@@ -158,6 +158,39 @@ dependency on `go-slog` or `go-prom`.
 It depends on `http-framing`, `go-compat`, `go-clock`, `jiff` (as `go-compat`), `hyper` (`http1`,
 `server`), `hyper-util` (`tokio`, `http1`, `server`, `server-graceful`), `bytes`, `tokio` (`net`,
 `time`, `rt`, `macros`), `socket2` and `rustix` (`net`, for a zone's interface index).
+
+### docker-engine
+
+A Docker Engine API client on hyper's HTTP/1 client, as moby client v0.6.0 talks to the daemon:
+the same requests, headers and API version negotiation, and the same error texts. The calls a
+program makes and the types it decodes stay the program's; it builds them on the generic calls.
+
+| Item | What it is |
+| --- | --- |
+| `Settings`, `Settings::unix` | the daemon's socket (moby's `WithHost("unix://…")`); `user_agent` (moby's own, `moby_user_agent()`, by default) and `response_header_timeout` (none by default) are the caller's |
+| `Settings::from_env` (`tcp`) | `DOCKER_HOST` (unix, TCP and its base path, scoped IPv6), `DOCKER_API_VERSION` (a pin, no negotiation) and, with `tls`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY`, an empty one refused |
+| `Client` | the pool (two idle connections for 30s, a `GET` or `HEAD` sent again on a dropped reused connection, any other request only if it was never written), the lazy negotiation down from 1.56 with one shared ping, gzip on TCP, moby's error wording with the cause kept as the `source` |
+| `Client::get`, `get_body`, `get_list`, `get_object`, `events`, `ping` | a versioned `GET`; Go's decoding of a list or an object; moby's event stream; moby's `Ping` |
+| `Client::exchange` (`write`) | a versioned request of any method and body from the one builder |
+| `Client::exchange_upgrade`, `stdcopy`, `wait` (`attach`) | moby's hijacked attach on a connection of its own, its `StdCopy`, and the wait answer's parser |
+| `Error`, `ErrorKind`, `ConfigError`, `PathError` (`tls`) | moby's texts; the `io::Error`, `hyper::Error` or `serde_json::Error` behind one is its `source` |
+| `context`: `CallContext`, `with_context`, `with_context_timeout` | Go's `context.Context` around a call; a request it cuts short fails as net/http's `url.Error` |
+| `with_timeout`, `with_deadline` | a bound around a call the client does not see: the bare `context deadline exceeded` |
+| `events::JsonStream` | moby's JSON stream decoder (the RS filter, `io.EOF` against `io.ErrUnexpectedEOF`), each record bounded to 1 MiB |
+| `types` | `decode_first`, `decode_list`, `null_default`, `Nullable`, `Labels`: Go's `encoding/json` on the answers |
+| `version` | `negotiate`, `parse_api_version`, `compare`, `validate_client_api_version`, `MIN_API_VERSION` 1.40, `MAX_API_VERSION` 1.56 |
+| `Filters`, `encode_query`, `since_parameter`, `trim_id`, `push_json_string` | moby's request parameters |
+| `test_util` (`test-util`) | a minimal HTTP/1.1 fake engine on TCP or a unix socket with the test's own responder, the request recorder's normalisation, `OrPanic`, `TempDir`, `eventually` |
+
+Each consumer passes its own behaviour: swarm-scheduler-exporter builds `tcp` and `tls`, names
+itself in the `User-Agent` and bounds the response headers to 30s; swarm-device-access builds
+`write` and `attach` and keeps moby's `User-Agent` and no header timeout.
+
+It depends on `go-compat`, `jiff` (as `go-compat`), `hyper` (`client`, `http1`), `hyper-util`
+(`tokio`), `http-body-util`, `bytes`, `tokio` (`net`, `time`, `rt`, `sync`, `macros`; `io-util`
+with `attach` and `test-util`), `tokio-util`, `serde` and `serde_json`; `tcp` adds `socket2` and
+`flate2` (the `rust_backend` only), and `tls` adds `rustls` on `ring`, `tokio-rustls`,
+`rustls-pki-types` and `rustls-native-certs`.
 
 ### service-kit
 
