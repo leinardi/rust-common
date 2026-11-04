@@ -14,42 +14,41 @@
 //! Every workspace member is the meta crate or a library crate under `crates/<name>`, and every
 //! tracked `crates/*/Cargo.toml` is a member: a member elsewhere would escape the feature matrix
 //! and the feature-set coverage check, and a tracked crate that is not a member would escape every
-//! gate. The check is `meta::workspace::layout_problems`; the negative control runs it on a
+//! gate. The check is `repo_meta::workspace::layout_problems`; the negative control runs it on a
 //! scratch tree.
 
-use std::fs;
-use std::path::Path;
-
-use meta::repo;
-use meta::workspace::layout_problems;
-
-fn write(root: &Path, relative: &str, content: &str) {
-    let path = root.join(relative);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|error| panic!("create {relative}: {error}"));
-    }
-    fs::write(&path, content).unwrap_or_else(|error| panic!("write {relative}: {error}"));
-}
+use repo_meta::scratch::ScratchRepo;
+use repo_meta::workspace::{layout_problems, tracked_crates};
+use repo_meta::{Repo, report, strings};
 
 #[test]
 fn members_are_meta_and_the_tracked_crates() {
-    let problems = layout_problems(&repo::root(), &repo::tracked_crates());
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    let repo = meta::repo();
+    let problems = layout_problems(&repo, "crates", &["meta"], &tracked_crates(&repo, "crates"));
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 #[test]
 fn layout_check_is_not_blind() {
-    let scratch = tempfile::tempdir().expect("scratch directory");
-    let root = scratch.path();
-    write(
-        root,
+    let scratch = ScratchRepo::new();
+    scratch.write(
         "Cargo.toml",
         "[workspace]\nmembers = [\"meta\", \"tools/xtask\", \"crates/alpha\", \"crates/gone\", \
          \"crates/alpha/nested\"]\n",
     );
+    scratch.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    scratch.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    scratch.write(
+        "crates/untracked/Cargo.toml",
+        "[package]\nname = \"untracked\"\n",
+    );
+    scratch.git(&["add", "Cargo.toml", "crates/alpha", "crates/beta"]);
+    let repo = Repo::new(scratch.path());
 
+    let crates = tracked_crates(&repo, "crates");
+    assert_eq!(crates, ["alpha", "beta"]);
     assert_eq!(
-        layout_problems(root, &["alpha".to_owned(), "beta".to_owned()]),
+        strings(&layout_problems(&repo, "crates", &["meta"], &crates)),
         [
             r#"workspace member "tools/xtask" is neither meta nor crates/<name>"#,
             r#"workspace member "crates/alpha/nested" is neither meta nor crates/<name>"#,
@@ -61,14 +60,17 @@ fn layout_check_is_not_blind() {
 
 #[test]
 fn a_matching_layout_passes() {
-    let scratch = tempfile::tempdir().expect("scratch directory");
-    let root = scratch.path();
-    write(
-        root,
+    let scratch = ScratchRepo::new();
+    scratch.write(
         "Cargo.toml",
         "[workspace]\nmembers = [\"crates/alpha\", \"meta\"]\n",
     );
 
-    let problems = layout_problems(root, &["alpha".to_owned()]);
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    let problems = layout_problems(
+        &Repo::new(scratch.path()),
+        "crates",
+        &["meta"],
+        &["alpha".to_owned()],
+    );
+    assert!(problems.is_empty(), "{}", report(&problems));
 }

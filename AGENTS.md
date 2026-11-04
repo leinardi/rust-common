@@ -45,7 +45,7 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | --- | --- |
 | `Cargo.toml` | the workspace: members listed explicitly (never a glob), `[workspace.package]`, the one `[workspace.lints]` set |
 | `crates/<name>/` | the library crates, one directory each, named as the package; each is a workspace member and has a `feature-sets.toml` entry |
-| `meta/` | the meta-tests, which check the repository rather than the crates (`meta/tests/`), their helpers (`meta/src`), and the `feature-matrix` runner (`meta/src/bin`) |
+| `meta/` | the meta-tests, which check the repository rather than the crates (`meta/tests/`, on `repo-meta`), the `feature-sets.toml` reader (`meta/src`), and the `feature-matrix` runner (`meta/src/bin`) |
 | `feature-sets.toml` | the per-crate feature sets `make rust-feature-matrix` lints (`-D warnings`) and tests; its format is documented at its top |
 | `deny.toml`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | cargo-deny policy, clippy settings (no application bans), formatting, the pinned toolchain |
 | `Makefile`, `.mk/`, `scripts/bootstrap-mk-common.sh` | make-common: shared snippets in `MK_COMMON_FILES`, local ones in `MK_LOCAL_FILES` |
@@ -55,12 +55,18 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | `scripts/` | the licence-header check, the suppression ratchet, the make-common bootstrap and the Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`) |
 | `.agents/skills/` | project skills; `.claude/skills` is a symlink to it |
 
-The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git: every workspace member
-opts into the workspace lints (`workspace_lints.rs`), every member is `meta` or `crates/<name>` and
-every tracked crate is a member (`workspace_layout.rs`), every relative Markdown link resolves
-(`docs.rs`), and `feature-sets.toml` covers every crate and every feature it declares, while the
-matrix fails a set that leaves a warning (`feature_sets.rs`). The checks live in `meta/src` and take
-the repository root, and each test file also runs them on a scratch tree with a planted violation,
+The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git. They run the
+`repo-meta` crate's checks on this repository, with its parameters: every workspace member opts into
+the workspace lints, the lints the rules depend on are set at their level and nothing outside the
+manifest lowers them (`workspace_lints.rs`); every member is `meta` or `crates/<name>` and every
+tracked crate is a member (`workspace_layout.rs`); every relative Markdown link resolves
+(`docs.rs`); the licence-header checker and the suppression ratchet accept and refuse what they
+should (`license_headers.rs`, `suppressions.rs`); one Rust release and one ShellCheck are pinned
+everywhere (`toolchain.rs`); no gate passes on nothing (`vacuous_flags.rs`); `ci-result` needs every
+gate, every skipped hook is run elsewhere, the whole-tree hooks always run and the rustdoc gate
+fails on warnings (`ci_gates.rs`); and `feature-sets.toml` covers every crate and every feature it
+declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on `meta/src`).
+Each test file also runs its checks on a scratch tree or an altered copy with a planted violation,
 so none is trusted on the strength of having found nothing to check.
 
 ### Generated or vendored: never hand-edit

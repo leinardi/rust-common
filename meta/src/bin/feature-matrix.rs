@@ -22,12 +22,11 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use meta::feature_sets::run;
-use meta::repo;
 
 fn main() -> ExitCode {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     match run(
-        &repo::root(),
+        meta::repo().root(),
         &cargo,
         &mut io::stdout(),
         &mut io::stderr(),

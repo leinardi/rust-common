@@ -12,42 +12,40 @@
  */
 
 //! The offline documentation check: every relative link and fragment in the tracked Markdown
-//! resolves. The docs-links pre-commit hook runs this file.
+//! resolves. The docs-links pre-commit hook runs this file. The checker is
+//! `repo_meta::links::Checker`.
 //!
 //! Extracted from swarm-scheduler-exporter/meta/tests/docs.rs at c9e79afa8810.
 
-use std::fs;
-
-use meta::links::{Checker, slug};
-use meta::repo;
+use repo_meta::links::{Checker, slug};
+use repo_meta::scratch::ScratchRepo;
+use repo_meta::{report, strings};
 
 /// Every relative link and fragment in the tracked Markdown. The list comes from git, which keeps
 /// an untracked scratch file out.
 #[test]
 fn relative_links_resolve() {
-    let files = repo::tracked(&["*.md"]);
+    let repo = meta::repo();
+    let files = repo.tracked(&["*.md"]);
     assert!(
         !files.is_empty(),
         "git ls-files lists no Markdown; the check would pass on nothing"
     );
-    let mut checker = Checker::new(&repo::root());
-    let mut problems = Vec::new();
-    for file in &files {
-        let found = checker
-            .check_file(file)
-            .unwrap_or_else(|error| panic!("read {file}: {error}"));
-        problems.extend(found.iter().map(ToString::to_string));
-    }
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    let mut checker = Checker::new(repo.root());
+    let problems: Vec<_> = files
+        .iter()
+        .flat_map(|file| checker.check_file(file))
+        .collect();
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// The negative control: the link check is not blind, on a scratch tree.
 #[test]
 fn checker_finds_broken_links() {
-    let scratch = tempfile::tempdir().expect("scratch directory");
-    fs::write(
-        scratch.path().join("a.md"),
-        [
+    let scratch = ScratchRepo::new();
+    scratch.write(
+        "a.md",
+        &[
             "# Title",
             "## 1. Section — `GET /x`",
             "[ok](b.md#heading-two) [ok](#1-section--get-x) [ok](https://example.com/missing)",
@@ -57,23 +55,25 @@ fn checker_finds_broken_links() {
             "```",
         ]
         .join("\n"),
-    )
-    .expect("write a.md");
-    fs::write(scratch.path().join("b.md"), "# Heading Two\n").expect("write b.md");
+    );
+    scratch.write("b.md", "# Heading Two\n");
 
-    let problems: Vec<String> = Checker::new(scratch.path())
-        .check_file("a.md")
-        .expect("check a.md")
-        .iter()
-        .map(ToString::to_string)
-        .collect();
     assert_eq!(
-        problems,
+        strings(&Checker::new(scratch.path()).check_file("a.md")),
         [
             r#"a.md:4: link "missing.md": missing.md does not exist"#,
             r#"a.md:4: link "b.md#nope": b.md has no heading or anchor #nope"#,
         ]
     );
+}
+
+/// A Markdown file that cannot be read is a problem, not a pass on nothing.
+#[test]
+fn an_unreadable_file_is_a_problem() {
+    let scratch = ScratchRepo::new();
+    let problems = Checker::new(scratch.path()).check_file("gone.md");
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert_eq!(problems[0].location, "gone.md");
 }
 
 /// The GitHub slug rules the anchors follow.
