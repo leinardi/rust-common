@@ -16,8 +16,8 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `service-kit`. The others are
-planned for `v0.1.0` and land one at a time.
+it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`, `service-kit`.
+The others are planned for `v0.1.0` and land one at a time.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ planned for `v0.1.0` and land one at a time.
 | `go-clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `go-slog` (available) | A `log/slog`-compatible logger: slog's text and JSON handlers and a plain format, byte for byte | – (the plain style, the level parsing and the global logger or a `LogHandle` are parameters) |
 | `go-prom` (available) | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation and the process collector | `testing` (the expfmt version is a parameter) |
-| `http-framing` | HTTP/1 request-head framing, std only | – |
+| `http-framing` (available) | HTTP/1 request framing over the bytes a connection read, as hyper frames them, std only | – |
 | `go-http` | Go `net/http` server behaviours on hyper: the timeouts, `bind` and `parse_port`, `serve` | the listen-error prefix as a parameter |
 | `docker-engine` | A Docker Engine API client over HTTP/1: transport, version negotiation, events, decoding | `tcp`, `tls`, `write`, `attach`, `test-util` |
 | `testenv-core` | Test-environment helpers: run filters, environment IDs, sweep rules, the tool gate, scratch git repositories | `async`, `sync`, `bollard`, `redact` |
@@ -126,6 +126,17 @@ v0.70.1 (`crates/go-prom/tests/testdata/exposition`). The body is always text 0.
 `Content-Type`'s `escaping` follows the negotiation. The `go_*` runtime families are not served.
 
 It depends on `go-compat` and `flate2` (the `rust_backend` only).
+
+### http-framing
+
+`Framer` follows the bytes an HTTP/1 connection read, with hyper's framing rules (empty lines
+before a request, the head, then a `Content-Length` or chunked body), and counts the requests that
+have started (`started`). hyper reads ahead, so the start of the next request can already sit in
+its buffer when a response ends; a server's deadlines read this count to tell that from an idle
+connection, as Go's server does with `bufr.Peek`. It only counts: parsing and rejecting requests
+stays hyper's.
+
+It has no dependency beyond the standard library.
 
 ### service-kit
 

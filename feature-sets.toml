@@ -58,6 +58,13 @@ go-slog = [
     { all-features = true },
 ]
 
+# http-framing has no features; swarm-scheduler-exporter and swarm-device-access use it through
+# go-http, and bitgauge directly.
+http-framing = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
 # service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
 # no-default-features set, as the default enables nothing); swarm-scheduler-exporter and
 # swarm-device-access also use the runtime and the signals, awtrix-controller the runtime only.
