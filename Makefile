@@ -1,3 +1,16 @@
+#
+# Copyright (c) 2026 Roberto Leinardi
+#
+# Licensed under either of
+#
+#  * Apache License, Version 2.0 (LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0)
+#  * MIT license (LICENSE-MIT or https://opensource.org/licenses/MIT)
+#
+# at your option.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+
 # Resolve repository root (Makefile can live anywhere)
 REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 
