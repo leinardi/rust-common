@@ -12,9 +12,9 @@
  */
 
 //! `make rust-feature-matrix`: for each crate `feature-sets.toml` lists and each of its sets,
-//! clippy over every target with warnings as errors, then the tests, one package at a time, stopping
-//! at the first failure ([`meta::feature_sets::run`]). The cargo that runs them is the one that
-//! started this binary (`CARGO`), so the toolchain is the same.
+//! clippy over every target with warnings as errors, then the tests, one package at a time,
+//! stopping at the first failure ([`meta::feature_sets::run`]). The cargo that runs them is the one
+//! that started this binary (`CARGO`), so the toolchain is the same.
 
 use std::env;
 use std::ffi::OsString;

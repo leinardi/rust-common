@@ -22,12 +22,12 @@ version = 2
 # Only the licences the Cargo.lock graph needs, each added by the change that brings in the crate
 # needing it. The workspace's own crates are MIT OR Apache-2.0, and so are most dependencies.
 #
-# cargo-deny 0.20.2's licence check leaves the workspace members' dev-dependencies out, so it
-# checks none of their licences (tempfile and its graph here, under the meta crate's tests); the
-# bans and sources checks do see them. Those licences are still decided here, by hand, rather than
-# by omission: tempfile and everything under it (fastrand,
-# getrandom, rustix, linux-raw-sys, libc, bitflags, cfg-if, once_cell) offer MIT or Apache-2.0
-# (rustix and linux-raw-sys also Apache-2.0 WITH LLVM-exception, which is not needed).
+# cargo-deny 0.20.2's licence check leaves the workspace members' dev-dependencies out, so it checks
+# none of their licences (tempfile and its graph here, under the meta crate's tests); the bans and
+# sources checks do see them. Those licences are still decided here, by hand, rather than by
+# omission: tempfile and everything under it (fastrand, getrandom, rustix, linux-raw-sys, libc,
+# bitflags, cfg-if, once_cell) offer MIT or Apache-2.0 (rustix and linux-raw-sys also Apache-2.0
+# WITH LLVM-exception, which is not needed).
 allow = [
     "Apache-2.0",
     # winnow (MIT only), under the meta crate's toml; memchr and aho-corasick (Unlicense OR MIT),

@@ -13,8 +13,8 @@
 
 //! Repository meta-tests: checks on the repository itself rather than on the library crates. The
 //! tests live under `tests/`; this library holds what they share (the repository's files, the
-//! Markdown link reader, the `feature-sets.toml` reader, the workspace checks), and `src/bin/feature-matrix.rs` is the
-//! runner behind `make rust-feature-matrix`.
+//! Markdown link reader, the `feature-sets.toml` reader, the workspace checks), and
+//! `src/bin/feature-matrix.rs` is the runner behind `make rust-feature-matrix`.
 //!
 //! `links` and `repo` are this crate's own copies until the `repo-meta` crate replaces them.
 

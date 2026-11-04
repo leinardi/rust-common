@@ -261,8 +261,9 @@ jobs:
 
   # Each crate linted (clippy, warnings as errors) and tested on its own under every feature set
   # feature-sets.toml lists for it (make rust-feature-matrix), so a feature that only compiles
-  # because another member enables something, or that leaves a warning behind, is caught. A file that lists no crate passes with a message saying so; one that lists
-  # a crate without a manifest fails.
+  # because another member enables something, or that leaves a warning behind, is caught. A file
+  # that lists no crate passes with a message saying so; one that lists a crate without a manifest
+  # fails.
   feature-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 30
