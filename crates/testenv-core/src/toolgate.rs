@@ -264,6 +264,11 @@ fn is_executable(candidate: &Path) -> bool {
 /// The repository root of the crate that expands it: the parent of its `CARGO_MANIFEST_DIR`, for
 /// a crate that sits one level below the root (`meta`, `testenv`). `env!` expands in the caller,
 /// so it names the caller's manifest, never this crate's.
+///
+/// The path is fixed at compile time: a test binary checks the checkout it was built from, not
+/// the one it is run in. A binary built from a scratch copy or a second worktree into a target
+/// directory the checkouts share goes on naming that copy (or a deleted path), so each checkout
+/// builds into its own target directory, or cleans it first.
 #[macro_export]
 macro_rules! repo_root {
     () => {
