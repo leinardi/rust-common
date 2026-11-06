@@ -70,10 +70,14 @@ pub struct Config {
 }
 
 impl Config {
-    /// The unix socket at `path`.
+    /// The unix socket at `path`; a leading `unix://` is dropped, as bollard does.
     #[must_use]
     pub fn unix(path: impl Into<String>) -> Self {
-        Self::new(Endpoint::Unix(path.into()))
+        let path = path.into();
+        let path = path
+            .strip_prefix("unix://")
+            .map_or_else(|| path.clone(), str::to_owned);
+        Self::new(Endpoint::Unix(path))
     }
 
     /// The engine `DOCKER_HOST` names (`unix://`, and with `tcp` also `tcp://` and `http://`, with

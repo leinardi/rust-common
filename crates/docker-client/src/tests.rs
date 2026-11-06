@@ -710,6 +710,26 @@ mod attach_tests {
         }
     }
 
+    /// `Config::unix` takes a `unix://` path as bollard does, and the streaming calls connect to it.
+    #[tokio::test]
+    async fn a_unix_scheme_path_works_for_streaming_calls() {
+        let engine =
+            FakeEngine::start(&[("/containers/c/wait", Reply::ok(r#"{"StatusCode":4}"#))]).unwrap();
+        let config = Config::unix(format!("unix://{}", engine.socket().to_str().unwrap()));
+        let docker = connect(config.clone()).unwrap();
+        let receiver = wait(
+            &docker,
+            &config,
+            "c",
+            WaitCondition::NextExit,
+            SECS,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(receiver.await.unwrap().unwrap(), 4);
+    }
+
     #[tokio::test]
     async fn wait_times_out_when_the_headers_never_come() {
         let engine = FakeEngine::start(&[("/containers/c/wait", Reply::Silent)]).unwrap();
