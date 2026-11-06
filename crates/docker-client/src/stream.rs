@@ -20,9 +20,9 @@
 //! same endpoint the [`Config`] describes, with the same `User-Agent` and API version prefix, and
 //! returns once the headers are in.
 //!
-//! A TLS endpoint (`tls` feature) is spoken to with rustls on the same material bollard's ssl path
-//! loads: `ca.pem`, `cert.pem` and `key.pem` from the config's certificate directory, and the
-//! system roots.
+//! A TLS endpoint (`tls` feature) is spoken to with rustls on `ca.pem`, `cert.pem` and `key.pem`
+//! from the config's certificate directory. The engine is checked against `ca.pem` alone, as
+//! moby's client does; bollard's ssl path also trusts the system and webpki roots.
 
 use std::time::Duration;
 
@@ -175,8 +175,8 @@ fn host_of(addr: &str) -> &str {
     host.trim_start_matches('[').trim_end_matches(']')
 }
 
-/// The TLS client for `certs`: the system roots plus `ca.pem` to verify the engine, `cert.pem` and
-/// `key.pem` to present to it, as bollard's ssl path.
+/// The TLS client for `certs`: `ca.pem` alone to verify the engine (no system roots, as moby's
+/// client), `cert.pem` and `key.pem` to present to it.
 #[cfg(feature = "tls")]
 fn tls_connector(certs: &std::path::Path) -> Result<tokio_rustls::TlsConnector, BollardError> {
     use rustls_pki_types::pem::PemObject as _;
@@ -189,8 +189,6 @@ fn tls_connector(certs: &std::path::Path) -> Result<tokio_rustls::TlsConnector, 
             .map_err(|error| failure(format!("{}: {error}", path.display())))
     };
     let mut roots = rustls::RootCertStore::empty();
-    // A system root that fails to load is skipped: `ca.pem` is what the engine is checked against.
-    roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
     roots.add_parsable_certificates(chain("ca.pem")?);
     let key_path = certs.join("key.pem");
     let key = PrivateKeyDer::from_pem_file(&key_path)

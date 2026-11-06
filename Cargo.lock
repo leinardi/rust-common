@@ -261,7 +261,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls",
- "rustls-native-certs",
  "rustls-pki-types",
  "serde_json",
  "serde_urlencoded",

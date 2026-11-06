@@ -24,7 +24,6 @@ tls = [
     "tcp",
     "bollard/ssl",
     "dep:rustls",
-    "dep:rustls-native-certs",
     "dep:rustls-pki-types",
     "dep:tokio-rustls",
 ]
@@ -60,10 +59,9 @@ hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"
 serde_json = "1.0.154"
 serde_urlencoded = "0.7.1"
 # TCP keepalive on the streaming calls' connection (tcp feature).
-# TLS on the streaming calls, with the material bollard's ssl path loads (on bollard's own rustls,
+# TLS on the streaming calls, verifying the engine against ca.pem alone (on bollard's own rustls,
 # ring provider; tls feature).
 rustls = { version = "0.23.46", default-features = false, features = ["std", "ring"], optional = true }
-rustls-native-certs = { version = "0.8.5", optional = true }
 rustls-pki-types = { version = "1.15.1", optional = true }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"], optional = true }
 socket2 = { version = "0.6.3", features = ["all"], optional = true }

@@ -63,14 +63,15 @@ its calls: those stay the program's, made on the `Docker` that `connect` returns
 
 `wait` and `events_established` send their request themselves, over hyper on the `Config`'s endpoint
 (unix; `tcp` adds plain TCP with keepalive on, 15 seconds idle and apart and nine probes on Linux;
-`tls` adds rustls with `ca.pem`, `cert.pem` and `key.pem` and the system roots), because bollard
+`tls` adds rustls presenting `cert.pem` and `key.pem` and trusting `ca.pem` alone, as moby's client;
+bollard's own calls also trust the system and webpki roots), because bollard
 hides when a streaming call's headers arrive. They send the config's `User-Agent`.
 
 It depends on `bollard` (pinned `=0.21.1`, only `pipe`; `tcp` adds `http`, `tls` adds `ssl`, which
 is rustls on ring), `http`, `hyper` (`client`, `http1`), `hyper-util`, `http-body-util`, `bytes`,
 `serde_json`, `serde_urlencoded`, `futures-util`, `thiserror`, `tokio` (`rt`, `time`, `sync`,
 `macros`, `net`; `io-util` with `test-util`) and `tokio-util`; `tcp` adds `socket2`, and `tls`
-adds `rustls`, `tokio-rustls`, `rustls-native-certs` and `rustls-pki-types`, all of which bollard's
+adds `rustls`, `tokio-rustls` and `rustls-pki-types`, all of which bollard's
 `ssl` already brings.
 
 ### testenv-core
