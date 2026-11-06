@@ -290,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "docker-engine"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "flate2",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "go-clock"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "jiff",
  "tokio",
@@ -464,14 +464,14 @@ dependencies = [
 
 [[package]]
 name = "go-compat"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "jiff",
 ]
 
 [[package]]
 name = "go-http"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "go-clock",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "go-prom"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "go-clock",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "go-slog"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "go-clock",
  "go-compat",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "http-framing"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "httparse"
@@ -1079,7 +1079,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-meta"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "go-compat",
  "regex",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "service-kit"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "tokio",
 ]
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "testenv-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bollard",
  "go-clock",
@@ -1670,7 +1670,7 @@ dependencies = [
 
 [[package]]
 name = "tracing-setup"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "log",
  "serde_json",
