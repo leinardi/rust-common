@@ -1,0 +1,58 @@
+name: Auto Tag Release
+
+# The second half of a release (release.yaml writes the version and opens its pull request): on
+# every push to main, compare the crates' package version (`[workspace.package] version` in
+# Cargo.toml) with the first parent's. When it changed, gh-reusable-workflows'
+# simple-tag-and-release tags `vX.Y.Z` on this commit and publishes the release, so a release tag
+# always marks a tree whose crates carry its version. Every other push stops at the comparison.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      bumped: ${{ steps.detect.outputs.bumped }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This commit and its first parent, the main it was merged into.
+          fetch-depth: 2
+
+      - name: Detect a version change
+        id: detect
+        run: |
+          set -euo pipefail
+          read_version() {
+            python3 -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["workspace"]["package"]["version"])'
+          }
+          CURRENT=$(read_version < Cargo.toml)
+          PREVIOUS=""
+          if git rev-parse --verify --quiet HEAD~1 >/dev/null; then
+            PREVIOUS=$(git show HEAD~1:Cargo.toml | read_version)
+          fi
+          if [ "$CURRENT" = "$PREVIOUS" ]; then
+            echo "The crates' version is unchanged ($CURRENT): not a release commit."
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The crates' version changed: ${PREVIOUS:-none} -> $CURRENT."
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: detect
+    if: needs.detect.outputs.bumped == 'true'
+    permissions:
+      contents: write
+    uses: leinardi/gh-reusable-workflows/.github/workflows/simple-tag-and-release.yaml@ba5f6ec7596a5eb306ad2f7511a888ec8dde6d53 # v1.4.0
+    with:
+      version: ${{ needs.detect.outputs.version }}

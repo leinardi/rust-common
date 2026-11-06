@@ -50,7 +50,7 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | `deny.toml`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | cargo-deny policy, clippy settings (no application bans), formatting, the pinned toolchain |
 | `Makefile`, `.mk/`, `scripts/bootstrap-mk-common.sh` | make-common: shared snippets in `MK_COMMON_FILES`, local ones in `MK_LOCAL_FILES` |
 | `.github/workflows/ci.yaml` | `pre-commit-all`, `rust`, `feature-matrix`, `conventional-commits` and the `ci-result` aggregator; the reviewdog jobs on pull requests |
-| `.github/workflows/release.yaml` | the **Release** workflow, on gh-reusable-workflows' `simple-tag-and-release` (`vX.Y.Z` tags) |
+| `.github/workflows/release.yaml`, `auto-tag-release.yaml` | the **Release** workflow writes the crates' version on a `release/vX.Y.Z` branch and opens its pull request; on its merge, **Auto Tag Release** tags `vX.Y.Z` through gh-reusable-workflows' `simple-tag-and-release` |
 | `.github/workflows/pre-commit-warmup.yaml` | refreshes the pre-commit cache on `main` (hook config change, weekly) and prunes the older entries |
 | `scripts/` | the licence-header check, the suppression ratchet, the make-common bootstrap and the Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`) |
 | `.agents/skills/` | project skills; `.claude/skills` is a symlink to it |
