@@ -421,6 +421,17 @@ fn an_extra_download_beside_a_listed_one_fails() {
     for extra in [
         "\t&& curl -fsSL -o /tmp/x https://example.invalid/x \\\n",
         "\t&& curl -fsSL -o /tmp/x \"${EXTRA_URL}\" \\\n",
+        // Shapes where no command starts right before the curl: SSE's per-stage count still
+        // sees each one.
+        "\t&& case \"${BUILDARCH}\" in amd64) curl -fsSL -o /tmp/x https://example.invalid/x ;; esac \\\n",
+        "\t&& if curl -fsSL -o /tmp/x https://example.invalid/x; then :; fi \\\n",
+        "\t&& /usr/bin/curl -fsSL -o /tmp/x https://example.invalid/x \\\n",
+        "\t&& env curl -fsSL -o /tmp/x https://example.invalid/x \\\n",
+        "\t&& command curl -fsSL -o /tmp/x https://example.invalid/x \\\n",
+        "\t&& { curl -fsSL -o /tmp/x https://example.invalid/x; } \\\n",
+        "\t&& x=`curl -fsSL https://example.invalid/x` \\\n",
+        "\t&& sh -c \"curl -fsSL -o /tmp/x https://example.invalid/x\" \\\n",
+        "\t&& echo https://example.invalid/x | xargs curl -fsSL -o /tmp/x \\\n",
     ] {
         let sample = SSE_DOCKERFILE.replacen(zig_check, &format!("{zig_check}{extra}"), 1);
         assert!(!check(&sample).is_empty(), "{extra:?} passes");

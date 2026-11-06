@@ -247,15 +247,28 @@ static FETCH: LazyLock<Regex> = LazyLock::new(|| {
         r"(?:^|&&|\|\||;|\||\(|\bthen\b|\bdo\b)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:curl|wget)\b",
     )
 });
+/// The consumers' own fetch marker, counted wherever it appears: their per-stage rule counts every
+/// `curl -fsSL`, so a fetch in a `case` arm, after `if`, `env`, `command`, a path prefix, inside
+/// `{ }`, backticks or `sh -c` still counts even where [`FETCH`] sees no command start.
+const CURL_FETCH: &str = "curl -fsSL";
 /// The check every fetch must have in its RUN.
 const SHA256_CHECK: &str = "| sha256sum -c -";
+
+/// How many files a RUN fetches: the larger of the command-start count and the consumers'
+/// `curl -fsSL` count, so neither reading can hide a fetch the other sees.
+fn fetch_count(run: &str) -> usize {
+    FETCH
+        .find_iter(run)
+        .count()
+        .max(run.matches(CURL_FETCH).count())
+}
 
 /// What is wrong with the fetches of one RUN: every fetch must be one a download rule names in
 /// this RUN (a RUN holding one listed URL cannot fetch a second file beside it), and the RUN must
 /// check as many files with `sha256sum -c -` as it fetches, the consumers' per-stage rule held
 /// per RUN.
 fn run_fetch_problems(run: &str, downloads: &[Download<'_>]) -> Vec<Problem> {
-    let fetches = FETCH.find_iter(run).count();
+    let fetches = fetch_count(run);
     if fetches == 0 {
         return Vec::new();
     }
