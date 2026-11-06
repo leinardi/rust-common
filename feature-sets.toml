@@ -95,9 +95,13 @@ http-framing = [
 # service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
 # no-default-features set, as the default enables nothing); swarm-scheduler-exporter and
 # swarm-device-access also use the runtime and the signals, awtrix-controller the runtime only.
+# `http` (the minimal server) is for bitgauge, swarm-scheduler-exporter and swarm-device-access;
+# every feature is also built alone.
 service-kit = [
     { no-default-features = true },
     { features = ["runtime"] },
+    { features = ["http"] },
+    { features = ["runtime", "http"] }, # swarm-scheduler-exporter, swarm-device-access
     { all-features = true },
 ]
 

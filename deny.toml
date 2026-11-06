@@ -32,6 +32,12 @@ version = 2
 # serde_json, serde_core, itoa and memchr offer MIT, and zmij, tokio-util and http-body-util are
 # MIT only; rcgen, yasna, time, time-core, deranged, powerfmt, num-conv and base64 offer MIT or
 # Apache-2.0, pem is MIT only, and ring is the Apache-2.0 AND ISC allowed below.
+#
+# service-kit's tests serve an axum router (a dev-dependency): axum, axum-core, tower, tower-layer
+# and mime are MIT (mime also Apache-2.0), sync_wrapper is Apache-2.0, matchit is
+# MIT AND BSD-3-Clause, and percent-encoding offers MIT or Apache-2.0; all are allowed below. Its
+# `http` feature (hyper, hyper-util, tokio-util, tower-service, bytes, libc) brings in nothing else:
+# MIT or MIT OR Apache-2.0.
 allow = [
     # bollard and bollard-stubs (Apache-2.0 only), under testenv-core's `bollard` and
     # docker-client; most other
