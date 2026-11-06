@@ -103,7 +103,8 @@ impl WaitCondition {
 /// answered the response headers: that is when it holds the waiter, so a `start` made after this
 /// returns cannot overtake the wait, and an auto-removed container that exits at once still
 /// delivers its code (moby's Go client returned from `ContainerWait` at the same point). `timeout`
-/// bounds the connection and the headers, not the wait itself. A spawned task then reads the exit
+/// bounds the connection and the headers, not the wait itself; `cancel` interrupts that
+/// establishment too. A spawned task then reads the exit
 /// code, and ends when the receiver is dropped or `cancel` fires (the receiver then reports a
 /// closed channel). Must be called inside a tokio runtime.
 ///
@@ -115,8 +116,9 @@ impl WaitCondition {
 ///
 /// # Errors
 ///
-/// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when the headers do not come in `timeout`, the
-/// engine's refusal sorted into its kind (404 for a container that is not there), `Unavailable`
+/// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when the headers do not come in `timeout`,
+/// [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) when `cancel` fires first, the engine's
+/// refusal sorted into its kind (404 for a container that is not there), `Unavailable`
 /// when it cannot be reached.
 pub async fn wait(
     config: &Config,
@@ -134,6 +136,7 @@ pub async fn wait(
         &format!("/containers/{id}/wait"),
         &format!("condition={}", condition.as_str()),
         timeout,
+        &cancel,
     )
     .await?;
     tokio::spawn(async move {

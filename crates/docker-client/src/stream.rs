@@ -37,6 +37,7 @@ use http_body_util::{BodyExt as _, Empty};
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use tokio::net::UnixStream;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config, Endpoint, sent_version};
 use crate::error::Error;
@@ -95,7 +96,7 @@ fn versioned_path(config: &Config, path: &str) -> String {
 
 /// Sends `method path?query` to `target` and returns the response once its headers are in and say
 /// success, its body unread. `timeout` bounds the connection, the headers and, for a refusal, the
-/// refusal's body.
+/// refusal's body; `cancel` ends it at once.
 ///
 /// # Errors
 ///
@@ -109,6 +110,7 @@ pub(crate) async fn establish(
     path: &str,
     query: &str,
     timeout: Duration,
+    cancel: &CancellationToken,
 ) -> Result<Incoming, Error> {
     let mut uri = versioned_path(config, path);
     if !query.is_empty() {
@@ -151,9 +153,13 @@ pub(crate) async fn establish(
         let body = response.into_body().collect().await?.to_bytes();
         Err(refusal(status, &body))
     };
-    match tokio::time::timeout(timeout, answered).await {
-        Ok(result) => result.map_err(|error: BollardError| Error::from(error)),
-        Err(_elapsed) => Err(Error::timeout(timeout)),
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(Error::cancelled()),
+        bounded = tokio::time::timeout(timeout, answered) => match bounded {
+            Ok(result) => result.map_err(|error: BollardError| Error::from(error)),
+            Err(_elapsed) => Err(Error::timeout(timeout)),
+        },
     }
 }
 
@@ -247,7 +253,8 @@ fn refusal(status: StatusCode, body: &[u8]) -> BollardError {
 pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, Error>> + Send>>;
 
 /// `GET /events` with `options`, returned once the engine has answered 2xx: the subscription is
-/// accepted, not just sent. `timeout` bounds the connection and the headers, not the stream.
+/// accepted, not just sent. `timeout` bounds the connection and the headers, not the stream;
+/// `cancel` interrupts the establishment (the stream itself ends when it is dropped).
 ///
 /// `config` is the client's: the one it was connected from, or the one
 /// [`negotiate`](crate::negotiate) returned with it. The request carries its `User-Agent` and API
@@ -259,12 +266,13 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// # Errors
 ///
 /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when the headers do not come in `timeout`,
-/// the engine's refusal sorted into its kind (404, 409, other), `Unavailable` when it cannot be
-/// reached.
+/// [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) when `cancel` fires first, the engine's
+/// refusal sorted into its kind (404, 409, other), `Unavailable` when it cannot be reached.
 pub async fn events_established(
     config: &Config,
     options: Option<EventsOptions>,
     timeout: Duration,
+    cancel: &CancellationToken,
 ) -> Result<EventStream, Error> {
     let target = Target::of(config);
     let query = options
@@ -272,7 +280,16 @@ pub async fn events_established(
         .transpose()
         .map_err(|error| Error::from(BollardError::from(error)))?
         .unwrap_or_default();
-    let body = establish(config, &target, Method::GET, "/events", &query, timeout).await?;
+    let body = establish(
+        config,
+        &target,
+        Method::GET,
+        "/events",
+        &query,
+        timeout,
+        cancel,
+    )
+    .await?;
     Ok(Box::pin(lines(body)))
 }
 

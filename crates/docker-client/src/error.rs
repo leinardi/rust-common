@@ -36,6 +36,9 @@ pub enum ErrorKind {
     /// The engine could not be reached, or the connection broke mid-call: its socket is gone,
     /// refused, or reset.
     Unavailable,
+    /// The caller's [`CancellationToken`](crate::CancellationToken) fired before the call was
+    /// established. Not a failure of the engine: tell it from `Timeout` to shut down quietly.
+    Cancelled,
     /// Anything else, an engine answer included (500, a body that does not decode). A `304 Not
     /// Modified` (start of a running container, stop of a stopped one) is not an error here:
     /// bollard counts it as a success, so the call returns `Ok`.
@@ -53,6 +56,7 @@ pub struct Error {
 enum Repr {
     Engine(BollardError),
     Timeout(Duration),
+    Cancelled,
 }
 
 impl Error {
@@ -67,7 +71,14 @@ impl Error {
     pub fn engine(&self) -> Option<&BollardError> {
         match &self.repr {
             Repr::Engine(error) => Some(error),
-            Repr::Timeout(_) => None,
+            Repr::Timeout(_) | Repr::Cancelled => None,
+        }
+    }
+
+    pub(crate) fn cancelled() -> Self {
+        Self {
+            kind: ErrorKind::Cancelled,
+            repr: Repr::Cancelled,
         }
     }
 
@@ -95,6 +106,7 @@ impl fmt::Display for ErrorKind {
             Self::Conflict => "conflict",
             Self::Timeout => "timeout",
             Self::Unavailable => "unavailable",
+            Self::Cancelled => "cancelled",
             Self::Other => "other",
         })
     }
@@ -147,6 +159,7 @@ impl fmt::Display for Error {
         match &self.repr {
             Repr::Engine(error) => error.fmt(formatter),
             Repr::Timeout(after) => write!(formatter, "no complete answer within {after:?}"),
+            Repr::Cancelled => formatter.write_str("cancelled"),
         }
     }
 }
@@ -158,7 +171,7 @@ impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match &self.repr {
             Repr::Engine(error) => error.source(),
-            Repr::Timeout(_) => None,
+            Repr::Timeout(_) | Repr::Cancelled => None,
         }
     }
 }

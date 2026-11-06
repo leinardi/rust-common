@@ -675,7 +675,9 @@ mod attach_tests {
             )
             .await
             .unwrap();
-            let _events = events_established(&config, None, SECS).await.unwrap();
+            let _events = events_established(&config, None, SECS, &CancellationToken::new())
+                .await
+                .unwrap();
             let paths: Vec<String> = engine
                 .requests()
                 .iter()
@@ -710,6 +712,50 @@ mod attach_tests {
         .await
         .unwrap();
         assert_eq!(receiver.await.unwrap().unwrap(), 4);
+    }
+
+    /// A token that fired before the call, or fires while it waits for silent headers, ends the
+    /// call at once with `Cancelled`, not after the establishment timeout.
+    #[tokio::test]
+    async fn cancelling_interrupts_the_establishment_of_wait_and_events() {
+        let engine = FakeEngine::start(&[
+            ("/containers/c/wait", Reply::Silent),
+            ("/events", Reply::Silent),
+        ])
+        .unwrap();
+        let config = config_of(&engine);
+        let long = Duration::from_secs(30);
+        let begun = Instant::now();
+
+        let before = CancellationToken::new();
+        before.cancel();
+        let error = wait(&config, "c", WaitCondition::NextExit, long, before.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Cancelled);
+        let Err(error) = events_established(&config, None, long, &before).await else {
+            panic!("established under a cancelled token");
+        };
+        assert_eq!(error.kind(), ErrorKind::Cancelled);
+
+        let during = CancellationToken::new();
+        let canceller = {
+            let during = during.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                during.cancel();
+            })
+        };
+        let error = wait(&config, "c", WaitCondition::NextExit, long, during.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Cancelled);
+        canceller.await.unwrap();
+        assert!(
+            begun.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            begun.elapsed()
+        );
     }
 
     #[tokio::test]
@@ -905,9 +951,14 @@ async fn events_established_streams_lines_and_survives_an_undecodable_one() {
     let engine =
         FakeEngine::start(&[("/events", Reply::events(&[EVENT_A, "not json", EVENT_A]))]).unwrap();
     let config = config_of(&engine);
-    let mut events = events_established(&config, None, Duration::from_secs(5))
-        .await
-        .unwrap();
+    let mut events = events_established(
+        &config,
+        None,
+        Duration::from_secs(5),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     let first = events.next().await.unwrap().unwrap();
     assert_eq!(first.action.as_deref(), Some("start"));
     assert!(events.next().await.unwrap().is_err());
@@ -928,9 +979,14 @@ async fn events_established_sends_the_options_the_agent_and_the_version() {
         .since("100")
         .filters(&HashMap::from([("type", vec!["container"])]))
         .build();
-    let _events = events_established(&config, Some(options), Duration::from_secs(5))
-        .await
-        .unwrap();
+    let _events = events_established(
+        &config,
+        Some(options),
+        Duration::from_secs(5),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     let requests = engine.requests();
     assert!(requests[0].raw_path().starts_with("/v1.43/events?"));
     assert!(
@@ -951,7 +1007,14 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
     let engine = FakeEngine::start(&[("/events", Reply::Silent)]).unwrap();
     let config = config_of(&engine);
     let begun = Instant::now();
-    let Err(error) = events_established(&config, None, Duration::from_millis(200)).await else {
+    let Err(error) = events_established(
+        &config,
+        None,
+        Duration::from_millis(200),
+        &CancellationToken::new(),
+    )
+    .await
+    else {
         panic!("a subscription nobody answered was established");
     };
     assert_eq!(error.kind(), ErrorKind::Timeout);
@@ -960,7 +1023,14 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
     let engine = FakeEngine::start(&[("/events", Reply::error(400, "bad filter"))]).unwrap();
     let config = config_of(&engine);
     let begun = Instant::now();
-    let Err(error) = events_established(&config, None, Duration::from_secs(30)).await else {
+    let Err(error) = events_established(
+        &config,
+        None,
+        Duration::from_secs(30),
+        &CancellationToken::new(),
+    )
+    .await
+    else {
         panic!("a refused subscription was established");
     };
     assert_eq!(error.kind(), ErrorKind::Other);
@@ -969,7 +1039,14 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
 
     let engine = FakeEngine::start(&[("/events", Reply::not_found())]).unwrap();
     let config = config_of(&engine);
-    let Err(error) = events_established(&config, None, Duration::from_secs(30)).await else {
+    let Err(error) = events_established(
+        &config,
+        None,
+        Duration::from_secs(30),
+        &CancellationToken::new(),
+    )
+    .await
+    else {
         panic!("a refused subscription was established");
     };
     assert_eq!(error.kind(), ErrorKind::NotFound);
@@ -1085,9 +1162,14 @@ mod tls_tests {
     async fn events_established_speaks_tls_with_the_client_certificate() {
         let port = engine(false).await;
         let config = config(port, &certs());
-        let mut events = events_established(&config, None, Duration::from_secs(10))
-            .await
-            .unwrap();
+        let mut events = events_established(
+            &config,
+            None,
+            Duration::from_secs(10),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         let event = events.next().await.unwrap().unwrap();
         assert_eq!(event.action.as_deref(), Some("start"));
     }
@@ -1096,7 +1178,14 @@ mod tls_tests {
     async fn a_tls_engine_that_never_answers_times_out_instead_of_looking_established() {
         let port = engine(true).await;
         let config = config(port, &certs());
-        let Err(error) = events_established(&config, None, Duration::from_millis(300)).await else {
+        let Err(error) = events_established(
+            &config,
+            None,
+            Duration::from_millis(300),
+            &CancellationToken::new(),
+        )
+        .await
+        else {
             panic!("a silent TLS engine was reported established");
         };
         assert_eq!(error.kind(), ErrorKind::Timeout);
@@ -1107,7 +1196,14 @@ mod tls_tests {
         let port = engine(false).await;
         let nowhere = PathBuf::from("/nonexistent/certs");
         let config = config(port, &nowhere);
-        let Err(error) = events_established(&config, None, Duration::from_secs(5)).await else {
+        let Err(error) = events_established(
+            &config,
+            None,
+            Duration::from_secs(5),
+            &CancellationToken::new(),
+        )
+        .await
+        else {
             panic!("established without certificates");
         };
         assert!(error.to_string().contains("ca.pem"), "{error}");
