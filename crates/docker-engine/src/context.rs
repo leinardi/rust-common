@@ -194,7 +194,14 @@ pub async fn with_context_timeout<T>(
     with_context(&CallContext::default().with_timeout(timeout), call).await
 }
 
-/// The context of the call running on this task, if any.
-pub(crate) fn current() -> Option<CallContext> {
+/// The context of the call running on this task, if any: the one [`with_context`] (or
+/// [`with_context_timeout`]) set around the running call. Clients use it to bound their own
+/// request; a consumer's fake engine reads it to see the caller's deadline and cancellation as
+/// a real client would.
+///
+/// Task-local: a task spawned inside the call sees `None`, so capture it before spawning. A call
+/// wrapped only by [`crate::with_bare_timeout`] sets no context.
+#[must_use]
+pub fn current() -> Option<CallContext> {
     CALL_CONTEXT.try_with(Clone::clone).ok()
 }

@@ -173,7 +173,7 @@ program makes and the types it decodes stay the program's; it builds them on the
 | `Client::exchange` (`write`) | a versioned request of any method and body from the one builder |
 | `Client::exchange_upgrade`, `stdcopy`, `wait` (`attach`) | moby's hijacked attach on a connection of its own, its `StdCopy`, and the wait answer's parser |
 | `Error`, `ErrorKind`, `ConfigError`, `PathError` (`tls`) | moby's texts; the `io::Error`, `hyper::Error` or `serde_json::Error` behind one is its `source` |
-| `context`: `CallContext`, `with_context`, `with_context_timeout` | Go's `context.Context` around a call; a request it cuts short fails as net/http's `url.Error` |
+| `context`: `CallContext`, `with_context`, `with_context_timeout`, `current` | Go's `context.Context` around a call; a request it cuts short fails as net/http's `url.Error`; `current` lets a fake engine read the caller's deadline and cancellation (task-local) |
 | `with_bare_timeout`, `with_bare_deadline` | a bound around a call the client does not see: the bare `context deadline exceeded` (swarm-scheduler-exporter's `with_timeout`/`with_deadline`; swarm-device-access's `with_timeout` is `with_context_timeout`) |
 | `events::JsonStream` | moby's JSON stream decoder (the RS filter, `io.EOF` against `io.ErrUnexpectedEOF`), each record bounded to 1 MiB |
 | `types` | `decode_first`, `decode_list`, `null_default`, `Nullable`, `Labels`: Go's `encoding/json` on the answers |
