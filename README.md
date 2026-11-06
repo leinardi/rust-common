@@ -258,7 +258,7 @@ droast.
 | `yaml` | workflows and the pre-commit configuration as `serde_json::Value`: `action_steps`, `jobs`, `pre_commit_hooks` |
 | `scratch` | `ScratchRepo` (a git-isolated temporary repository, `repo()` a `Repo::scratch`), `HeaderHarness` and `HeaderCase` (`scripts/check-license-headers.sh` on the repository and on scratch cases, at least one accepted and one rejected), `SuppressionHarness` and `RatchetCase` (`scripts/check-suppressions.sh` and its baseline) |
 
-It depends on `go-compat` (Go's quoting, `path.Clean`, `ToLower`), `testenv-core` (default
+It depends on `testenv-core` (default
 features: git isolation), `regex`, `serde-saphyr` and `serde_json` (the YAML), `toml` and `tempfile`.
 
 ### tracing-setup

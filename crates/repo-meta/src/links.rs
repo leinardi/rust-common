@@ -17,9 +17,9 @@
 //! hook.
 //!
 //! The patterns are the Go ones with RE2's ASCII classes spelled out: Rust's `\s`, `\S` and `\b`
-//! are Unicode-aware, Go's are not, so `[\t\n\f\r ]` stands in for them. Paths are cleaned with
-//! Go's `path.Clean`, headings lower-cased with Go's `strings.ToLower` and targets quoted with
-//! Go's `strconv.Quote`, from go-compat.
+//! are Unicode-aware, Go's are not, so `[\t\n\f\r ]` stands in for them. Paths are cleaned lexically
+//! like Go's `path.Clean` (`clean`), headings lower-cased rune by rune (`to_lower`) and targets
+//! quoted with `{:?}`, which escapes what Go's `strconv.Quote` does for the targets seen here.
 //!
 //! The lower-casing is Go's on purpose, where GitHub's slugger lower-cases with JavaScript's
 //! `toLowerCase`: the check is the consumers' Go checker, ported, and keeps its verdicts. The two
@@ -38,9 +38,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use go_compat::filepath::clean;
-use go_compat::quote::quote;
-use go_compat::strings::to_lower;
 use regex::Regex;
 
 use crate::{Problem, Repo, regex};
@@ -240,7 +237,7 @@ impl Checker {
             return None;
         }
         let (file, fragment) = target.split_once('#').unwrap_or((target, ""));
-        let quoted = quote(target);
+        let quoted = format!("{target:?}");
         let mut resolved = relative.to_owned();
         if !file.is_empty() {
             resolved = match file.strip_prefix('/') {
@@ -275,6 +272,47 @@ impl Checker {
         self.anchors
             .get(relative)
             .ok_or_else(|| format!("read {relative}: not cached"))
+    }
+}
+
+/// Go's `strings.ToLower`: each rune on its own, so a final capital sigma becomes `σ` (not `ς`) and
+/// the dotted capital I becomes a plain `i`, the one rune whose full lower case has two.
+fn to_lower(text: &str) -> String {
+    text.chars()
+        .flat_map(|rune| {
+            if rune == '\u{130}' {
+                'i'.to_lowercase()
+            } else {
+                rune.to_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Lexical clean of a slash path, as Go's `path.Clean`: duplicate slashes and `.` elements are
+/// dropped, `x/..` pairs collapse, `..` at the root of a rooted path is dropped and a leading `..`
+/// of a relative one is kept; the empty result is `.`.
+fn clean(path: &str) -> String {
+    let rooted = path.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for element in path.split('/') {
+        match element {
+            "" | "." => {}
+            ".." => {
+                if parts.last().is_some_and(|last| *last != "..") {
+                    parts.pop();
+                } else if !rooted {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let joined = parts.join("/");
+    match (rooted, joined.is_empty()) {
+        (true, _) => format!("/{joined}"),
+        (false, true) => ".".to_owned(),
+        (false, false) => joined,
     }
 }
 
