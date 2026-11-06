@@ -28,13 +28,13 @@ testing = ["dep:serde_json"]
 serde_json = { version = "1.0.154", optional = true }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-log = { version = "0.2.0", default-features = false, features = ["std", "log-tracer"], optional = true }
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "registry", "std"] }
 
 [dev-dependencies]
 log = "0.4.34"
 # `ansi` on in the tests only, so the no-ANSI assertions prove `with_ansi(false)`: a consumer whose
 # graph enables the feature would otherwise get escape codes.
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "fmt", "json", "std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "fmt", "json", "registry", "std"] }
 serde_json = "1.0.154"
 
 [[test]]
@@ -48,3 +48,7 @@ required-features = ["testing"]
 [[test]]
 name = "log_bridge"
 required-features = ["log-bridge", "testing"]
+
+[[test]]
+name = "reload"
+required-features = ["testing"]

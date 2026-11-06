@@ -264,14 +264,16 @@ features: git isolation), `regex`, `serde-saphyr` and `serde_json` (the YAML), `
 ### tracing-setup
 
 The subscriber awtrix-controller, swarm-rootless-docker and bitgauge each built: tracing-subscriber's
-fmt layer, no ANSI, RFC 3339 UTC timestamps, text or one flat JSON object per line. The caller picks
-the writer (stdout, stderr, a bounded lane), the level, the format and the options; the crate
+fmt layer, no ANSI, RFC 3339 UTC timestamps (optional), text or one flat JSON object per line. The caller
+picks the writer (stdout, stderr, a bounded lane), the level, the format and the options; the crate
 parses no configuration.
 
 | Item | What it is |
 | --- | --- |
 | `build(writer, Format, level, Options) -> Dispatch` | the subscriber; `Format::Text` or `Format::Json` (`flatten_event`) |
-| `Options::new().target(bool).span_fields(bool)` | the target before the message (text) or as `"target"` (JSON), and the JSON `"span"`/`"spans"` fields; both shown by default, tracing-subscriber's own default; bitgauge turns both off |
+| `Options::new().target(bool).span_fields(bool).time(bool)` | the target before the message (text) or as `"target"` (JSON), the JSON `"span"`/`"spans"` fields, and the timestamp (`shows_time()`); all shown by default, tracing-subscriber's own default; bitgauge turns the first two off, a process whose supervisor stamps the lines turns `time` off |
+| `build_reloadable(writer, Format, level, Options) -> (Dispatch, ReloadHandle)` | the same subscriber with a `reload` layer for the format and another for the level; the writer must be `Clone` |
+| `ReloadHandle` | `reconfigure(Format, level)`, `set_level`, `set_format`, each `Result<(), ReloadError>`; `Clone + Send + Sync`, usable after the `Dispatch` is installed globally (a SIGHUP reload); it fails once the subscriber is dropped |
 | `install_global(Dispatch)` | the process's global default; `InstallError` when one is installed |
 | `install_log_bridge()` (`log-bridge`) | routes the `log` facade in, each record with its own target, file and line (tracing-subscriber's `tracing-log` feature) |
 | `testing::Capture` (`testing`) | a writer keeping what a test logged: `bytes`, `text`, `json_lines` |
