@@ -183,8 +183,7 @@ where
 }
 
 type BoxedLayer<S> = Box<dyn Layer<S> + Send + Sync + 'static>;
-type TextSubscriber = Layered<Gate<BoxedLayer<Registry>>, Registry>;
-type JsonSubscriber = Layered<Gate<BoxedLayer<TextSubscriber>>, TextSubscriber>;
+type FmtSubscriber = Layered<Switch<BoxedLayer<Registry>, BoxedLayer<Registry>>, Registry>;
 
 /// A writer shared by the text layer and the JSON layer of a reloadable subscriber.
 #[derive(Debug)]
@@ -205,78 +204,106 @@ where
     }
 }
 
-/// Forwards everything to `inner` but the events, which it hands over only while the format it
-/// stands for (`json`) is the active one. Span callbacks always reach `inner`, so both layers
-/// keep every span's fields in their own representation (`FormattedFields<DefaultFields>` for
-/// text, `FormattedFields<JsonFields>` for JSON), whichever format was active when the span was
-/// created or recorded.
-struct Gate<L> {
-    inner: L,
-    json: bool,
+/// The text layer and the JSON layer as one. Span callbacks always reach both, so each keeps
+/// every span's fields in its own representation (`FormattedFields<DefaultFields>` for text,
+/// `FormattedFields<JsonFields>` for JSON), whichever format was active when the span was created
+/// or recorded. An event reaches exactly one of them: the format is read once per event, so a
+/// switch from another thread cannot make one event print twice or not at all.
+struct Switch<T, J> {
+    text: T,
+    json: J,
+    /// Whether JSON is the active format.
     active: Arc<AtomicBool>,
 }
 
-impl<S, L> Layer<S> for Gate<L>
+impl<S, T, J> Layer<S> for Switch<T, J>
 where
     S: Subscriber,
-    L: Layer<S>,
+    T: Layer<S>,
+    J: Layer<S>,
 {
     fn on_register_dispatch(&self, subscriber: &Dispatch) {
-        self.inner.on_register_dispatch(subscriber);
+        self.text.on_register_dispatch(subscriber);
+        self.json.on_register_dispatch(subscriber);
     }
 
     fn on_layer(&mut self, subscriber: &mut S) {
-        self.inner.on_layer(subscriber);
+        self.text.on_layer(subscriber);
+        self.json.on_layer(subscriber);
     }
 
     fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
-        self.inner.register_callsite(metadata)
+        // Both must see the callsite registered; the interest is what either wants.
+        let (text, json) = (
+            self.text.register_callsite(metadata),
+            self.json.register_callsite(metadata),
+        );
+        if text.is_never() && json.is_never() {
+            Interest::never()
+        } else if text.is_always() && json.is_always() {
+            Interest::always()
+        } else {
+            Interest::sometimes()
+        }
     }
 
     fn enabled(&self, metadata: &Metadata<'_>, ctx: Context<'_, S>) -> bool {
-        self.inner.enabled(metadata, ctx)
+        let text = self.text.enabled(metadata, ctx.clone());
+        let json = self.json.enabled(metadata, ctx);
+        text || json
     }
 
     fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
-        self.inner.on_new_span(attrs, id, ctx);
+        self.text.on_new_span(attrs, id, ctx.clone());
+        self.json.on_new_span(attrs, id, ctx);
     }
 
     fn max_level_hint(&self) -> Option<LevelFilter> {
-        self.inner.max_level_hint()
+        Some(self.text.max_level_hint()?.max(self.json.max_level_hint()?))
     }
 
     fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, S>) {
-        self.inner.on_record(id, values, ctx);
+        self.text.on_record(id, values, ctx.clone());
+        self.json.on_record(id, values, ctx);
     }
 
     fn on_follows_from(&self, id: &span::Id, follows: &span::Id, ctx: Context<'_, S>) {
-        self.inner.on_follows_from(id, follows, ctx);
+        self.text.on_follows_from(id, follows, ctx.clone());
+        self.json.on_follows_from(id, follows, ctx);
     }
 
     fn event_enabled(&self, event: &Event<'_>, ctx: Context<'_, S>) -> bool {
-        self.inner.event_enabled(event, ctx)
+        let text = self.text.event_enabled(event, ctx.clone());
+        let json = self.json.event_enabled(event, ctx);
+        text || json
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        if self.active.load(Ordering::Acquire) == self.json {
-            self.inner.on_event(event, ctx);
+        if self.active.load(Ordering::Acquire) {
+            self.json.on_event(event, ctx);
+        } else {
+            self.text.on_event(event, ctx);
         }
     }
 
     fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
-        self.inner.on_enter(id, ctx);
+        self.text.on_enter(id, ctx.clone());
+        self.json.on_enter(id, ctx);
     }
 
     fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
-        self.inner.on_exit(id, ctx);
+        self.text.on_exit(id, ctx.clone());
+        self.json.on_exit(id, ctx);
     }
 
     fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
-        self.inner.on_close(id, ctx);
+        self.text.on_close(id.clone(), ctx.clone());
+        self.json.on_close(id, ctx);
     }
 
     fn on_id_change(&self, old: &span::Id, new: &span::Id, ctx: Context<'_, S>) {
-        self.inner.on_id_change(old, new, ctx);
+        self.text.on_id_change(old, new, ctx.clone());
+        self.json.on_id_change(old, new, ctx);
     }
 }
 
@@ -298,21 +325,15 @@ where
 {
     let writer = Arc::new(writer);
     let active = Arc::new(AtomicBool::new(format == Format::Json));
-    let text = Gate {
-        inner: fmt_layer(Shared(Arc::clone(&writer)), Format::Text, options),
-        json: false,
-        active: Arc::clone(&active),
-    };
-    let json = Gate {
-        inner: fmt_layer(Shared(writer), Format::Json, options),
-        json: true,
+    let switch = Switch {
+        text: fmt_layer(Shared(Arc::clone(&writer)), Format::Text, options),
+        json: fmt_layer(Shared(writer), Format::Json, options),
         active: Arc::clone(&active),
     };
     let (level_layer, level_handle) = reload::Layer::new(level.into());
     let dispatch = Dispatch::new(
         tracing_subscriber::registry()
-            .with(text)
-            .with(json)
+            .with(switch)
             .with(level_layer),
     );
     let handle = ReloadHandle {
@@ -328,7 +349,7 @@ where
 #[derive(Clone)]
 pub struct ReloadHandle {
     active: Arc<AtomicBool>,
-    level: reload::Handle<LevelFilter, JsonSubscriber>,
+    level: reload::Handle<LevelFilter, FmtSubscriber>,
 }
 
 impl fmt::Debug for ReloadHandle {

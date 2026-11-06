@@ -222,3 +222,50 @@ fn messages(capture: &Capture) -> Vec<String> {
         })
         .collect()
 }
+
+#[test]
+fn a_concurrent_format_switch_never_doubles_or_drops_an_event() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const EVENTS: usize = 20_000;
+    let capture = Capture::default();
+    let (dispatch, handle) = build_reloadable(
+        capture.clone(),
+        Format::Text,
+        Level::INFO,
+        Options::new().time(false),
+    );
+    let _guard = set_default(&dispatch);
+    let stop = Arc::new(AtomicBool::new(false));
+    let flipper = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut json = false;
+            while !stop.load(Ordering::Relaxed) {
+                json = !json;
+                handle
+                    .set_format(if json { Format::Json } else { Format::Text })
+                    .unwrap();
+            }
+        })
+    };
+    for _ in 0..EVENTS {
+        tracing::info!("hammer");
+    }
+    stop.store(true, Ordering::Relaxed);
+    flipper.join().unwrap();
+
+    let text = capture.text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), EVENTS, "one line per event");
+    for line in lines {
+        let valid = if line.starts_with('{') {
+            serde_json::from_str::<serde_json::Value>(line)
+                .is_ok_and(|record| record["message"] == "hammer")
+        } else {
+            line.trim_start().starts_with("INFO") && line.ends_with("hammer")
+        };
+        assert!(valid, "{line:?}");
+    }
+}
