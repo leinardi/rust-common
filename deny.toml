@@ -33,7 +33,8 @@ version = 2
 # MIT only; rcgen, yasna, time, time-core, deranged, powerfmt, num-conv and base64 offer MIT or
 # Apache-2.0, pem is MIT only, and ring is the Apache-2.0 AND ISC allowed below.
 allow = [
-    # bollard and bollard-stubs (Apache-2.0 only), under testenv-core's `bollard`; most other
+    # bollard and bollard-stubs (Apache-2.0 only), under testenv-core's `bollard` and
+    # docker-client; most other
     # crates offer it beside MIT.
     "Apache-2.0",
     # winnow (MIT only), under the meta crate's and repo-meta's toml; memchr and aho-corasick

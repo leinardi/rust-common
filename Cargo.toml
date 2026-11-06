@@ -3,6 +3,7 @@
 # Library crates live under crates/<name> and are added here, and to feature-sets.toml, by the
 # change that brings them in.
 members = [
+    "crates/docker-client",
     "crates/docker-engine",
     "crates/go-clock",
     "crates/go-compat",

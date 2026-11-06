@@ -16,7 +16,7 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. All eleven are available.
+it. All twelve are available.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -27,6 +27,7 @@ it. All eleven are available.
 | `http-framing` (available) | HTTP/1 request framing over the bytes a connection read, as hyper frames them, std only | – |
 | `go-http` (available) | Go `net/http` server behaviours on hyper: the mux's answers, header order and framing, the four timeouts, `bind` and `parse_port`, `serve` and its drain | `testing` (the timeouts, the routes, the log callback and the listen-error prefix are parameters) |
 | `docker-engine` (available) | A Docker Engine API client over HTTP/1 that sends what moby client v0.6.0 sends: transport, version negotiation, events, decoding, moby's error texts | `tcp`, `tls`, `write`, `attach`, `test-util` (the `User-Agent` and the response-header timeout are parameters) |
+| `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind, a stream pump, attach and wait, a fake engine | `tcp`, `tls`, `attach`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact`, `redact-go-slog` (temporary) (the labels, variables, tools and runner output are parameters) |
 | `repo-meta` (available) | Repository meta-test checks returning problems: workspace lints and layout, Markdown links, Dockerfiles and images, toolchain pins, CI gates, lint allowlists, vacuous flags, and the licence-header and suppression script harnesses | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
@@ -190,6 +191,27 @@ It depends on `go-compat`, `jiff` (as `go-compat`), `hyper` (`client`, `http1`),
 with `attach` and `test-util`), `tokio-util`, `serde` and `serde_json`; `tcp` adds `socket2` and
 `flate2` (the `rust_backend` only), and `tls` adds `rustls` on `ring`, `tokio-rustls`,
 `rustls-pki-types` and `rustls-native-certs`.
+
+### docker-client
+
+The plumbing around [bollard](https://crates.io/crates/bollard) that programs share, and none of
+its calls: those stay the program's, made on the `Docker` that `connect` returns. It replaces
+`docker-engine` for programs that have no Go client's wire behaviour to keep.
+
+| Item | What it is |
+| --- | --- |
+| `Config`, `Config::unix` | the engine's socket; `user_agent` (through bollard's request modifier, which has no setter; a value no header may carry is refused by `connect`), `response_header_timeout` (whole seconds, at least one; bollard's is 120) and `api_version` (a fixed `<major>.<minor>`) are the caller's |
+| `Config::from_env` | `DOCKER_HOST` from the caller's lookup (`unix://`; with `tcp` also `tcp://` and `http://`; with `tls` also `https://`), `/var/run/docker.sock` when unset, and `DOCKER_API_VERSION`, which bollard does not read; any non-empty `DOCKER_TLS_VERIFY` (`0` too, as moby) turns a `tcp://` host into TLS, reading `DOCKER_CERT_PATH` or `$HOME/.docker`; `DOCKER_TLS` is refused as unsupported; an empty variable is unset, a unix host ignores the TLS ones |
+| `connect`, `negotiate`, `ConnectError` | the client from a `Config`; a fixed version is kept, else `negotiate_version` lowers it to the engine's |
+| `bounded` | a timeout around a whole call, body included; bollard's own covers only the response headers |
+| `Error`, `ErrorKind` | `NotFound` (404), `Conflict` (409), `Timeout` (`bounded`'s, or bollard's header timeout), `Unavailable` (I/O, hyper and missing-socket errors) and `Other`; bollard's error stays reachable (`engine()`) and its cause is the `source` |
+| `pump_stream` | a bollard stream (events, logs) as a channel, fed by a task that ends when the receiver is dropped, the `CancellationToken` fires or the stream ends |
+| `attach::attach`, `attach::wait` (`attach`) | a container's stdout and stderr as `Output` pieces through the pump, and its exit code under a `WaitCondition` (`NotRunning`, `NextExit`, `Removed`) as a `oneshot`; `wait` sends its request at once from a task, but bollard does not show when the engine registered it, so a wait that arrives after an auto-remove container is gone delivers `NotFound` (for `Removed`: already removed, exit code unknown) (a non-zero exit, which bollard reports as an error, is the code) |
+| `test_util` (`test-util`) | a fake engine on a unix socket: scripted `Reply`s per path (JSON, 404, 409, an event stream that closes, an attach upgrade, a body that stalls after the headers), and the requests it recorded |
+
+It depends on `bollard` (pinned `=0.21.1`, only `pipe`; `tcp` adds `http`, `tls` adds `ssl`, which
+is rustls on ring), `http`, `futures-util`, `thiserror`, `tokio` (`rt`, `time`, `sync`, `macros`;
+`net` and `io-util` with `test-util`) and `tokio-util`.
 
 ### testenv-core
 

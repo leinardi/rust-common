@@ -1,0 +1,57 @@
+[package]
+name = "docker-client"
+description = "Small shared plumbing over bollard: a connection from DOCKER_HOST, a whole-call timeout, an error with a kind, a stream pump, and a fake engine for tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "docker_client"
+
+[lints]
+workspace = true
+
+[features]
+# `tcp://` and `http://` daemons, and DOCKER_HOST read for them.
+tcp = ["bollard/http"]
+# `https://` daemons and DOCKER_TLS_VERIFY with DOCKER_CERT_PATH: rustls on ring, the system roots
+# plus ca.pem, as bollard does it.
+tls = ["tcp", "bollard/ssl"]
+# The attach output pump and the wait answer.
+attach = []
+# The fake engine on a unix socket that the consumers' tests share.
+test-util = ["tokio/net", "tokio/io-util"]
+
+[dependencies]
+# The Docker SDK: the unix socket only (pipe); `tcp` and `tls` add its http and ssl. The version is
+# pinned as testenv-core and the consumers pin it.
+bollard = { version = "=0.21.1", default-features = false, features = ["pipe"] }
+# The User-Agent header value that bollard's request modifier inserts.
+http = "1.5.0"
+# Stream and StreamExt for the pump.
+futures-util = { version = "0.3.34", default-features = false }
+thiserror = "2.0.21"
+# The pump's task, its channels, select! and the whole-call timer.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "rt",
+    "time",
+    "sync",
+    "macros",
+] }
+# CancellationToken, Go's context cancellation.
+tokio-util = { version = "0.7.20", default-features = false }
+
+[dev-dependencies]
+# The fake engine's socket and I/O under the library's own tests, whatever the features.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "rt",
+    "time",
+    "sync",
+    "macros",
+    "net",
+    "io-util",
+] }

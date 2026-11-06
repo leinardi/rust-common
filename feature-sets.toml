@@ -136,3 +136,18 @@ tracing-setup = [
     { features = ["log-bridge", "testing"] }, # awtrix-controller's tests
     { all-features = true },
 ]
+
+# docker-client: swarm-rootless-docker builds it with `attach` (the host socket only: unix, no
+# TCP) and `test-util` for its tests; a program that reads DOCKER_HOST adds `tcp` (and `tls` for
+# DOCKER_TLS_VERIFY and DOCKER_CERT_PATH). The User-Agent, the API version and the
+# response-header timeout are parameters. Every feature is also built alone.
+docker-client = [
+    { no-default-features = true },
+    { features = ["tcp"] },
+    { features = ["tls"] },
+    { features = ["attach"] },
+    { features = ["test-util"] },
+    { features = ["attach", "test-util"] },     # swarm-rootless-docker, with its tests
+    { features = ["tcp", "tls", "test-util"] }, # a DOCKER_HOST client, with its tests
+    { all-features = true },
+]
