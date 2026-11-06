@@ -13,6 +13,7 @@ members = [
     "crates/repo-meta",
     "crates/service-kit",
     "crates/testenv-core",
+    "crates/tracing-setup",
     "meta",
 ]
 resolver = "3"

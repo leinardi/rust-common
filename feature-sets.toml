@@ -124,3 +124,14 @@ repo-meta = [
     { no-default-features = true },
     { all-features = true },
 ]
+
+# tracing-setup: awtrix-controller builds it with `log-bridge` (its dependencies log through the
+# `log` facade), adding `testing` for its tests; swarm-rootless-docker and bitgauge with no features,
+# adding `testing` likewise. Which writer, level, format, target and JSON span fields are parameters.
+tracing-setup = [
+    { no-default-features = true },
+    { features = ["log-bridge"] },
+    { features = ["testing"] },
+    { features = ["log-bridge", "testing"] }, # awtrix-controller's tests
+    { all-features = true },
+]

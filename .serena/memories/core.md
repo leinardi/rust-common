@@ -10,7 +10,7 @@ not say. README is the consumer-facing contract (crate table, tag dependency, `[
 
 ## Source map
 
-- `crates/<name>/`: one library crate each (planned list in the README table); each is a workspace
+- `crates/<name>/`: one library crate each (listed in the README table); each is a workspace
   member and has a `feature-sets.toml` entry.
 - `meta/`: meta-tests over the repository (`tests/workspace_lints.rs`, `docs.rs`,
   `workspace_layout.rs`, `feature_sets.rs`), the checks in `src/` (`repo`, `links`,

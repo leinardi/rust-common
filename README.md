@@ -16,9 +16,7 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. **Available:** `go-compat`, `go-clock`, `go-slog`, `go-prom`, `http-framing`, `go-http`,
-`docker-engine`, `testenv-core`, `repo-meta`, `service-kit`. The others are planned for `v0.1.0`
-and land one at a time.
+it. All eleven are available.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
@@ -31,7 +29,7 @@ and land one at a time.
 | `docker-engine` (available) | A Docker Engine API client over HTTP/1 that sends what moby client v0.6.0 sends: transport, version negotiation, events, decoding, moby's error texts | `tcp`, `tls`, `write`, `attach`, `test-util` (the `User-Agent` and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
 | `repo-meta` (available) | Repository meta-test checks returning problems: workspace lints and layout, Markdown links, Dockerfiles and images, toolchain pins, CI gates, lint allowlists, vacuous flags, and the licence-header and suppression script harnesses | – (each check's strictness is a parameter) |
-| `tracing-setup` | A `tracing` subscriber set up the way the projects log | `log-bridge` |
+| `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals | `runtime` |
 
 Where the projects legitimately differ, the shared code takes a parameter; one project's behaviour
@@ -262,6 +260,22 @@ droast.
 
 It depends on `go-compat` (Go's quoting, `path.Clean`, `ToLower`), `testenv-core` (default
 features: git isolation), `regex`, `serde-saphyr` and `serde_json` (the YAML), `toml` and `tempfile`.
+
+### tracing-setup
+
+The subscriber awtrix-controller, swarm-rootless-docker and bitgauge each built: tracing-subscriber's
+fmt layer, no ANSI, RFC 3339 UTC timestamps, text or one flat JSON object per line. The caller picks
+the writer (stdout, stderr, a bounded lane), the level, the format and the options; the crate
+parses no configuration.
+
+| Item | What it is |
+| --- | --- |
+| `build(writer, Format, level, Options) -> Dispatch` | the subscriber; `Format::Text` or `Format::Json` (`flatten_event`) |
+| `Options::new().target(bool).span_fields(bool)` | the target before the message (text) or as `"target"` (JSON), and the JSON `"span"`/`"spans"` fields; both shown by default, tracing-subscriber's own default; bitgauge turns both off |
+| `install_global(Dispatch)` | the process's global default; `InstallError` when one is installed |
+| `install_log_bridge()` (`log-bridge`) | routes the `log` facade in, each record with its own target, file and line (tracing-subscriber's `tracing-log` feature) |
+| `testing::Capture` (`testing`) | a writer keeping what a test logged: `bytes`, `text`, `json_lines` |
+| `testing::set_default(&Dispatch)` (`testing`) | a scoped default that never loses a record to tracing's interest cache when tests run in parallel |
 
 ### service-kit
 

@@ -1,0 +1,50 @@
+[package]
+name = "tracing-setup"
+description = "A tracing subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "tracing_setup"
+
+[lints]
+workspace = true
+
+[features]
+# Records logged through the `log` facade reach the subscriber: tracing-log's LogTracer, and
+# tracing-subscriber's own `tracing-log` feature, which makes the fmt layer print such a record's
+# own target, file and line instead of the bridge's. awtrix-controller turns it on.
+log-bridge = ["dep:tracing-log", "tracing-subscriber/tracing-log"]
+# A writer that keeps what a test logged (`testing::Capture`) and a scoped default that never
+# loses a record to tracing's interest cache (`testing::set_default`).
+testing = ["dep:serde_json"]
+
+[dependencies]
+serde_json = { version = "1.0.154", optional = true }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-log = { version = "0.2.0", default-features = false, features = ["std", "log-tracer"], optional = true }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "std"] }
+
+[dev-dependencies]
+log = "0.4.34"
+# `ansi` on in the tests only, so the no-ANSI assertions prove `with_ansi(false)`: a consumer whose
+# graph enables the feature would otherwise get escape codes.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "fmt", "json", "std"] }
+serde_json = "1.0.154"
+
+[[test]]
+name = "output"
+required-features = ["testing"]
+
+[[test]]
+name = "global"
+required-features = ["testing"]
+
+[[test]]
+name = "log_bridge"
+required-features = ["log-bridge", "testing"]
