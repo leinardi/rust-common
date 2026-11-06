@@ -106,7 +106,8 @@ impl Config {
     /// A `tcp://` host is spoken to over TLS when `DOCKER_TLS_VERIFY` is set to anything
     /// non-empty, `0` included, as moby does; TLS then reads its `key.pem`, `cert.pem` and
     /// `ca.pem` from `DOCKER_CERT_PATH`, or `$HOME/.docker` when that is unset, as moby does. A
-    /// unix host ignores both. An empty variable counts as unset. `DOCKER_TLS` (TLS without
+    /// unix host ignores both. An `http://` host with `DOCKER_TLS_VERIFY` set is refused, the two
+    /// contradicting each other; `https://` is always TLS. An empty variable counts as unset. `DOCKER_TLS` (TLS without
     /// verification) is not supported and is refused rather than ignored.
     ///
     /// `getenv` is the caller's lookup, `|name| std::env::var(name).ok()` for the process.
@@ -136,6 +137,12 @@ impl Config {
         {
             if address.is_empty() {
                 return Err(invalid(format!("DOCKER_HOST {host:?} names no address")));
+            }
+            if host.starts_with("http://") && var("DOCKER_TLS_VERIFY").is_some() {
+                return Err(invalid(format!(
+                    "DOCKER_HOST {host:?} says plain HTTP but DOCKER_TLS_VERIFY asks for TLS: \
+                     use tcp:// or https://, or unset DOCKER_TLS_VERIFY"
+                )));
             }
             let certs = var("DOCKER_CERT_PATH")
                 .or_else(|| var("HOME").map(|home| format!("{home}/.docker")));

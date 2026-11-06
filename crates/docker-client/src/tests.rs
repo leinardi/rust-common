@@ -333,6 +333,24 @@ fn from_env_needs_the_tcp_feature_for_a_tcp_host() {
     }
 }
 
+#[test]
+fn from_env_refuses_a_plain_http_host_with_tls_verify() {
+    for verify in ["1", "0"] {
+        let error = Config::from_env(env(&[
+            ("DOCKER_HOST", "http://h:2375"),
+            ("DOCKER_TLS_VERIFY", verify),
+        ]))
+        .unwrap_err();
+        let ConnectError::Invalid(text) = &error else {
+            panic!("{error:?}");
+        };
+        assert!(
+            text.contains("http://") && text.contains("DOCKER_TLS_VERIFY"),
+            "{text}"
+        );
+    }
+}
+
 #[cfg(feature = "tcp")]
 #[test]
 fn from_env_reads_a_tcp_host() {
