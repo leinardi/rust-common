@@ -475,6 +475,11 @@ pub const STAMP_FIELDS: [(&str, &str); 3] = [
     ("DATE", "BUILD_DATE"),
 ];
 
+/// The fields service-kit's `buildinfo!("<PREFIX>", ..)` reads, each as
+/// `option_env!(concat!(<PREFIX>, "_<field>"))`: [`Stamps::problems`] counts such a call as
+/// reading `<PREFIX>_<field>` for exactly these. The meta-tests check the list against the macro.
+pub const BUILDINFO_FIELDS: [&str; 3] = ["VERSION", "COMMIT", "DATE"];
+
 /// The texts the stamps are checked in.
 #[derive(Clone, Copy, Debug)]
 pub struct StampSources<'sources> {
@@ -566,14 +571,17 @@ impl Stamps<'_> {
 }
 
 impl Stamps<'_> {
-    /// What is wrong with the stamps in `sources`: the version module reads each variable with
-    /// `option_env!`; the build stage declares each field's argument and sets each variable from
-    /// it inside the one RUN that runs the build command; the Makefile's last `RUST_STAMP_PREFIX`
-    /// assignment is exactly `RUST_STAMP_PREFIX := <prefix>` (make keeps a trailing space in the
-    /// value); `rust.mk`'s `RUST_VERSION_ENV` stamps each field from its make variable and the
-    /// recipe of its last `rust-build` rule starts with `$(RUST_VERSION_ENV)`; and the release
-    /// recipe, if any, carries it. Comments never count. A path that stamped nothing would ship
-    /// a binary reporting its unstamped default.
+    /// What is wrong with the stamps in `sources`: the version module reads each variable, with
+    /// `option_env!("<variable>")` or through service-kit's `buildinfo!("<prefix>", ..)` (called
+    /// as `service_kit::buildinfo!`, or imported from `service_kit` and not shadowed by a
+    /// `macro_rules! buildinfo`), which reads each of [`BUILDINFO_FIELDS`]; the build stage
+    /// declares each field's argument and sets each variable from it inside the one RUN that runs
+    /// the build command; the Makefile's last `RUST_STAMP_PREFIX` assignment is exactly
+    /// `RUST_STAMP_PREFIX := <prefix>` (make keeps a trailing space in the value); `rust.mk`'s
+    /// `RUST_VERSION_ENV` stamps each field from its make variable and the recipe of its last
+    /// `rust-build` rule starts with `$(RUST_VERSION_ENV)`; and the release recipe, if any,
+    /// carries it. Comments never count, nor does a read quoted in a string literal. A path that
+    /// stamped nothing would ship a binary reporting its unstamped default.
     #[must_use]
     pub fn problems(&self, sources: &StampSources<'_>) -> Vec<Problem> {
         let mut problems = Vec::new();
@@ -621,12 +629,10 @@ impl Stamps<'_> {
             }
         };
         let args = stage_args(sources.build);
+        let reads = stamp_reads::stamp_reads(sources.version_rs);
         for (field, source) in self.fields {
             let variable = format!("{}_{field}", self.prefix);
-            if !sources
-                .version_rs
-                .contains(&format!("option_env!(\x22{variable}\x22)"))
-            {
+            if !reads.contains(&variable) {
                 problems.push(Problem::new(format!(
                     "{} does not read {variable}",
                     self.version_file
@@ -885,5 +891,6 @@ pub fn is_dockerfile_path(path: &str) -> bool {
         .is_some_and(is_dockerfile)
 }
 
+mod stamp_reads;
 #[cfg(test)]
 mod tests;

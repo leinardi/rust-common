@@ -943,6 +943,61 @@ fn stamp_rules() {
     );
 }
 
+/// A version module that reads the stamps through service-kit's `buildinfo!` passes; under
+/// another prefix, commented out, or with a `buildinfo!` that is not service-kit's, it reads none
+/// of the three, each a "does not read" problem; and a field `buildinfo!` does not read is one.
+#[test]
+fn stamp_rules_accept_service_kits_buildinfo() {
+    let stamps = Stamps {
+        prefix: "APP",
+        fields: &STAMP_FIELDS,
+        version_file: "src/version.rs",
+        build_command: "cargo zigbuild",
+    };
+    let version_rs = "use service_kit::{BuildInfo, Defaults, EmptyStamp, buildinfo};\n\
+                      pub const BUILD: BuildInfo = buildinfo!(\n    \x22APP\x22,\n    D,\n);\n";
+    let build = stage(&sample(), "build");
+    let makefile = "RUST_STAMP_PREFIX := APP\n";
+    let fragment = "RUST_VERSION_ENV = $(if $(strip $(RUST_STAMP_PREFIX)), \\\n\
+                    \x20 $(RUST_STAMP_PREFIX)_VERSION=\x22$(GIT_VERSION)\x22 \\\n\
+                    \x20 $(RUST_STAMP_PREFIX)_COMMIT=\x22$(GIT_COMMIT)\x22 \\\n\
+                    \x20 $(RUST_STAMP_PREFIX)_DATE=\x22$(BUILD_DATE)\x22)\n\
+                    \n\
+                    rust-build: ## Build\n\
+                    \t$(RUST_VERSION_ENV) $(CARGO) build --workspace\n";
+    let check = |stamps: &Stamps<'_>, version_rs: &str| {
+        strings(&stamps.problems(&StampSources {
+            version_rs,
+            build: &build,
+            makefile,
+            rust_mk: fragment,
+            release: None,
+        }))
+    };
+    assert_eq!(check(&stamps, version_rs), Vec::<String>::new());
+    let none_read = [
+        "src/version.rs does not read APP_VERSION",
+        "src/version.rs does not read APP_COMMIT",
+        "src/version.rs does not read APP_DATE",
+    ];
+    for broken in [
+        version_rs.replace("\x22APP\x22", "\x22OTHER\x22"),
+        version_rs.replace("pub const BUILD", "// pub const BUILD"),
+        version_rs.replace("use service_kit::", "use other_kit::"),
+        format!("{version_rs}macro_rules! buildinfo {{ ($p:literal, $d:expr) => {{ 0 }} }}\n"),
+    ] {
+        assert_eq!(check(&stamps, &broken), none_read, "{broken:?}");
+    }
+    let extra = Stamps {
+        fields: &[("VERSION", "GIT_VERSION"), ("BRANCH", "GIT_BRANCH")],
+        ..stamps
+    };
+    assert!(
+        check(&extra, version_rs).contains(&"src/version.rs does not read APP_BRANCH".to_owned()),
+        "a field buildinfo! does not read was accepted"
+    );
+}
+
 /// A healthcheck, an exposed port, a non-root user, a shell command, a pinned platform and another
 /// base are each refused; an extra or missing label too, and an empty label list.
 #[test]
