@@ -19,16 +19,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bollard::{API_DEFAULT_VERSION, Docker};
-use go_clock::FakeClock;
-use go_slog::MemorySink;
 use jiff::Timestamp;
-use jiff::tz::TimeZone;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixListener;
 
 use super::{HostSweep, OP_TIMEOUT, OpError, process_alive, sweep_rules, with_timeout};
 use crate::context::{Context, Ended};
-use crate::redact::RedactingLogger;
+use crate::redact::Logger;
 use crate::sweep_rules::{Labels, Owner, Resources, current_pid_namespace, hostname};
 
 const LABELS: Labels = Labels {
@@ -187,13 +184,21 @@ fn labels_json(env_id: &str, owner: &Owner, started: &str) -> String {
     )
 }
 
-fn logger(sink: &MemorySink) -> RedactingLogger {
-    let at: Timestamp = "2026-10-11T12:00:00Z".parse().unwrap();
-    RedactingLogger::new(
-        Box::new(sink.clone()),
-        TimeZone::UTC,
-        Arc::new(FakeClock::new(at)),
-    )
+/// Collects the lines the logger writes.
+#[derive(Clone, Default)]
+struct MemorySink(Arc<Mutex<Vec<String>>>);
+
+impl MemorySink {
+    fn contents(&self) -> String {
+        let mut lines = self.0.lock().unwrap().join("\n");
+        lines.push('\n');
+        lines
+    }
+}
+
+fn logger(sink: &MemorySink) -> Logger {
+    let lines = Arc::clone(&sink.0);
+    Logger::new(move |line| lines.lock().unwrap().push(line.to_owned()))
 }
 
 /// The decisions on three runs: an abandoned one is removed (its containers with their volumes,

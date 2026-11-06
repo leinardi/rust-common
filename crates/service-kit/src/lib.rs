@@ -23,12 +23,21 @@
 //!   the program's deadline (`Exit`).
 //! - `signal` (feature `runtime`, Unix): `shutdown_signal` and `lazy_shutdown_signal` for SIGINT
 //!   and SIGTERM, `hangup_channel` for SIGHUP.
+//! - `http` (feature `http`): `serve`, a minimal HTTP/1 server with header-read and write-stall
+//!   timeouts and a bounded graceful drain (`Lifecycle`, `ServerConfig`, `Outcome`).
+//! - `process` (feature `process-metrics`): `ProcessCollector`, the `process_*` metrics for
+//!   prometheus-client, read from `/proc` on Linux.
 //!
 //! Extracted from swarm-device-access/src/run.rs and src/main.rs at 8b4ab3a3e417,
 //! swarm-scheduler-exporter/src/run.rs, src/main.rs and src/version.rs at c9e79afa8810,
-//! awtrix-controller/src/main.rs at afcd9ca26324 and bitgauge/src/buildinfo.rs at 600fc3905200;
-//! each module names the files it came from.
+//! awtrix-controller/src/main.rs at afcd9ca26324, bitgauge/src/buildinfo.rs at 600fc3905200,
+//! bitgauge/src/server/conn.rs and timeouts.rs at d841694700a5, and rust-common's go-prom
+//! process collector at 9825e08; each module names the files it came from.
 
+#[cfg(feature = "http")]
+pub mod http;
+#[cfg(feature = "process-metrics")]
+pub mod process;
 #[cfg(feature = "runtime")]
 pub mod runtime;
 #[cfg(all(feature = "runtime", unix))]

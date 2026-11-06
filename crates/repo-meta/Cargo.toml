@@ -18,7 +18,6 @@ workspace = true
 [dependencies]
 # Go's strconv.Quote for a link target in a problem, path.Clean for a resolved link and
 # strings.ToLower for a heading slug, as the Go link checker the consumers ported.
-go-compat = { path = "../go-compat" }
 # The scan patterns: links, Dockerfile references, pins, flags and lint attributes.
 regex = "1.13.1"
 # The workflows, composite actions and the pre-commit configuration, read into serde_json's

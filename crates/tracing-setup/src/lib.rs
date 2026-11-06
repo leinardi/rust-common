@@ -18,6 +18,9 @@
 //! configuration and prints nothing itself.
 //!
 //! - [`build`] makes the [`Dispatch`]; a test scopes it with `tracing::dispatcher::with_default`.
+//! - [`build_reloadable`] also returns a [`ReloadHandle`] that changes the format and the level
+//!   while the dispatch is installed (a SIGHUP reload).
+//! - [`Options::time`] turns the timestamp off, for a supervisor that stamps the lines.
 //! - [`install_global`] makes it the process's global default.
 //! - `install_log_bridge` (feature `log-bridge`) routes the `log` facade into it.
 //! - `testing` (feature `testing`): `Capture`, a writer that keeps what a test logged, and
@@ -32,10 +35,16 @@
 //! `log-bridge` feature.
 
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use tracing::Dispatch;
 use tracing::level_filters::LevelFilter;
+use tracing::subscriber::Interest;
+use tracing::{Dispatch, Event, Metadata, Subscriber, span};
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::{Context, Layered, SubscriberExt as _};
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::{Layer, Registry, reload};
 
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -52,13 +61,14 @@ pub enum Format {
     Json,
 }
 
-/// What the subscriber shows beyond the timestamp, the level, the message and the fields. The
+/// What the subscriber shows beyond the level, the message and the fields. The
 /// default is tracing-subscriber's own: both shown, as awtrix-controller and swarm-rootless-docker
 /// log; bitgauge turns both off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     target: bool,
     span_fields: bool,
+    time: bool,
 }
 
 impl Default for Options {
@@ -74,6 +84,7 @@ impl Options {
         Self {
             target: true,
             span_fields: true,
+            time: true,
         }
     }
 
@@ -97,6 +108,16 @@ impl Options {
         }
     }
 
+    /// Whether each record starts with its RFC 3339 UTC timestamp (text) or carries `"timestamp"`
+    /// (JSON). On by default; off for a process whose supervisor stamps the lines.
+    #[must_use]
+    pub const fn time(self, shown: bool) -> Self {
+        Self {
+            time: shown,
+            ..self
+        }
+    }
+
     /// Whether the target is shown.
     #[must_use]
     pub const fn shows_target(self) -> bool {
@@ -107,6 +128,40 @@ impl Options {
     #[must_use]
     pub const fn shows_span_fields(self) -> bool {
         self.span_fields
+    }
+
+    /// Whether the timestamp is shown.
+    #[must_use]
+    pub const fn shows_time(self) -> bool {
+        self.time
+    }
+}
+
+/// The fmt layer for `format` and `options`, writing to `writer`.
+fn fmt_layer<S, W>(writer: W, format: Format, options: Options) -> BoxedLayer<S>
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let layer = tracing_subscriber::fmt::layer()
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_target(options.target);
+    match (format, options.time) {
+        (Format::Text, true) => Box::new(layer),
+        (Format::Text, false) => Box::new(layer.without_time()),
+        (Format::Json, time) => {
+            let layer = layer
+                .json()
+                .flatten_event(true)
+                .with_current_span(options.span_fields)
+                .with_span_list(options.span_fields);
+            if time {
+                Box::new(layer)
+            } else {
+                Box::new(layer.without_time())
+            }
+        }
     }
 }
 
@@ -120,21 +175,254 @@ pub fn build<W>(
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
-    let builder = tracing_subscriber::fmt()
-        .with_writer(writer)
-        .with_max_level(level.into())
-        .with_ansi(false)
-        .with_target(options.target);
-    match format {
-        Format::Text => Dispatch::new(builder.finish()),
-        Format::Json => Dispatch::new(
-            builder
-                .json()
-                .flatten_event(true)
-                .with_current_span(options.span_fields)
-                .with_span_list(options.span_fields)
-                .finish(),
-        ),
+    Dispatch::new(
+        tracing_subscriber::registry()
+            .with(fmt_layer(writer, format, options))
+            .with(level.into()),
+    )
+}
+
+type BoxedLayer<S> = Box<dyn Layer<S> + Send + Sync + 'static>;
+type FmtSubscriber = Layered<Switch<BoxedLayer<Registry>, BoxedLayer<Registry>>, Registry>;
+
+/// A writer shared by the text layer and the JSON layer of a reloadable subscriber.
+#[derive(Debug)]
+struct Shared<W>(Arc<W>);
+
+impl<'writer, W> MakeWriter<'writer> for Shared<W>
+where
+    W: MakeWriter<'writer>,
+{
+    type Writer = W::Writer;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.0.make_writer()
+    }
+
+    fn make_writer_for(&'writer self, meta: &Metadata<'_>) -> Self::Writer {
+        self.0.make_writer_for(meta)
+    }
+}
+
+/// The text layer and the JSON layer as one. Span callbacks always reach both, so each keeps
+/// every span's fields in its own representation (`FormattedFields<DefaultFields>` for text,
+/// `FormattedFields<JsonFields>` for JSON), whichever format was active when the span was created
+/// or recorded. An event reaches exactly one of them: the format is read once per event, so a
+/// switch from another thread cannot make one event print twice or not at all.
+struct Switch<T, J> {
+    text: T,
+    json: J,
+    /// Whether JSON is the active format.
+    active: Arc<AtomicBool>,
+}
+
+impl<S, T, J> Layer<S> for Switch<T, J>
+where
+    S: Subscriber,
+    T: Layer<S>,
+    J: Layer<S>,
+{
+    fn on_register_dispatch(&self, subscriber: &Dispatch) {
+        self.text.on_register_dispatch(subscriber);
+        self.json.on_register_dispatch(subscriber);
+    }
+
+    fn on_layer(&mut self, subscriber: &mut S) {
+        self.text.on_layer(subscriber);
+        self.json.on_layer(subscriber);
+    }
+
+    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
+        // Both must see the callsite registered; the interest is what either wants.
+        let (text, json) = (
+            self.text.register_callsite(metadata),
+            self.json.register_callsite(metadata),
+        );
+        if text.is_never() && json.is_never() {
+            Interest::never()
+        } else if text.is_always() && json.is_always() {
+            Interest::always()
+        } else {
+            Interest::sometimes()
+        }
+    }
+
+    fn enabled(&self, metadata: &Metadata<'_>, ctx: Context<'_, S>) -> bool {
+        let text = self.text.enabled(metadata, ctx.clone());
+        let json = self.json.enabled(metadata, ctx);
+        text || json
+    }
+
+    fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+        self.text.on_new_span(attrs, id, ctx.clone());
+        self.json.on_new_span(attrs, id, ctx);
+    }
+
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        Some(self.text.max_level_hint()?.max(self.json.max_level_hint()?))
+    }
+
+    fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, S>) {
+        self.text.on_record(id, values, ctx.clone());
+        self.json.on_record(id, values, ctx);
+    }
+
+    fn on_follows_from(&self, id: &span::Id, follows: &span::Id, ctx: Context<'_, S>) {
+        self.text.on_follows_from(id, follows, ctx.clone());
+        self.json.on_follows_from(id, follows, ctx);
+    }
+
+    fn event_enabled(&self, event: &Event<'_>, ctx: Context<'_, S>) -> bool {
+        let text = self.text.event_enabled(event, ctx.clone());
+        let json = self.json.event_enabled(event, ctx);
+        text || json
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        if self.active.load(Ordering::Acquire) {
+            self.json.on_event(event, ctx);
+        } else {
+            self.text.on_event(event, ctx);
+        }
+    }
+
+    fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
+        self.text.on_enter(id, ctx.clone());
+        self.json.on_enter(id, ctx);
+    }
+
+    fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+        self.text.on_exit(id, ctx.clone());
+        self.json.on_exit(id, ctx);
+    }
+
+    fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
+        self.text.on_close(id.clone(), ctx.clone());
+        self.json.on_close(id, ctx);
+    }
+
+    fn on_id_change(&self, old: &span::Id, new: &span::Id, ctx: Context<'_, S>) {
+        self.text.on_id_change(old, new, ctx.clone());
+        self.json.on_id_change(old, new, ctx);
+    }
+}
+
+/// Like [`build`], for a subscriber whose format and level change while it is installed: the
+/// [`Dispatch`] to install, and the [`ReloadHandle`] that reconfigures it. The options stay as
+/// given.
+///
+/// Both formats are always built: a text layer and a JSON layer share the writer, and each keeps
+/// the span fields in its own representation, as a span created under one format must render in
+/// the other after a switch. The active format picks which of the two writes each event.
+pub fn build_reloadable<W>(
+    writer: W,
+    format: Format,
+    level: impl Into<LevelFilter>,
+    options: Options,
+) -> (Dispatch, ReloadHandle)
+where
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let writer = Arc::new(writer);
+    let active = Arc::new(AtomicBool::new(format == Format::Json));
+    let switch = Switch {
+        text: fmt_layer(Shared(Arc::clone(&writer)), Format::Text, options),
+        json: fmt_layer(Shared(writer), Format::Json, options),
+        active: Arc::clone(&active),
+    };
+    let (level_layer, level_handle) = reload::Layer::new(level.into());
+    let dispatch = Dispatch::new(
+        tracing_subscriber::registry()
+            .with(switch)
+            .with(level_layer),
+    );
+    let handle = ReloadHandle {
+        active,
+        level: level_handle,
+    };
+    (dispatch, handle)
+}
+
+/// Reconfigures a subscriber made by [`build_reloadable`]. Cheap to clone; every clone drives the
+/// same subscriber, from any thread. The level is held weakly: once the [`Dispatch`] is gone,
+/// every call fails with [`ReloadError`].
+#[derive(Clone)]
+pub struct ReloadHandle {
+    active: Arc<AtomicBool>,
+    level: reload::Handle<LevelFilter, FmtSubscriber>,
+}
+
+impl fmt::Debug for ReloadHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReloadHandle")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReloadHandle {
+    /// Switches to `format` and `level`. The two swap one after the other, so a record logged
+    /// between them sees one new and one old setting.
+    ///
+    /// # Errors
+    ///
+    /// [`ReloadError`] when the subscriber is gone.
+    pub fn reconfigure(
+        &self,
+        format: Format,
+        level: impl Into<LevelFilter>,
+    ) -> Result<(), ReloadError> {
+        self.set_format(format)?;
+        self.set_level(level)
+    }
+
+    /// Switches to `level`, keeping the format.
+    ///
+    /// # Errors
+    ///
+    /// [`ReloadError`] when the subscriber is gone.
+    pub fn set_level(&self, level: impl Into<LevelFilter>) -> Result<(), ReloadError> {
+        self.level.reload(level.into()).map_err(ReloadError::new)
+    }
+
+    /// Switches to `format`, keeping the level.
+    ///
+    /// # Errors
+    ///
+    /// [`ReloadError`] when the subscriber is gone.
+    pub fn set_format(&self, format: Format) -> Result<(), ReloadError> {
+        self.level.with_current(|_| ()).map_err(ReloadError::new)?;
+        self.active.store(format == Format::Json, Ordering::Release);
+        Ok(())
+    }
+}
+
+/// A [`ReloadHandle`] outlived its subscriber, or the subscriber's lock was poisoned.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ReloadError {
+    source: reload::Error,
+}
+
+impl ReloadError {
+    const fn new(source: reload::Error) -> Self {
+        Self { source }
+    }
+}
+
+impl fmt::Display for ReloadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "the log subscriber could not be reconfigured: {}",
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for ReloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
     }
 }
 

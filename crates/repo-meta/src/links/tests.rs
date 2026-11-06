@@ -20,7 +20,7 @@
 
 use std::fs;
 
-use super::{Checker, anchors, check_repository, is_markdown, slug, targets};
+use super::{Checker, anchors, check_repository, clean, is_markdown, slug, targets};
 use crate::scratch::ScratchRepo;
 use crate::strings;
 
@@ -109,7 +109,27 @@ fn check_text_reads_a_copy_as_the_file() {
     );
 }
 
-/// A target is quoted the way Go's `%q` quotes it.
+#[test]
+fn clean_is_lexical_like_go() {
+    for (input, want) in [
+        ("", "."),
+        (".", "."),
+        ("a//b/./c", "a/b/c"),
+        ("a/b/..", "a"),
+        ("a/..", "."),
+        ("a/../..", ".."),
+        ("../a", "../a"),
+        ("../../a/b/../c", "../../a/c"),
+        ("/..", "/"),
+        ("/a/../../b", "/b"),
+        ("a/b/", "a/b"),
+        ("docs/./x.md", "docs/x.md"),
+    ] {
+        assert_eq!(clean(input), want, "clean({input:?})");
+    }
+}
+
+/// A target is quoted with `{:?}`, which escapes a double quote as Go's `%q` does.
 #[test]
 fn a_target_is_quoted_as_go_does() {
     let tree = scratch(&[("a.md", "[x](<sp ace\"q.md>)\n")]);

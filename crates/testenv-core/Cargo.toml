@@ -32,17 +32,15 @@ sync = ["dep:tempfile"]
 # The host daemon's sweep, listing and cleanup on bollard, and the PID liveness check. The sweep
 # logs its decisions through the redacting logger, and its calls run under a context.
 bollard = ["async", "redact", "dep:bollard", "dep:rustix"]
-# The harness's slog text log with secrets redacted, on go-slog.
-redact = ["dep:go-slog"]
+# The harness's log with secrets redacted, on plain strings (no logging crate): Secret, redact_env,
+# Log and Logger.
+redact = []
 
 [dependencies]
-# Go's time.ParseDuration and Duration.String, strconv.Quote and errors.Join.
-go-compat = { path = "../go-compat" }
-# The sweep's started label, read as RFC 3339; as in go-compat, no tzdb or system feature.
+# The sweep's started label, read as RFC 3339; no tzdb or system feature.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The run filter: Go's -run patterns are regular expressions.
 regex = "1.13.1"
-go-slog = { path = "../go-slog", optional = true }
 # The suite deadline, its signals and select!, on the caller's current-thread runtime.
 tokio = { version = "1.54.1", default-features = false, features = [
     "rt",
@@ -65,8 +63,6 @@ rustix = { version = "1.1.6", default-features = false, features = [
 ], optional = true }
 
 [dev-dependencies]
-# The redacting logger's record times, from a clock the test sets.
-go-clock = { path = "../go-clock" }
 tempfile = "3.27.0"
 # The paused clock, and the fake daemon's socket and I/O for the host helpers' tests.
 tokio = { version = "1.54.1", default-features = false, features = [

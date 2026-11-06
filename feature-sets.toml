@@ -16,10 +16,9 @@
 # `{}` is the default features. Any other key, an empty array, or a crate whose manifest is
 # missing fails the run. Example:
 #
-#   docker-engine = [
+#   docker-client = [
 #       { no-default-features = true },
-#       { features = ["tcp", "tls"] },      # swarm-scheduler-exporter
-#       { features = ["write", "attach"] }, # swarm-device-access
+#       { features = ["attach", "test-util"] }, # swarm-rootless-docker
 #       { all-features = true },
 #   ]
 #
@@ -27,67 +26,9 @@
 # with a --no-default-features set and an --all-features set, and every feature it declares is
 # named in at least one set. Add the exact set each consumer uses.
 
-# docker-engine: swarm-scheduler-exporter builds it with `tcp` and `tls` (DOCKER_HOST, TCP, TLS,
-# gzip; its own User-Agent and a 30s response-header timeout by parameter), adding `test-util` for
-# its tests; swarm-device-access with `write` and `attach` (its launcher's writes, the hijacked
-# attach, stdcopy and the wait answer; moby's User-Agent, no header timeout), adding `test-util`
-# likewise. Every feature is also built alone; with none it speaks to a unix socket only.
-docker-engine = [
-    { no-default-features = true },
-    { features = ["tcp"] },
-    { features = ["tls"] },
-    { features = ["write"] },
-    { features = ["attach"] },
-    { features = ["test-util"] },
-    { features = ["tcp", "tls"] },                 # swarm-scheduler-exporter
-    { features = ["tcp", "tls", "test-util"] },    # swarm-scheduler-exporter's tests
-    { features = ["write", "attach"] },            # swarm-device-access
-    { features = ["write", "attach", "test-util"] }, # swarm-device-access's tests
-    { all-features = true },
-]
-
-# go-compat has no features: both sets build the same crate, and are listed because every crate has
-# them.
-go-compat = [
-    { no-default-features = true },
-    { all-features = true },
-]
-
-# go-clock has no features; swarm-scheduler-exporter, swarm-device-access and awtrix-controller use
+# clock has no features; swarm-scheduler-exporter, swarm-device-access and awtrix-controller use
 # it as it is.
-go-clock = [
-    { no-default-features = true },
-    { all-features = true },
-]
-
-# go-prom: swarm-scheduler-exporter and swarm-device-access build it with no features (the default
-# enables nothing) and pick their expfmt negotiation by parameter (ExpfmtVersion::V0_71_0 and
-# V0_70_1); swarm-scheduler-exporter's collector tests add `testing` (gather_series, series_id).
-go-prom = [
-    { no-default-features = true },
-    { features = ["testing"] },
-    { all-features = true },
-]
-
-# go-slog has no features: swarm-scheduler-exporter (the global logger, PlainStyle::Quoted, the
-# strict parsers) and swarm-device-access (LogHandle, PlainStyle::Raw, the fallback parsers) choose
-# by parameter, so both build it as it is.
-go-slog = [
-    { no-default-features = true },
-    { all-features = true },
-]
-
-# go-http: swarm-scheduler-exporter and swarm-device-access build it with no features (each passes
-# its own Timeouts and ListenError prefix) and add `testing` for their Go wire-capture tests.
-go-http = [
-    { no-default-features = true },
-    { features = ["testing"] },
-    { all-features = true },
-]
-
-# http-framing has no features; swarm-scheduler-exporter and swarm-device-access use it through
-# go-http, and bitgauge directly.
-http-framing = [
+clock = [
     { no-default-features = true },
     { all-features = true },
 ]
@@ -95,9 +36,15 @@ http-framing = [
 # service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
 # no-default-features set, as the default enables nothing); swarm-scheduler-exporter and
 # swarm-device-access also use the runtime and the signals, awtrix-controller the runtime only.
+# `http` (the minimal server) and `process-metrics` (the `process_*` collector) are for bitgauge,
+# swarm-scheduler-exporter and swarm-device-access; every feature is also built alone.
 service-kit = [
     { no-default-features = true },
     { features = ["runtime"] },
+    { features = ["http"] },
+    { features = ["process-metrics"] },
+    { features = ["http", "process-metrics"] },            # bitgauge
+    { features = ["runtime", "http", "process-metrics"] }, # swarm-scheduler-exporter, swarm-device-access
     { all-features = true },
 ]
 
@@ -133,5 +80,20 @@ tracing-setup = [
     { features = ["log-bridge"] },
     { features = ["testing"] },
     { features = ["log-bridge", "testing"] }, # awtrix-controller's tests
+    { all-features = true },
+]
+
+# docker-client: swarm-rootless-docker builds it with `attach` (the host socket only: unix, no
+# TCP) and `test-util` for its tests; a program that reads DOCKER_HOST adds `tcp` (and `tls` for
+# DOCKER_TLS_VERIFY and DOCKER_CERT_PATH). The User-Agent, the API version and the
+# response-header timeout are parameters. Every feature is also built alone.
+docker-client = [
+    { no-default-features = true },
+    { features = ["tcp"] },
+    { features = ["tls"] },
+    { features = ["attach"] },
+    { features = ["test-util"] },
+    { features = ["attach", "test-util"] },     # swarm-rootless-docker, with its tests
+    { features = ["tcp", "tls", "test-util"] }, # a DOCKER_HOST client, with its tests
     { all-features = true },
 ]

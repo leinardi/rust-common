@@ -142,7 +142,7 @@ All commits MUST be Conventional Commits 1.0.0 **with a scope**:
 `conventional-pre-commit` `commit-msg` hook (`--force-scope`, installed by
 `make pre-commit-install`) and by the `conventional-commits` CI job. Types: `feat`, `fix`, `docs`,
 `test`, `refactor`, `perf`, `build`, `ci`, `chore`, `style`, `revert`. The scope is the crate
-(`fix(go-prom): ...`, `feat(docker-engine): ...`) or the area (`ci(rust)`, `build(make)`,
+(`fix(service-kit): ...`, `feat(docker-client): ...`) or the area (`ci(rust)`, `build(make)`,
 `docs(readme)`). Breaking changes use `!` before `:` or a `BREAKING CHANGE:` footer. Release notes
 are not built from these messages: `gh release create --generate-notes` lists the merged pull
 requests by title.
@@ -152,9 +152,9 @@ so a wrong type ships a wrong version:
 
 | Release | Commit | Example |
 | --- | --- | --- |
-| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer | `feat(go-slog)!: take the level parser as a parameter` |
-| minor | `feat` | `feat(docker-engine): add the attach feature` |
-| patch | `fix` | `fix(go-http): enforce an earlier deadline at once` |
+| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer | `feat(tracing-setup)!: take the writer as a parameter` |
+| minor | `feat` | `feat(docker-client): add the attach feature` |
+| patch | `fix` | `fix(service-kit): enforce an earlier deadline at once` |
 | none | everything else: `perf`, `refactor`, `build`, `ci`, `chore`, `docs`, `style`, `test`, `revert` | `docs(readme): fix a link` |
 
 The highest bump among the commits wins; with only "none" commits since the last tag, a release

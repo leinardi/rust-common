@@ -1,0 +1,82 @@
+[package]
+name = "docker-client"
+description = "Small shared plumbing over bollard: a connection from DOCKER_HOST, a whole-call timeout, an error with a kind, a stream pump, and a fake engine for tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "docker_client"
+
+[lints]
+workspace = true
+
+[features]
+# `tcp://` and `http://` daemons, and DOCKER_HOST read for them.
+tcp = ["bollard/http", "dep:socket2"]
+# `https://` daemons and DOCKER_TLS_VERIFY with DOCKER_CERT_PATH: rustls on ring, the system roots
+# plus ca.pem, as bollard does it.
+tls = [
+    "tcp",
+    "bollard/ssl",
+    "dep:rustls",
+    "dep:rustls-native-certs",
+    "dep:rustls-pki-types",
+    "dep:tokio-rustls",
+]
+# The attach output pump and the wait answer.
+attach = []
+# The fake engine on a unix socket that the consumers' tests share.
+test-util = ["tokio/net", "tokio/io-util"]
+
+[dependencies]
+# The Docker SDK: the unix socket only (pipe); `tcp` and `tls` add its http and ssl. The version is
+# pinned as testenv-core and the consumers pin it.
+bollard = { version = "=0.21.1", default-features = false, features = ["pipe"] }
+# The User-Agent header value that bollard's request modifier inserts.
+http = "1.5.0"
+# Stream and StreamExt for the pump.
+futures-util = { version = "0.3.34", default-features = false }
+thiserror = "2.0.21"
+# The pump's task, its channels, select! and the whole-call timer.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "rt",
+    "time",
+    "sync",
+    "macros",
+    "net",
+] }
+# The header-awaiting streaming calls: hyper's one-connection client over the unix or TCP socket,
+# the body as a stream, the query string and the JSON they answer with. All are in bollard's own
+# graph already.
+bytes = "1.12.1"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+serde_json = "1.0.154"
+serde_urlencoded = "0.7.1"
+# TCP keepalive on the streaming calls' connection (tcp feature).
+# TLS on the streaming calls, trusting what bollard's ssl path trusts (system roots plus ca.pem; on
+# bollard's own rustls, ring provider; tls feature).
+rustls = { version = "0.23.46", default-features = false, features = ["std", "ring"], optional = true }
+rustls-native-certs = { version = "0.8.5", optional = true }
+rustls-pki-types = { version = "1.15.1", optional = true }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"], optional = true }
+socket2 = { version = "0.6.3", features = ["all"], optional = true }
+# CancellationToken, Go's context cancellation.
+tokio-util = { version = "0.7.20", default-features = false }
+
+[dev-dependencies]
+# The fake engine's socket and I/O under the library's own tests, whatever the features.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "rt",
+    "time",
+    "sync",
+    "macros",
+    "net",
+    "io-util",
+] }

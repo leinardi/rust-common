@@ -293,7 +293,7 @@ mod tests {
                 "e.rs".to_owned(),
                 "    let client = bollard::Docker::connect();".to_owned(),
             ),
-            ("f.rs".to_owned(), "use docker_engine::Client;".to_owned()),
+            ("f.rs".to_owned(), "use docker_client::Client;".to_owned()),
         ];
         let found: Vec<String> = docker_drivers(&files, &["bollard"])
             .into_iter()
@@ -301,7 +301,7 @@ mod tests {
             .collect();
         assert_eq!(found, ["a.rs", "b.rs", "e.rs"]);
         assert_eq!(
-            docker_drivers(&files, &["bollard", "docker_engine"]).len(),
+            docker_drivers(&files, &["bollard", "docker_client"]).len(),
             4
         );
     }
