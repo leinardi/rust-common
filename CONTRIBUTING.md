@@ -79,6 +79,15 @@ version `X.Y.Z`:
    with it: the `vX.Y.Z` tag on the merge commit, the release with generated notes, and `vMAJOR`
    and `latest` moved when it is the highest release. A failed run is finished by re-running it.
 
-Never edit the version or push a tag by hand: a `version` change merged to `main` by any pull
-request is released. Then move each consumer to the new `tag`, with `version` set to the tag's
-`<major>.<minor>` (cargo checks that requirement against the crates' version).
+- **The version is chosen at dispatch.** If `main` moves before the bump pull request is merged,
+  close it and dispatch again, so the version counts the new commits.
+- **A failed Release run** is finished by re-running it: a leftover `release/vX.Y.Z` branch without
+  a pull request is recreated, and an open pull request gets its CI run again.
+- **Never edit the version or push a tag by hand.** A version change merged to `main` by anything
+  but the `release/vX.Y.Z` pull request fails Auto Tag Release instead of tagging.
+- **v0.2.0 is tagged on crates that still say `0.1.0`** (it predates this flow), so its consumers
+  write `version = "0.1"`. The next release needs an explicit version, `0.2.1` or above, since
+  `0.2.0` is taken.
+
+Then move each consumer to the new `tag`, with `version` set to the tag's `<major>.<minor>` (cargo
+checks that requirement against the crates' version).

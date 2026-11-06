@@ -85,8 +85,9 @@ jobs:
           set -euo pipefail
 
           # The highest strict release tag in its input, or nothing.
+          # ENVIRON, not -v: awk runs escape processing on -v values, turning `\.` into `.`.
           highest_release() {
-            awk -v re="$RELEASE_TAG_REGEX" '$0 ~ re' | sort -V | tail -n1
+            awk '$0 ~ ENVIRON["RELEASE_TAG_REGEX"]' | sort -V | tail -n1
           }
           # The crates' package version, from [workspace.package].
           CRATES=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
@@ -179,6 +180,13 @@ jobs:
             echo "Expected Cargo.toml and Cargo.lock to change, got: $CHANGED" >&2
             exit 1
           fi
+          # Every line the resolve added to Cargo.lock is a workspace entry's new version.
+          STRAY=$(git diff -U0 Cargo.lock | awk '/^\+[^+]/ && $0 != "+version = \"" ENVIRON["VERSION"] "\""')
+          if [ -n "$STRAY" ]; then
+            echo "The resolve changed more than the workspace versions in Cargo.lock:" >&2
+            echo "$STRAY" >&2
+            exit 1
+          fi
           git diff
 
       - name: Commit and push the bump branch
@@ -195,12 +203,16 @@ jobs:
 
           # A run that failed after this push leaves the branch behind. The branch is derived
           # state (main plus the version lines), so recreating it is correct; an open pull
-          # request on it is not, and deleting the branch would close it silently.
+          # request on it is not, and deleting the branch would close it silently. A run that
+          # failed after opening the pull request is finished by running its CI again.
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             OPEN_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')
             if [ -n "$OPEN_PR" ]; then
-              echo "$BRANCH already has an open pull request (#$OPEN_PR). Merge or close it before releasing $VERSION again." >&2
-              exit 1
+              echo "$BRANCH already has an open pull request (#$OPEN_PR); running its CI again. Close it to release $VERSION from a fresh main."
+              gh workflow run ci.yaml --ref "$BRANCH"
+              echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+              echo "reused=true" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
             echo "Deleting $BRANCH, left behind by an earlier run."
             git push origin --delete "$BRANCH"
@@ -213,7 +225,7 @@ jobs:
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Open the pull request
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.branch.outputs.reused != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -229,7 +241,7 @@ jobs:
       # Insurance against the documented rule that a GITHUB_TOKEN-authored pull request fires no
       # `pull_request` run; ci-result also runs on workflow_dispatch.
       - name: Run CI on the bump branch
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.branch.outputs.reused != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.branch.outputs.branch }}
