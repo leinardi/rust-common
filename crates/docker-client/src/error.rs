@@ -57,6 +57,8 @@ enum Repr {
     Engine(BollardError),
     Timeout(Duration),
     Cancelled,
+    // A fresh client for negotiation could not be built from the `Config`.
+    Connect(crate::ConnectError),
 }
 
 impl Error {
@@ -71,7 +73,19 @@ impl Error {
     pub fn engine(&self) -> Option<&BollardError> {
         match &self.repr {
             Repr::Engine(error) => Some(error),
-            Repr::Timeout(_) | Repr::Cancelled => None,
+            Repr::Timeout(_) | Repr::Cancelled | Repr::Connect(_) => None,
+        }
+    }
+
+    pub(crate) fn connect(error: crate::ConnectError) -> Self {
+        match error {
+            crate::ConnectError::Client(error) => Self::from(error),
+            other @ (crate::ConnectError::Invalid(_) | crate::ConnectError::Unsupported(_)) => {
+                Self {
+                    kind: ErrorKind::Other,
+                    repr: Repr::Connect(other),
+                }
+            }
         }
     }
 
@@ -160,6 +174,7 @@ impl fmt::Display for Error {
             Repr::Engine(error) => error.fmt(formatter),
             Repr::Timeout(after) => write!(formatter, "no complete answer within {after:?}"),
             Repr::Cancelled => formatter.write_str("cancelled"),
+            Repr::Connect(error) => error.fmt(formatter),
         }
     }
 }
@@ -171,7 +186,7 @@ impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match &self.repr {
             Repr::Engine(error) => error.source(),
-            Repr::Timeout(_) | Repr::Cancelled => None,
+            Repr::Timeout(_) | Repr::Cancelled | Repr::Connect(_) => None,
         }
     }
 }

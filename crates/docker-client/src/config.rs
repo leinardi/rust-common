@@ -283,6 +283,11 @@ fn has_version_prefix(path: &str) -> bool {
 /// then spoken to at bollard's default, not at its own newest). `config` must be the one `docker`
 /// was connected from (or a clone).
 ///
+/// Unless the version is fixed, the negotiation runs on a fresh client built from `config` and
+/// `docker` is dropped: a client (or `Config`) from an earlier negotiation carries that version,
+/// and asking `/version` through it would fail once an upgraded engine no longer supports it. So
+/// renegotiating with the pair an earlier call returned starts over, from bollard's default.
+///
 /// Returns the client and the [`Config`] that goes with it: that one records the negotiated
 /// version, so the streaming calls ([`wait`](crate::attach::wait),
 /// [`events_established`](crate::events_established)) send the prefix the client's own calls do.
@@ -298,11 +303,14 @@ pub async fn negotiate(docker: Docker, config: &Config) -> Result<(Docker, Confi
     if config.api_version.is_some() {
         return Ok((docker, config.clone()));
     }
-    let docker = docker.negotiate_version().await.map_err(Error::from)?;
-    // `connect` accepted this user agent already, so it parses again.
+    drop(docker);
+    let mut config = config.clone();
+    config.negotiated = None;
+    let fresh = connect(config.clone()).map_err(Error::connect)?;
+    let docker = fresh.negotiate_version().await.map_err(Error::from)?;
+    // `connect` accepted this user agent just now, so it parses again.
     let user_agent = parse_user_agent(config.user_agent.as_deref()).unwrap_or(None);
     let version = docker.client_version();
-    let mut config = config.clone();
     config.negotiated = Some(version);
     Ok((with_modifier(docker, user_agent, Some(version)), config))
 }

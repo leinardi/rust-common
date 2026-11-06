@@ -845,6 +845,29 @@ async fn requests_carry_the_negotiated_version_and_negotiation_itself_is_unversi
     assert_eq!(engine.requests()[2].header("user-agent"), Some("tool/1.2"));
 }
 
+#[tokio::test]
+async fn renegotiating_asks_the_version_unversioned_again() {
+    let engine = FakeEngine::start(&[("/version", Reply::ok(r#"{"ApiVersion":"1.41"}"#))]).unwrap();
+    let config = Config::unix(engine.socket().to_str().unwrap());
+    let (docker, negotiated) = negotiate(connect(config.clone()).unwrap(), &config)
+        .await
+        .unwrap();
+    // Renegotiating with the returned pair, and with a client rebuilt from that config (after an
+    // engine upgrade that dropped 1.41, a versioned `/v1.41/version` would be refused).
+    let (_, again) = negotiate(docker, &negotiated).await.unwrap();
+    negotiate(connect(negotiated.clone()).unwrap(), &negotiated)
+        .await
+        .unwrap();
+
+    let targets: Vec<String> = engine
+        .requests()
+        .iter()
+        .map(|request| request.raw_path().to_owned())
+        .collect();
+    assert_eq!(targets, ["/version", "/version", "/version"]);
+    assert_eq!(again, negotiated);
+}
+
 #[test]
 fn a_version_prefix_is_added_once_and_the_query_kept() {
     use crate::config::versioned;
