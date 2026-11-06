@@ -673,3 +673,61 @@ async fn dropping_the_engine_closes_the_connections_it_is_stalling() {
         .expect("the stalled connection stays open after the engine is dropped");
     assert!(matches!(closed, Ok(0) | Err(_)), "{closed:?}");
 }
+
+#[tokio::test]
+async fn clients_from_clones_of_one_config_keep_their_own_version() {
+    let engine = FakeEngine::start(&[
+        ("/version", Reply::ok(r#"{"ApiVersion":"1.41"}"#)),
+        ("/containers/json", Reply::ok("[]")),
+    ])
+    .unwrap();
+    let socket = engine.socket().to_str().unwrap();
+    let base = Config::unix(socket);
+    let old_config = base.clone().api_version("1.41").unwrap();
+    let new_config = base.clone().api_version("1.44").unwrap();
+    let old = connect(old_config).unwrap();
+    let new = connect(new_config).unwrap();
+    // A client negotiated from the shared base must not move the pinned ones.
+    let open = negotiate(connect(base.clone()).unwrap(), &base)
+        .await
+        .unwrap();
+    for docker in [&old, &new, &open] {
+        docker
+            .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
+            .await
+            .unwrap();
+    }
+    let targets: Vec<String> = engine
+        .requests()
+        .iter()
+        .map(|request| request.raw_path().to_owned())
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            "/version",
+            "/v1.41/containers/json",
+            "/v1.44/containers/json",
+            "/v1.41/containers/json"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_clone_of_the_config_shares_no_negotiated_version() {
+    let engine = FakeEngine::start(&[
+        ("/version", Reply::ok(r#"{"ApiVersion":"1.41"}"#)),
+        ("/containers/json", Reply::ok("[]")),
+    ])
+    .unwrap();
+    let config = Config::unix(engine.socket().to_str().unwrap());
+    let first = connect(config.clone()).unwrap();
+    let second = connect(config.clone()).unwrap();
+    let _negotiated = negotiate(first, &config).await.unwrap();
+    second
+        .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
+        .await
+        .unwrap();
+    let requests = engine.requests();
+    assert_eq!(requests[1].raw_path(), "/containers/json");
+}

@@ -17,7 +17,6 @@
 //! the unix connection with a whole-second header timeout).
 
 use std::str::FromStr;
-use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use bollard::errors::Error as BollardError;
@@ -60,28 +59,6 @@ pub(crate) enum Endpoint {
     },
 }
 
-/// The API version the requests carry: shared by a [`Config`], its clones and the client built from
-/// it, so [`negotiate`] can publish what it settled on to the request modifier. Not a setting, so
-/// every value compares equal.
-#[derive(Debug, Clone, Default)]
-struct SentVersion(Arc<RwLock<Option<ClientVersion>>>);
-
-impl SentVersion {
-    fn get(&self) -> Option<ClientVersion> {
-        *self.0.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn set(&self, version: ClientVersion) {
-        *self.0.write().unwrap_or_else(PoisonError::into_inner) = Some(version);
-    }
-}
-
-impl PartialEq for SentVersion {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
-}
-
 /// How to reach an engine and how the client behaves; build it with [`Config::unix`] or
 /// [`Config::from_env`], then [`connect`] it.
 #[derive(Debug, Clone, PartialEq)]
@@ -90,7 +67,6 @@ pub struct Config {
     pub(crate) api_version: Option<ClientVersion>,
     user_agent: Option<String>,
     header_timeout: Option<Duration>,
-    sent_version: SentVersion,
 }
 
 impl Config {
@@ -194,7 +170,6 @@ impl Config {
             api_version: None,
             user_agent: None,
             header_timeout: None,
-            sent_version: SentVersion::default(),
         }
     }
 }
@@ -209,14 +184,15 @@ pub fn connect(config: Config) -> Result<Docker, ConnectError> {
     let seconds = config
         .header_timeout
         .map_or(DEFAULT_HEADER_SECS, |timeout| timeout.as_secs().max(1));
-    let version = config.api_version.as_ref().unwrap_or(API_DEFAULT_VERSION);
-    let docker = match &config.endpoint {
-        Endpoint::Unix(path) => Docker::connect_with_unix(path, seconds, version)?,
+    let fixed = config.api_version;
+    let version = fixed.as_ref().unwrap_or(API_DEFAULT_VERSION);
+    let docker = match config.endpoint {
+        Endpoint::Unix(path) => Docker::connect_with_unix(&path, seconds, version)?,
         #[cfg(feature = "tcp")]
-        Endpoint::Tcp(addr) => Docker::connect_with_http(addr, seconds, version)?,
+        Endpoint::Tcp(addr) => Docker::connect_with_http(&addr, seconds, version)?,
         #[cfg(feature = "tls")]
         Endpoint::Tls { addr, certs } => Docker::connect_with_ssl(
-            addr,
+            &addr,
             &certs.join("key.pem"),
             &certs.join("cert.pem"),
             &certs.join("ca.pem"),
@@ -224,31 +200,31 @@ pub fn connect(config: Config) -> Result<Docker, ConnectError> {
             version,
         )?,
     };
-    let user_agent = config
-        .user_agent
-        .as_deref()
-        .map(|text| {
-            HeaderValue::from_str(text)
-                .map_err(|error| invalid(format!("user agent {text:?}: {error}")))
-        })
-        .transpose()?;
-    if let Some(fixed) = config.api_version {
-        config.sent_version.set(fixed);
-    }
-    let sent = config.sent_version;
-    // bollard builds every URL as `/v<version>` + path and then joins the absolute path onto it,
-    // which replaces the prefix, so each request leaves unversioned. This puts it back.
-    Ok(docker.with_request_modifier(move |mut request| {
+    let user_agent = parse_user_agent(config.user_agent.as_deref())?;
+    Ok(with_modifier(docker, user_agent, fixed))
+}
+
+/// Installs the request modifier on `docker`, replacing any earlier one (bollard keeps a single
+/// modifier per client), so the version and user agent it carries belong to that client alone.
+///
+/// bollard builds every URL as `/v<version>` + path and then joins the absolute path onto it,
+/// which replaces the prefix, so each request leaves unversioned. This puts it back.
+fn with_modifier(
+    docker: Docker,
+    user_agent: Option<HeaderValue>,
+    version: Option<ClientVersion>,
+) -> Docker {
+    docker.with_request_modifier(move |mut request| {
         if let Some(value) = &user_agent {
             request.headers_mut().insert(USER_AGENT, value.clone());
         }
-        if let Some(version) = sent.get()
+        if let Some(version) = version
             && let Some(uri) = versioned(request.uri(), version)
         {
             *request.uri_mut() = uri;
         }
         request
-    }))
+    })
 }
 
 /// `uri` with `/v<major>.<minor>` in front of its path, or `None` when it has the prefix already
@@ -283,7 +259,7 @@ fn has_version_prefix(path: &str) -> bool {
 
 /// Settles the API version: left as it is when `config` fixed one, else lowered to the engine's
 /// (bollard's `negotiate_version`, one `GET /version`, sent unversioned) and sent on every request
-/// after it. `config` must be the one `docker` was connected from (or a clone of it).
+/// of the returned client after it (the version belongs to that client, not to `config`). `config` must be the one `docker` was connected from (or a clone of it).
 ///
 /// # Errors
 ///
@@ -295,8 +271,18 @@ pub async fn negotiate(docker: Docker, config: &Config) -> Result<Docker, Error>
         return Ok(docker);
     }
     let docker = docker.negotiate_version().await.map_err(Error::from)?;
-    config.sent_version.set(docker.client_version());
-    Ok(docker)
+    // `connect` accepted this user agent already, so it parses again.
+    let user_agent = parse_user_agent(config.user_agent.as_deref()).unwrap_or(None);
+    let version = docker.client_version();
+    Ok(with_modifier(docker, user_agent, Some(version)))
+}
+
+fn parse_user_agent(text: Option<&str>) -> Result<Option<HeaderValue>, ConnectError> {
+    text.map(|text| {
+        HeaderValue::from_str(text)
+            .map_err(|error| invalid(format!("user agent {text:?}: {error}")))
+    })
+    .transpose()
 }
 
 fn invalid(message: String) -> ConnectError {
