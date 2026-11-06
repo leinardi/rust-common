@@ -31,6 +31,9 @@ http = [
     "dep:tower-service",
     "tokio/net",
 ]
+# `process-metrics` adds `ProcessCollector`, the `process_*` families of the Prometheus client
+# libraries for prometheus-client, read from /proc on Linux.
+process-metrics = ["dep:prometheus-client"]
 
 [dependencies]
 # rt-multi-thread for the runtime builder; signal for the handlers (and the I/O driver they run
@@ -56,6 +59,7 @@ hyper-util = { version = "0.1.21", optional = true, default-features = false, fe
 ] }
 # Only the accept-error constants (EMFILE and the like); no unsafe call.
 libc = { version = "0.2.191", optional = true, default-features = false }
+prometheus-client = { version = "0.25.1", optional = true, default-features = false }
 # CancellationToken (stop and cut) and the TaskTracker that owns every connection task.
 tokio-util = { version = "0.7.20", optional = true, default-features = false, features = ["rt"] }
 tower-service = { version = "0.3.3", optional = true }

@@ -31,7 +31,7 @@ it. All twelve are available.
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact`, `redact-go-slog` (temporary) (the labels, variables, tools and runner output are parameters) |
 | `repo-meta` (available) | Repository meta-test checks returning problems: workspace lints and layout, Markdown links, Dockerfiles and images, toolchain pins, CI gates, lint allowlists, vacuous flags, and the licence-header and suppression script harnesses | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
-| `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals, a minimal HTTP server | `runtime`, `http` |
+| `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals, a minimal HTTP server, the `process_*` metrics collector | `runtime`, `http`, `process-metrics` |
 
 Where the projects legitimately differ, the shared code takes a parameter; one project's behaviour
 is never forced on another.
@@ -315,10 +315,12 @@ What a service's `main` repeats. Every message, exit code and default stays the 
 | `signal::hangup_channel` (`runtime`, Unix) | SIGHUP into a channel holding one pending signal |
 | `http::serve`, `http::ServerConfig`, `http::Outcome` (`http`) | a minimal HTTP/1 server on hyper: serves a tower service (an `axum::Router`) on a bound `TcpListener`; `TCP_NODELAY`, a header-read timeout, header count and size bounds, a write-stall timeout (a connection whose peer leaves a write pending, with no byte leaving, for that long is closed, a body streamed after the handler returned included), a transient accept-error backoff (5 ms to 1 s), optional `with_upgrades()`; returns `Drained` or `DeadlineExceeded` (`ListenerFailed` for a listener error) |
 | `http::Lifecycle`, `http::Peer` (`http`) | the `stop` and `cut` tokens and the tracker of the server's tasks, also put in every request's extensions with the `Peer` address: on `stop` each connection gets `graceful_shutdown`, `serve` waits for the tracker until the drain deadline, then cancels `cut`, which drops the remaining connections; a handler that upgrades `spawn`s the upgraded task on the lifecycle and watches `cut_token()` |
+| `process::ProcessCollector` (`process-metrics`) | prometheus-client's `Collector` for the nine `process_*` families of the Prometheus Go client, read from `/proc` on Linux (nothing elsewhere), with go-prom's names, types and help texts: `process_cpu_seconds_total`, `process_open_fds`, `process_max_fds`, `process_virtual_memory_bytes`, `process_virtual_memory_max_bytes`, `process_resident_memory_bytes`, `process_start_time_seconds`, `process_network_receive_bytes_total`, `process_network_transmit_bytes_total` |
 
 Without features it has no dependency; `runtime` adds `tokio` (`rt-multi-thread`, `signal`, `sync`,
 `time`, `macros`); `http` adds `hyper` (`http1`, `server`), `hyper-util`, `tokio` (`net`),
-`tokio-util`, `tower-service`, `bytes` and `libc` (constants only).
+`tokio-util`, `tower-service`, `bytes` and `libc` (constants only); `process-metrics` adds
+`prometheus-client`.
 
 ## Using a crate
 
