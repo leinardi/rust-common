@@ -5,7 +5,7 @@
 members = [
     "crates/docker-client",
     "crates/docker-engine",
-    "crates/go-clock",
+    "crates/clock",
     "crates/go-compat",
     "crates/go-prom",
     "crates/go-slog",

@@ -53,9 +53,9 @@ go-compat = [
     { all-features = true },
 ]
 
-# go-clock has no features; swarm-scheduler-exporter, swarm-device-access and awtrix-controller use
+# clock has no features; swarm-scheduler-exporter, swarm-device-access and awtrix-controller use
 # it as it is.
-go-clock = [
+clock = [
     { no-default-features = true },
     { all-features = true },
 ]

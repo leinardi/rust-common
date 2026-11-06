@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! The injected wall clock, Go's `time.Now` behind a trait. A program reads the time only through
+//! The injected wall clock, behind a trait. A program reads the time only through
 //! a [`Clock`] it was handed, so a test can run on tokio's paused clock ([`TokioClock`]) or set
 //! the time by hand ([`FakeClock`]), and production passes [`SystemClock`], the one wall-clock
 //! read.
@@ -43,7 +43,7 @@ where
     }
 }
 
-/// The system's wall clock, Go's `time.Now`.
+/// The system's wall clock.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemClock;
 
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(clock.now(), at(1));
     }
 
-    /// Go: awtrix-controller's `TestFakeClockConcurrentSafety`.
+    /// Ported from awtrix-controller's `TestFakeClockConcurrentSafety`.
     #[test]
     fn fake_clock_is_safe_to_share_between_threads() {
         const THREADS: usize = 10;

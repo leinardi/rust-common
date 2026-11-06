@@ -26,5 +26,5 @@ flate2 = { version = "1.1.10", default-features = false, features = ["rust_backe
 
 # The process collector's tests compare its start time with the wall clock.
 [dev-dependencies]
-go-clock = { path = "../go-clock" }
+clock = { path = "../clock" }
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }

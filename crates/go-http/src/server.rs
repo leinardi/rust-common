@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use go_clock::Clock;
+use clock::Clock;
 use go_compat::duration;
 use go_compat::errno::io_error_text;
 use hyper::body::{Body, Frame, Incoming, SizeHint};

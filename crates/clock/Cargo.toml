@@ -1,5 +1,5 @@
 [package]
-name = "go-clock"
+name = "clock"
 description = "An injected wall clock: the system's, one that follows tokio's clock, and one set by hand"
 version.workspace = true
 edition.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 publish.workspace = true
 
 [lib]
-name = "go_clock"
+name = "clock"
 
 [lints]
 workspace = true

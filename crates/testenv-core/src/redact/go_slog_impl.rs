@@ -16,7 +16,7 @@
 //! feature, and removed once the suites log through [`super::Logger`].
 //!
 //! The clock and the zone of the record times are the caller's; both suites pass the system's,
-//! `Arc::new(go_clock::SystemClock)` and go-compat's `local_zone`, as their copies read them.
+//! `Arc::new(clock::SystemClock)` and go-compat's `local_zone`, as their copies read them.
 
 use go_slog::{Attr, Config, Format, Level, Logger, Now, PlainStyle, Sink, Value};
 use jiff::tz::TimeZone;
@@ -140,7 +140,7 @@ impl super::Log for RedactingLogger {
 mod tests {
     use std::sync::Arc;
 
-    use go_clock::FakeClock;
+    use clock::FakeClock;
     use go_slog::{Attr, MemorySink, Value};
     use jiff::tz::TimeZone;
 

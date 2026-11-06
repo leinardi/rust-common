@@ -29,7 +29,7 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::testing::gather_series;
 use crate::{Collector, Registry};
-use go_clock::{Clock as _, SystemClock};
+use clock::{Clock as _, SystemClock};
 
 /// A `/proc`-like tree in a fresh temporary directory, removed on drop.
 struct FakeProc {

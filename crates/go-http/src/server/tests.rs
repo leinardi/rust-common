@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use go_clock::FakeClock;
+use clock::FakeClock;
 use hyper::StatusCode;
 use jiff::Timestamp;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};

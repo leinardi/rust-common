@@ -69,7 +69,7 @@ rustix = { version = "1.1.6", default-features = false, features = [
 
 [dev-dependencies]
 # The go-slog redacting logger's record times, from a clock the test sets.
-go-clock = { path = "../go-clock" }
+clock = { path = "../clock" }
 tempfile = "3.27.0"
 # The paused clock, and the fake daemon's socket and I/O for the host helpers' tests.
 tokio = { version = "1.54.1", default-features = false, features = [

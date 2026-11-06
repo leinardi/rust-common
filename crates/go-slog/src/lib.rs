@@ -56,7 +56,7 @@ use std::fmt;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use go_clock::{Clock, SystemClock};
+use clock::{Clock, SystemClock};
 use go_compat::{local_zone, strings, time_layout};
 use jiff::tz::TimeZone;
 

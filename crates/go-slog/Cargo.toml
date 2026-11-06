@@ -16,7 +16,7 @@ name = "go_slog"
 workspace = true
 
 [dependencies]
-go-clock = { path = "../go-clock" }
+clock = { path = "../clock" }
 go-compat = { path = "../go-compat" }
 # Timestamps and zones, as in go-compat: no tzdb or system feature.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }

@@ -39,7 +39,7 @@ allow = [
     "Apache-2.0",
     # winnow (MIT only), under the meta crate's and repo-meta's toml; memchr and aho-corasick
     # (Unlicense OR MIT), under repo-meta's regex; jiff and jiff-core (Unlicense OR MIT), under
-    # go-compat; tokio (MIT only), under go-clock; hyper, hyper-util, http-body, bytes and mio (MIT
+    # go-compat; tokio (MIT only), under clock; hyper, hyper-util, http-body, bytes and mio (MIT
     # only), under go-http.
     "MIT",
     # unicode-ident ((MIT OR Apache-2.0) AND Unicode-3.0), through tokio-macros -> syn ->

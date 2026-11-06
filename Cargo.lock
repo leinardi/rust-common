@@ -195,6 +195,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "clock"
+version = "0.3.0"
+dependencies = [
+ "jiff",
+ "tokio",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -472,14 +480,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "go-clock"
-version = "0.3.0"
-dependencies = [
- "jiff",
- "tokio",
-]
-
-[[package]]
 name = "go-compat"
 version = "0.3.0"
 dependencies = [
@@ -491,7 +491,7 @@ name = "go-http"
 version = "0.3.0"
 dependencies = [
  "bytes",
- "go-clock",
+ "clock",
  "go-compat",
  "http-body-util",
  "http-framing",
@@ -508,8 +508,8 @@ dependencies = [
 name = "go-prom"
 version = "0.3.0"
 dependencies = [
+ "clock",
  "flate2",
- "go-clock",
  "go-compat",
  "jiff",
 ]
@@ -518,7 +518,7 @@ dependencies = [
 name = "go-slog"
 version = "0.3.0"
 dependencies = [
- "go-clock",
+ "clock",
  "go-compat",
  "jiff",
  "serde_json",
@@ -1491,7 +1491,7 @@ name = "testenv-core"
 version = "0.3.0"
 dependencies = [
  "bollard",
- "go-clock",
+ "clock",
  "go-slog",
  "jiff",
  "regex",

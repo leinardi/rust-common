@@ -21,7 +21,7 @@ it. All twelve are available.
 | Crate | What it is | Features |
 | --- | --- | --- |
 | `go-compat` (available) | Go standard-library behaviour the projects' output depends on, ported byte for byte: number and duration formatting, `strconv` quoting, the errno table, `path.Clean`, `net` address parsing, RFC 3339 time | – |
-| `go-clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
+| `clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `go-slog` (available) | A `log/slog`-compatible logger: slog's text and JSON handlers and a plain format, byte for byte | – (the plain style, the level parsing and the global logger or a `LogHandle` are parameters) |
 | `go-prom` (available) | A Prometheus registry and the Go-compatible text exposition, with promhttp content negotiation and the process collector | `testing` (the expfmt version is a parameter) |
 | `http-framing` (available) | HTTP/1 request framing over the bytes a connection read, as hyper frames them, std only | – |
@@ -60,9 +60,9 @@ under `crates/go-compat/tests/testdata`). One module per Go package area:
 
 Its only dependency is `jiff`, with `default-features = false` and `std`.
 
-### go-clock
+### clock
 
-Go's `time.Now` behind a trait, so a program reads the wall clock only through a `Clock` it was
+A wall clock behind a trait, so a program reads the time only through a `Clock` it was
 handed:
 
 | Item | What it is |
@@ -92,7 +92,7 @@ two Go versions. It is checked against Go captures of both (`crates/go-slog/test
 | `global`, `set_global`, `configure` | a process-wide logger instead |
 | `MemorySink` | a sink that keeps what is written, for tests |
 
-`Logger::new`, `LogHandle::stdout` and `configure` take the clock (`go_clock::Clock`);
+`Logger::new`, `LogHandle::stdout` and `configure` take the clock (`clock::Clock`);
 `LogHandle::new` and `set_global` take a `Logger`, and so its clock, and `LogHandle::configure` and
 `configure_to` keep the current logger's. `LogHandle::stdout` and `configure` take `getenv` to
 resolve the local zone. The sink is the caller's, except where Go writes to stdout:
@@ -101,7 +101,7 @@ process's stdout (`Logger::new`, `LogHandle::configure_to` and `set_global` take
 `global()` before any `configure` or `set_global` reads the system clock and `TZ` itself, as Go's
 default logger does.
 
-It depends on `go-compat`, `go-clock` and `jiff` (as `go-compat`).
+It depends on `go-compat`, `clock` and `jiff` (as `go-compat`).
 
 ### go-prom
 
@@ -155,7 +155,7 @@ dependency on `go-slog` or `go-prom`.
 | `gopath` | `net/url`'s escaping and `ParseQuery`, the mux's `cleanPath` (on `go_compat::filepath::clean`), `escape_host` |
 | `testing` (feature) | Go wire captures (`Capture`, `read_captures`) replayed against a `Server` (`replay`, `exchange`) |
 
-It depends on `http-framing`, `go-compat`, `go-clock`, `jiff` (as `go-compat`), `hyper` (`http1`,
+It depends on `http-framing`, `go-compat`, `clock`, `jiff` (as `go-compat`), `hyper` (`http1`,
 `server`), `hyper-util` (`tokio`, `http1`, `server`, `server-graceful`), `bytes`, `tokio` (`net`,
 `time`, `rt`, `macros`), `socket2` and `rustix` (`net`, for a zone's interface index).
 

@@ -22,7 +22,7 @@ testing = ["tokio/io-util"]
 [dependencies]
 http-framing = { path = "../http-framing" }
 go-compat = { path = "../go-compat" }
-go-clock = { path = "../go-clock" }
+clock = { path = "../clock" }
 # The `Date` header and Go's log.Printf time, as in go-compat: no tzdb or system feature.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # hyper's HTTP/1 server, with hyper-util's tokio glue and graceful drain.
