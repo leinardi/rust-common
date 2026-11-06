@@ -59,7 +59,7 @@ hyper-util = { version = "0.1.21", optional = true, default-features = false, fe
 ] }
 # Only the accept-error constants (EMFILE and the like); no unsafe call.
 libc = { version = "0.2.191", optional = true, default-features = false }
-prometheus-client = { version = "0.25.1", optional = true, default-features = false }
+prometheus-client = { version = "0.25.2", optional = true, default-features = false }
 # CancellationToken (stop and cut) and the TaskTracker that owns every connection task.
 tokio-util = { version = "0.7.20", optional = true, default-features = false, features = ["rt"] }
 tower-service = { version = "0.3.3", optional = true }
