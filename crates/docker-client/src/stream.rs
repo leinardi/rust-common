@@ -20,9 +20,9 @@
 //! same endpoint the [`Config`] describes, with the same `User-Agent` and API version prefix, and
 //! returns once the headers are in.
 //!
-//! A TLS endpoint (`tls` feature) is spoken to with rustls on `ca.pem`, `cert.pem` and `key.pem`
-//! from the config's certificate directory. The engine is checked against `ca.pem` alone, as
-//! moby's client does; bollard's ssl path also trusts the system and webpki roots.
+//! A TLS endpoint (`tls` feature) is spoken to with rustls on the material bollard's ssl path
+//! trusts and presents: the system roots plus `ca.pem`, and `cert.pem` and `key.pem` from the
+//! config's certificate directory, so bollard's calls and these accept the same engines.
 
 use std::time::Duration;
 
@@ -175,8 +175,9 @@ fn host_of(addr: &str) -> &str {
     host.trim_start_matches('[').trim_end_matches(']')
 }
 
-/// The TLS client for `certs`: `ca.pem` alone to verify the engine (no system roots, as moby's
-/// client), `cert.pem` and `key.pem` to present to it.
+/// The TLS client for `certs`, trusting what bollard's ssl path trusts so that its calls and the
+/// streaming ones accept the same engines: the system roots (a root store that fails to load is
+/// an error, as there) plus `ca.pem` to verify the engine, `cert.pem` and `key.pem` to present.
 #[cfg(feature = "tls")]
 fn tls_connector(certs: &std::path::Path) -> Result<tokio_rustls::TlsConnector, BollardError> {
     use rustls_pki_types::pem::PemObject as _;
@@ -189,6 +190,15 @@ fn tls_connector(certs: &std::path::Path) -> Result<tokio_rustls::TlsConnector, 
             .map_err(|error| failure(format!("{}: {error}", path.display())))
     };
     let mut roots = rustls::RootCertStore::empty();
+    let native = rustls_native_certs::load_native_certs();
+    if let Some(error) = native.errors.first() {
+        return Err(failure(format!("the system root certificates: {error}")));
+    }
+    for root in native.certs {
+        roots
+            .add(root)
+            .map_err(|error| failure(format!("a system root certificate: {error}")))?;
+    }
     roots.add_parsable_certificates(chain("ca.pem")?);
     let key_path = certs.join("key.pem");
     let key = PrivateKeyDer::from_pem_file(&key_path)
