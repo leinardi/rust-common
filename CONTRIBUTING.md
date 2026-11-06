@@ -62,15 +62,32 @@ whole.
 
 ## Releasing
 
-Dispatch the **Release** workflow from `main`. Leave the version empty to derive it from the
-commits, or pass one (e.g. `0.2.0` or `v0.2.0`); tick *dry run* first to see what it would do. The
-first release needs an explicit version, since there is no tag to derive it from. It calls
-[`simple-tag-and-release`](https://github.com/leinardi/gh-reusable-workflows/blob/main/.github/workflows/simple-tag-and-release.md),
-which creates the `vX.Y.Z` tag and the release with generated notes, and moves `vMAJOR` and `latest`
-when it is the highest release. A failed run is finished by re-running it: it completes what the
-earlier attempt left behind.
+A release is two workflows and one merge, so a `vX.Y.Z` tag always marks a tree whose crates carry
+version `X.Y.Z`:
 
-Before releasing, bump `version` in the root `Cargo.toml`'s `[workspace.package]` to the version
-being tagged (each consumer's `version` requirement, the tag's `<major>.<minor>`, is checked
-against it), then move each consumer to the new `tag`, updating its `version` when the minor or
-major moved.
+1. Dispatch the **Release** workflow (`release.yaml`) from `main`. Leave the version empty to derive
+   it from the commits since the last tag, or pass one (e.g. `0.3.0` or `v0.3.0`); tick *dry run*
+   first to see what it would do. It refuses a version not above every release tag and above the
+   crates' current version. It writes the version to `[workspace.package]` in the root
+   `Cargo.toml` (every crate inherits it) and to the workspace entries of `Cargo.lock`, pushes a
+   `release/vX.Y.Z` branch and opens a `chore(release): bump version to X.Y.Z` pull request, with
+   CI dispatched on it.
+2. Review and merge that pull request (a merge commit, as always).
+3. **Auto Tag Release** (`auto-tag-release.yaml`) runs on the push to `main`, sees the version
+   change, and calls
+   [`simple-tag-and-release`](https://github.com/leinardi/gh-reusable-workflows/blob/main/.github/workflows/simple-tag-and-release.md)
+   with it: the `vX.Y.Z` tag on the merge commit, the release with generated notes, and `vMAJOR`
+   and `latest` moved when it is the highest release. A failed run is finished by re-running it.
+
+- **The version is chosen at dispatch.** If `main` moves before the bump pull request is merged,
+  close it and dispatch again, so the version counts the new commits.
+- **A failed Release run** is finished by re-running it: a leftover `release/vX.Y.Z` branch without
+  a pull request is recreated, and an open pull request gets its CI run again.
+- **Never edit the version or push a tag by hand.** A version change merged to `main` by anything
+  but the `release/vX.Y.Z` pull request fails Auto Tag Release instead of tagging.
+- **v0.2.0 is tagged on crates that still say `0.1.0`** (it predates this flow), so its consumers
+  write `version = "0.1"`. The next release needs an explicit version, `0.2.1` or above, since
+  `0.2.0` is taken.
+
+Then move each consumer to the new `tag`, with `version` set to the tag's `<major>.<minor>` (cargo
+checks that requirement against the crates' version).

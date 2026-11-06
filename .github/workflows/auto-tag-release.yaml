@@ -1,0 +1,69 @@
+name: Auto Tag Release
+
+# The second half of a release (release.yaml writes the version and opens its pull request): on
+# every push to main, compare the crates' package version (`[workspace.package] version` in
+# Cargo.toml) with the first parent's. When merging release.yaml's bump pull request changed it,
+# gh-reusable-workflows' simple-tag-and-release tags `vX.Y.Z` on this commit and publishes the
+# release, so a release tag always marks a tree whose crates carry its version. A version changed
+# by any other push fails red; every push that leaves it alone stops at the comparison.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      bumped: ${{ steps.detect.outputs.bumped }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This merge commit and its first parent, the main it was merged into.
+          fetch-depth: 2
+
+      - name: Detect a version change
+        id: detect
+        run: |
+          set -euo pipefail
+          read_version() {
+            python3 -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["workspace"]["package"]["version"])'
+          }
+          CURRENT=$(read_version < Cargo.toml)
+          PREVIOUS=""
+          if git rev-parse --verify --quiet HEAD~1 >/dev/null; then
+            PREVIOUS=$(git show HEAD~1:Cargo.toml | read_version)
+          fi
+          if [ "$CURRENT" = "$PREVIOUS" ]; then
+            echo "The crates' version is unchanged ($CURRENT): not a release commit."
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only release.yaml's bump, merged as its own pull request, is released: a version
+          # changed by any other merge skipped the checks release.yaml makes, so it fails red
+          # here instead of tagging. GitHub's merge subject names the merged branch, which stays
+          # right when the pull request was brought up to date with main before the merge.
+          SUBJECT=$(git log -1 --format=%s HEAD)
+          PATTERN="^Merge pull request #[0-9]+ from [^ /]+/release/v${CURRENT//./\\.}\$"
+          if ! [[ "$SUBJECT" =~ $PATTERN ]]; then
+            echo "The crates' version changed (${PREVIOUS:-none} -> $CURRENT), but not by merging release.yaml's release/v$CURRENT pull request (merge subject: '$SUBJECT'). Revert it and dispatch the Release workflow." >&2
+            exit 1
+          fi
+          echo "The crates' version changed: ${PREVIOUS:-none} -> $CURRENT, by the release pull request."
+          echo "bumped=true" >> "$GITHUB_OUTPUT"
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: detect
+    if: needs.detect.outputs.bumped == 'true'
+    permissions:
+      contents: write
+    uses: leinardi/gh-reusable-workflows/.github/workflows/simple-tag-and-release.yaml@ba5f6ec7596a5eb306ad2f7511a888ec8dde6d53 # v1.4.0
+    with:
+      version: ${{ needs.detect.outputs.version }}
