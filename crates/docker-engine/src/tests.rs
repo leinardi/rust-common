@@ -129,6 +129,12 @@ enum Reply {
     RespondThenClose(Box<Reply>),
     /// Never an answer.
     Silent,
+    /// The head of a `status` answer announcing a body of `length` bytes, which never comes.
+    StallBody {
+        status: u16,
+        headers: Vec<(&'static str, String)>,
+        length: usize,
+    },
     /// `Reply` after a delay.
     After(Duration, Box<Reply>),
 }
@@ -283,7 +289,8 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                 | Reply::Raw(_)
                 | Reply::Close
                 | Reply::Reset
-                | Reply::Silent => break,
+                | Reply::Silent
+                | Reply::StallBody { .. } => break,
             }
         }
         match reply {
@@ -318,9 +325,35 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
             Reply::Close => return Outcome::Closed,
             Reply::Reset => return Outcome::Reset,
             Reply::Silent => std::future::pending::<()>().await,
+            Reply::StallBody {
+                status,
+                headers,
+                length,
+            } => {
+                return stall_body(&mut stream, status, &headers, length).await;
+            }
             Reply::After(..) | Reply::RespondThenClose(_) => unreachable!(),
         }
     }
+}
+
+/// [`Reply::StallBody`]: the head, then nothing, until the client goes away.
+async fn stall_body<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    status: u16,
+    headers: &[(&'static str, String)],
+    length: usize,
+) -> Outcome {
+    let mut out = format!("HTTP/1.1 {status} {}\r\n", reason(status));
+    for (name, value) in headers {
+        write!(out, "{name}: {value}\r\n").unwrap();
+    }
+    write!(out, "Content-Length: {length}\r\n\r\n").unwrap();
+    if stream.write_all(out.as_bytes()).await.is_err() {
+        return Outcome::Closed;
+    }
+    let _ = stream.flush().await;
+    std::future::pending().await
 }
 
 fn reason(status: u16) -> &'static str {
@@ -648,6 +681,94 @@ async fn a_long_ping_body_is_not_drained() {
         ["HEAD /_ping", "GET /_ping", "GET /v1.51/containers/json"]
     );
     assert_ne!(requests[1].connection, requests[2].connection);
+}
+
+/// A daemon whose `HEAD /_ping` fails and whose `GET /_ping` answers `status` with a body that
+/// never comes.
+fn stalled_ping_body(status: u16) -> impl Fn(&Recorded) -> Reply + Send + Sync + 'static {
+    move |request| {
+        if request.method == "HEAD" {
+            respond(405, &[], "")
+        } else if request.target == "/_ping" {
+            Reply::StallBody {
+                status,
+                headers: vec![("Api-Version", "1.51".to_owned())],
+                length: 2,
+            }
+        } else {
+            engine(Some("1.51"))(request)
+        }
+    }
+}
+
+/// With a response-header timeout, a ping body that stalls is dropped with its connection once
+/// the timeout passes, a drained 200's as well as a 500's error body: the negotiation, which every
+/// request waits on, is held no longer than the headers could hold it, and the request goes out
+/// on a new connection (at the version moby falls back to when the 500 fails the ping).
+#[tokio::test]
+async fn a_stalled_ping_body_is_dropped_after_the_response_header_timeout() {
+    for (status, listed_at) in [
+        (200, "/v1.51/containers/json"),
+        (500, "/v1.56/containers/json"),
+    ] {
+        let daemon = FakeDaemon::unix(stalled_ping_body(status));
+        let client = Client::new(
+            Settings::unix(daemon.socket())
+                .unwrap()
+                .response_header_timeout(Some(Duration::from_secs(1))),
+        );
+        let listed = tokio::time::timeout(Duration::from_secs(10), list_containers(&client))
+            .await
+            .unwrap_or_else(|_| panic!("{status}: the stalled body is not bounded"));
+        assert_eq!(listed.unwrap(), "[]", "{status}");
+        let get = format!("GET {listed_at}");
+        assert_eq!(
+            daemon.wire(),
+            ["HEAD /_ping", "GET /_ping", get.as_str()],
+            "{status}"
+        );
+        let requests = daemon.requests();
+        assert_ne!(requests[1].connection, requests[2].connection, "{status}");
+    }
+}
+
+/// The ping a stalled error body fails: the daemon's status, as a response error, and a text that
+/// says what timed out.
+#[tokio::test]
+async fn a_stalled_ping_error_body_fails_the_ping_with_its_status() {
+    let daemon = FakeDaemon::unix(stalled_ping_body(500));
+    let client = Client::new(
+        Settings::unix(daemon.socket())
+            .unwrap()
+            .response_header_timeout(Some(Duration::from_secs(1))),
+    );
+    let error = tokio::time::timeout(Duration::from_secs(10), client.ping())
+        .await
+        .expect("the stalled error body is not bounded")
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Response);
+    assert_eq!(
+        error.status(),
+        Some(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+    );
+    let text = error.to_string();
+    assert!(
+        text.starts_with(
+            "request returned 500 Internal Server Error for API route and version http://"
+        ) && text.ends_with("/_ping; its body did not arrive within 1s"),
+        "{text}"
+    );
+}
+
+/// The control: without one, moby's default, the drain waits for the body as moby's does, and
+/// only the caller's own bound ends the call.
+#[tokio::test]
+async fn without_a_response_header_timeout_a_stalled_ping_body_holds_the_call() {
+    let daemon = FakeDaemon::unix(stalled_ping_body(200));
+    let client = daemon.client();
+    let listed = tokio::time::timeout(Duration::from_secs(2), list_containers(&client)).await;
+    assert!(listed.is_err(), "the drain returned without the body");
+    assert_eq!(daemon.wire(), ["HEAD /_ping", "GET /_ping"]);
 }
 
 /// moby: a `HEAD` whose connection closes (or, on TCP, is reset) without an answer falls back to

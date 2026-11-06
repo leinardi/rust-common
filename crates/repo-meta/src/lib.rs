@@ -48,6 +48,7 @@
 //! repository's own scripts.
 
 pub mod allowlist;
+mod case_arm;
 pub mod ci;
 pub mod dockerfile;
 pub mod image;

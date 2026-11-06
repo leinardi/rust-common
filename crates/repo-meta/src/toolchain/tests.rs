@@ -179,8 +179,74 @@ fn image_rust_rules() {
     );
 }
 
+/// A `dhi.io/rust` reference outside the build FROM must be of the FROM's release, wherever it
+/// sits: a `COPY --from=`, a `RUN --mount=from=`, an ARG default, an untagged or a variable tag;
+/// one of the same release, another repository and a comment line pass.
+#[test]
+fn every_rust_image_reference_is_the_release() {
+    let good = "FROM --platform=$BUILDPLATFORM dhi.io/rust:1.98.1-debian13-dev AS build\n\
+                ARG RUST_VERSION=1.98.1\n";
+    let check = |extra: &str, policy| {
+        strings(&image_rust_problems(
+            "Dockerfile",
+            &format!("{good}{extra}\n"),
+            "1.98.1",
+            policy,
+        ))
+    };
+    let other = |reference: &str| {
+        format!(
+            "Dockerfile: references {reference}, another release than the build stage's \
+             dhi.io/rust 1.98.1"
+        )
+    };
+    let untagged = |reference: &str| {
+        format!("Dockerfile: references {reference}, with no exact X.Y.Z release in its tag")
+    };
+    for (extra, want) in [
+        (
+            "COPY --from=dhi.io/rust:1.97.0-debian13-dev /usr/local/bin/cargo /out/",
+            other("dhi.io/rust:1.97.0-debian13-dev"),
+        ),
+        (
+            "RUN --mount=type=bind,from=dhi.io/rust:1.97.0-debian13-dev,target=/r true",
+            other("dhi.io/rust:1.97.0-debian13-dev"),
+        ),
+        (
+            "ARG HELPER=\"dhi.io/rust:1.97.0-debian13-dev\"",
+            other("dhi.io/rust:1.97.0-debian13-dev"),
+        ),
+        (
+            "COPY --from=dhi.io/rust /usr/local/bin/cargo /out/",
+            untagged("dhi.io/rust"),
+        ),
+        (
+            "COPY --from=dhi.io/rust:${HELPER_TAG} /usr/local/bin/cargo /out/",
+            untagged("dhi.io/rust:${HELPER_TAG}"),
+        ),
+    ] {
+        assert_eq!(
+            check(extra, RustVersion::Exact),
+            std::slice::from_ref(&want),
+            "{extra:?}"
+        );
+        assert_eq!(check(extra, RustVersion::Line), [want], "{extra:?}");
+    }
+    for extra in [
+        "COPY --from=dhi.io/rust:1.98.1-debian13-dev /usr/local/bin/cargo /out/",
+        "COPY --from=dhi.io/rust-tools:1.0.0 /x /x",
+        "# formerly dhi.io/rust:1.97.0-debian13-dev",
+    ] {
+        assert_eq!(
+            check(extra, RustVersion::Exact),
+            Vec::<String>::new(),
+            "{extra:?}"
+        );
+    }
+}
+
 /// Another release, a channel, a release without its patch, and no toolchain at all are refused;
-/// another action is not a toolchain step.
+/// so is another action's `toolchain` input, though that action is not a toolchain step.
 #[test]
 fn ci_toolchain_rules() {
     let steps = documents(
@@ -209,7 +275,7 @@ fn ci_toolchain_rules() {
 "#,
     );
     let problems = ci_toolchain_problems(&steps, "1.98.1", ToolchainRef::Input);
-    assert_eq!(problems.len(), 4, "{problems:#?}");
+    assert_eq!(problems.len(), 5, "{problems:#?}");
     assert_eq!(
         strings(&ci_toolchain_problems(
             &documents("ci.yaml", "jobs:\n  a:\n    steps: []\n"),
@@ -253,6 +319,156 @@ fn ci_toolchains_are_read_from_actions_and_scripts() {
     named.sort_unstable();
     assert_eq!(named, ["1.97.0", "1.98.1", "beta", "nightly"]);
     assert_eq!(strings(&problems), [no_toolchain, no_toolchain]);
+}
+
+const SETUP: &str = "      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567\n        \
+                     with:\n          toolchain: 1.98.1\n";
+
+/// The problems of a job that sets up the release and then runs `extra`.
+fn after_setup(extra: &str) -> Vec<String> {
+    strings(&ci_toolchain_problems(
+        &documents(
+            "ci.yaml",
+            &format!("jobs:\n  rust:\n    steps:\n{SETUP}{extra}"),
+        ),
+        "1.98.1",
+        ToolchainRef::Input,
+    ))
+}
+
+fn installs(toolchain: &str) -> String {
+    format!(
+        "ci.yaml: installs toolchain {toolchain:?}; it must be 1.98.1, the release of \
+         rust-toolchain.toml"
+    )
+}
+
+fn unreadable(toolchain: &str) -> String {
+    format!("ci.yaml: names toolchain {toolchain:?}, which the check cannot read as a release")
+}
+
+/// Fail closed: any action's toolchain input is held to the release, the moonrepo sample from
+/// awtrix-controller among them; another action's `channel` is not one.
+#[test]
+fn any_action_toolchain_input_is_held_to_the_release() {
+    // The moonrepo sample from awtrix-controller, and the other setup-rust actions' inputs.
+    for (action, input) in [
+        ("moonrepo/setup-rust", "toolchain"),
+        ("moonrepo/setup-rust", "channel"),
+        ("hecrj/setup-rust-action", "rust-version"),
+        ("some/setup-rust", "rust-toolchain"),
+        ("some/setup-rust", "rust-channel"),
+    ] {
+        let step = format!(
+            "      - uses: {action}@0123456789abcdef0123456789abcdef01234567\n        with:\n          \
+             {input}: 1.97.0\n"
+        );
+        assert_eq!(after_setup(&step), [installs("1.97.0")], "{action} {input}");
+        let right = step.replace("1.97.0", "1.98.1");
+        assert_eq!(
+            after_setup(&right),
+            Vec::<String>::new(),
+            "{action} {input}"
+        );
+    }
+    // `channel` is another action's input of another kind.
+    assert_eq!(
+        after_setup("      - uses: some/notify@v1\n        with:\n          channel: builds\n"),
+        Vec::<String>::new()
+    );
+}
+
+/// Fail closed: a `toolchain` key outside a step's inputs, in an `env:` at the workflow or the
+/// step, is held to the release; an expression or a mapping there is refused.
+#[test]
+fn an_env_toolchain_is_held_to_the_release() {
+    let env = |toolchain: &str| {
+        strings(&ci_toolchain_problems(
+            &documents(
+                "ci.yaml",
+                &format!(
+                    "env:\n  toolchain: {toolchain}\njobs:\n  rust:\n    steps:\n{SETUP}      - run: make\n        \
+                     env:\n          toolchain: {toolchain}\n"
+                ),
+            ),
+            "1.98.1",
+            ToolchainRef::Input,
+        ))
+    };
+    assert_eq!(env("1.97.0"), [installs("1.97.0"), installs("1.97.0")]);
+    assert_eq!(env("1.98.1"), Vec::<String>::new());
+    assert_eq!(
+        after_setup("      - run: make\n        env:\n          toolchain: ${{ inputs.rust }}\n"),
+        [unreadable("${{ inputs.rust }}")]
+    );
+    assert_eq!(
+        after_setup("      - run: make\n        env:\n          toolchain: {channel: stable}\n"),
+        [unreadable(r#"{"channel":"stable"}"#)]
+    );
+}
+
+/// Fail closed: a matrix `toolchain`, its include, and a `${{ matrix.<name> }}` read back are held
+/// to the release, while its exclude installs nothing; an axis the matrix does not list, a
+/// matrix built by an expression, and an expression in an axis are refused.
+#[test]
+fn a_matrix_toolchain_is_held_to_the_release() {
+    let matrix = |axes: &str, toolchain: &str| {
+        strings(&ci_toolchain_problems(
+            &documents(
+                "ci.yaml",
+                &format!(
+                    "jobs:\n  rust:\n    strategy:\n      matrix:\n{axes}    steps:\n      - uses: \
+                     dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567\n        \
+                     with:\n          toolchain: {toolchain}\n"
+                ),
+            ),
+            "1.98.1",
+            ToolchainRef::Input,
+        ))
+    };
+    let by_matrix = "${{ matrix.toolchain }}";
+    assert_eq!(
+        matrix("        toolchain: [1.97.0]\n", by_matrix),
+        [installs("1.97.0")]
+    );
+    assert_eq!(
+        matrix("        toolchain: [1.98.1]\n", by_matrix),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        matrix(
+            "        toolchain: [1.98.1]\n        include:\n          - toolchain: nightly\n        \
+             exclude:\n          - toolchain: 1.98.1\n",
+            by_matrix
+        ),
+        [installs("nightly")]
+    );
+    assert_eq!(
+        matrix("        rust: [1.98.1, beta]\n", "${{ matrix.rust }}"),
+        [installs("beta")]
+    );
+    assert_eq!(
+        matrix("        os: [ubuntu-latest]\n", by_matrix),
+        [unreadable(by_matrix)]
+    );
+    assert_eq!(
+        matrix(
+            "        rust: [\"${{ env.RUST }}\"]\n",
+            "${{ matrix.rust }}"
+        ),
+        [unreadable("${{ env.RUST }}")]
+    );
+    let built = "jobs:\n  rust:\n    strategy:\n      matrix: ${{ fromJSON(needs.a.outputs.m) }}\n    \
+                 steps:\n      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567\n        \
+                 with:\n          toolchain: ${{ matrix.toolchain }}\n";
+    assert_eq!(
+        strings(&ci_toolchain_problems(
+            &documents("ci.yaml", built),
+            "1.98.1",
+            ToolchainRef::Input
+        )),
+        [unreadable(by_matrix)]
+    );
 }
 
 /// `@<release>` with no `toolchain` input: read as the toolchain only under `InputOrRef`; under
@@ -565,6 +781,78 @@ fn release_pin_arm_rules() {
     );
 }
 
+/// An arm the `case` takes before bitgauge's checked amd64 rust-std arm fails whatever its
+/// pattern's shape, and so does a digest from a build argument; each shape of the real arm passes.
+#[test]
+fn release_pin_arm_shapes() {
+    let real = "\t\tamd64) triple=x86_64-unknown-linux-musl; std_sha256=";
+    let insert = |arm: &str| {
+        assert!(BG_DOCKERFILE.contains(real));
+        release_check(
+            &BG_DOCKERFILE
+                .replacen(
+                    "ARG RUST_VERSION=1.98.1\n",
+                    "ARG RUST_VERSION=1.98.1\nARG STD_SHA\n",
+                    1,
+                )
+                .replacen(real, &format!("\t\t{arm} \\\n{real}"), 1),
+            BG_RELEASE_MK,
+        )
+    };
+    let chosen = |problems: &[String]| {
+        problems
+            .iter()
+            .map(|problem| problem.starts_with("Dockerfile: std_sha256 is chosen by the arms "))
+            .collect::<Vec<_>>()
+    };
+    for arm in [
+        "amd64|x86_64) triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+        "(amd64) triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+        "\"amd64\") triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+    ] {
+        assert_eq!(chosen(&insert(arm)), [true], "{arm:?}");
+    }
+    assert_eq!(
+        insert("am\\d64) triple=x86_64-unknown-linux-gnu; std_sha256=\"${STD_SHA}\" ;;"),
+        [
+            "Dockerfile: sets triple with std_sha256 3 times and std_sha256 3 times, but 2 case \
+             arms are read; a pair outside a plain arm is not checked",
+            "Dockerfile: sets triple=x86_64-unknown-linux-gnu with std_sha256=\"${STD_SHA}\", \
+             which no wanted arm holds",
+        ]
+    );
+    let std_amd64 = "bd9f35880de21dab0e387e84009c00001ae7836a4ba565cb16823f13f75f325f";
+    assert_eq!(
+        insert(&format!(
+            "amd64) triple=x86_64-unknown-linux-musl; std_sha256={std_amd64} ;;"
+        )),
+        ["Dockerfile: labels 2 arms that set std_sha256 \"amd64\"; the case takes the first"],
+        "a repeated label"
+    );
+    assert_eq!(
+        chosen(&release_check(
+            &BG_DOCKERFILE.replacen(
+                &format!("std_sha256={std_amd64}"),
+                "std_sha256=${STD_SHA}",
+                1
+            ),
+            BG_RELEASE_MK
+        )),
+        [true],
+        "a digest from a build argument"
+    );
+    for label in ["(amd64)", "\"amd64\")", "'amd64')", "( amd64 )"] {
+        assert_eq!(
+            release_check(
+                &BG_DOCKERFILE.replacen(real, &real.replacen("amd64)", label, 1), 1),
+                BG_RELEASE_MK
+            ),
+            Vec::<String>::new(),
+            "{label}"
+        );
+    }
+}
+
 /// Another release, a missing, short, doubled or extra digest, and a platform list that leaves a
 /// target out are each refused once.
 #[test]
@@ -734,4 +1022,244 @@ fn make_values_follow_make() {
             "{line}"
         );
     }
+}
+
+/// Fail closed: GitHub reads input names and actions in any case, so a toolchain input or an
+/// action in another case is held to the release too.
+#[test]
+fn toolchain_inputs_and_actions_match_in_any_case() {
+    for step in [
+        "      - uses: moonrepo/setup-rust@v1\n        with:\n          Channel: nightly\n",
+        "      - uses: hecrj/setup-rust-action@v2\n        with:\n          RUST-VERSION: nightly\n",
+        "      - uses: actions-rust-lang/setup-rust-toolchain@v1\n        with:\n          \
+         TOOLCHAIN: nightly\n",
+        "      - uses: MoonRepo/Setup-Rust@v1\n        with:\n          channel: nightly\n",
+        "      - run: make\n        env:\n          Rustup_Toolchain: nightly\n",
+    ] {
+        assert_eq!(after_setup(step), [installs("nightly")], "{step}");
+    }
+    assert_eq!(
+        strings(&ci_toolchain_problems(
+            &documents(
+                "ci.yaml",
+                "jobs:\n  rust:\n    steps:\n      - uses: DTolnay/Rust-Toolchain@v1\n"
+            ),
+            "1.98.1",
+            ToolchainRef::Input,
+        )),
+        [
+            "ci.yaml: DTolnay/Rust-Toolchain names no toolchain, and does not read rust-toolchain.toml"
+        ]
+    );
+}
+
+/// The problems of a job with the matrix `axes` that sets up the release and then runs `script`.
+fn matrix_script(axes: &str, script: &str) -> Vec<String> {
+    strings(&ci_toolchain_problems(
+        &documents(
+            "ci.yaml",
+            &format!(
+                "jobs:\n  rust:\n    strategy:\n      matrix:\n        {axes}\n    steps:\n{SETUP}      \
+                 - run: {script}\n"
+            ),
+        ),
+        "1.98.1",
+        ToolchainRef::Input,
+    ))
+}
+
+/// Fail closed: a script's toolchain is the whole token, a matrix expression read from the job's
+/// matrix and a shell variable refused; `rustup run`, `toolchain add`, an inline or `$GITHUB_ENV`
+/// `RUSTUP_TOOLCHAIN=` are read, and a script writing `rust-toolchain.toml` is refused.
+#[test]
+fn script_toolchains_are_read_whole() {
+    for script in [
+        "cargo +${{ matrix.rust }} test",
+        "rustup default ${{ matrix.rust }}",
+        "rustup run ${{ matrix.rust }} cargo test",
+    ] {
+        assert_eq!(
+            matrix_script("rust: [nightly]", script),
+            [installs("nightly")],
+            "{script}"
+        );
+        assert_eq!(
+            matrix_script("rust: [1.98.1]", script),
+            Vec::<String>::new(),
+            "{script}"
+        );
+    }
+    for script in [
+        "rustup run nightly cargo test",
+        "rustup toolchain add nightly",
+        "RUSTUP_TOOLCHAIN=nightly cargo test",
+        "echo \"RUSTUP_TOOLCHAIN=nightly\" >> \"$GITHUB_ENV\"",
+        "rustup default 'nightly'",
+    ] {
+        assert_eq!(
+            after_setup(&format!("      - run: {script}\n")),
+            [installs("nightly")],
+            "{script}"
+        );
+    }
+    assert_eq!(
+        after_setup("      - run: rustup default \"1.98.1\" && cargo +1.98.1 test\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        after_setup("      - run: rustup default $RUST\n"),
+        [unreadable("$RUST")]
+    );
+    assert_eq!(
+        matrix_script("os: [ubuntu-latest]", "cargo +${{ matrix.rust }} test"),
+        [unreadable("${{ matrix.rust }}")]
+    );
+    let writes = "ci.yaml: a script writes rust-toolchain.toml, so CI may build with another \
+                  toolchain than the one checked";
+    for script in [
+        "echo '[toolchain]' > rust-toolchain.toml",
+        "printf x | tee rust-toolchain",
+        "sed -i s/1.98.1/1.97.0/ ./rust-toolchain.toml",
+    ] {
+        assert_eq!(
+            after_setup(&format!("      - run: {script}\n")),
+            [writes],
+            "{script}"
+        );
+    }
+    assert_eq!(
+        after_setup("      - run: cat rust-toolchain.toml > /dev/null\n"),
+        Vec::<String>::new()
+    );
+    // RUSTUP_TOOLCHAIN from the matrix, as a `toolchain` input is read.
+    let env = |rust: &str| {
+        strings(&ci_toolchain_problems(
+            &documents(
+                "ci.yaml",
+                &format!(
+                    "jobs:\n  rust:\n    strategy:\n      matrix:\n        rust: [{rust}]\n    env:\n      \
+                     RUSTUP_TOOLCHAIN: ${{{{ matrix.rust }}}}\n    steps:\n{SETUP}"
+                ),
+            ),
+            "1.98.1",
+            ToolchainRef::Input,
+        ))
+    };
+    assert_eq!(env("1.98.1"), Vec::<String>::new());
+    assert_eq!(env("nightly"), [installs("nightly")]);
+}
+
+/// A declared `workflow_call` or composite input is read as its default; no default, or another
+/// release, is refused.
+#[test]
+fn a_declared_toolchain_input_is_read_as_its_default() {
+    let declared = |inputs: &str| {
+        strings(&ci_toolchain_problems(
+            &documents(
+                "ci.yaml",
+                &format!(
+                    "on:\n  workflow_call:\n    inputs:\n{inputs}jobs:\n  rust:\n    steps:\n{SETUP}"
+                ),
+            ),
+            "1.98.1",
+            ToolchainRef::Input,
+        ))
+    };
+    assert_eq!(
+        declared("      toolchain:\n        type: string\n        default: 1.98.1\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        declared("      rust-version:\n        type: string\n        default: 1.98.1\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        declared("      toolchain:\n        type: string\n        default: 1.97.0\n"),
+        [installs("1.97.0")]
+    );
+    assert_eq!(
+        declared("      Rust-Version:\n        default: nightly\n"),
+        [installs("nightly")]
+    );
+    assert_eq!(
+        declared("      toolchain:\n        type: string\n        required: true\n"),
+        [unreadable(r#"{"required":true,"type":"string"}"#)]
+    );
+    assert_eq!(
+        declared("      toolchain:\n        default: ${{ github.event.inputs.rust }}\n"),
+        [unreadable("${{ github.event.inputs.rust }}")]
+    );
+}
+
+/// Fail closed: a quoted or pwsh `RUSTUP_TOOLCHAIN` assignment, a continued line, a quoted
+/// `+<toolchain>`, `rustup update` and `toolchain link`, `--toolchain`, cross and cargo-clippy,
+/// and `sed --in-place`, `perl -pi` or `rm` of `rust-toolchain.toml` are each read.
+#[test]
+fn script_toolchain_forms_are_read() {
+    for script in [
+        "export RUSTUP_TOOLCHAIN=\"nightly\"",
+        "export RUSTUP_TOOLCHAIN='nightly'",
+        "$env:RUSTUP_TOOLCHAIN = 'nightly'",
+        "$env:RUSTUP_TOOLCHAIN='nightly'",
+        "cargo \\\n  +nightly test",
+        "cargo \"+nightly\" test",
+        "cargo '+nightly' test",
+        "rustup update nightly",
+        "rustup toolchain link nightly ./local",
+        "rustup component add --toolchain nightly clippy",
+        "rustup target add --toolchain=nightly x86_64-unknown-linux-musl",
+        "cross +nightly build",
+        "cargo-clippy +nightly",
+        "printf 'RUSTUP_TOOLCHAIN=nightly\\n' >> \"$GITHUB_ENV\"",
+    ] {
+        let run = format!(
+            "      - run: |\n          {}\n",
+            script.replace('\n', "\n          ")
+        );
+        assert_eq!(after_setup(&run), [installs("nightly")], "{script}");
+    }
+    assert_eq!(
+        matrix_script(
+            "rust: [nightly]",
+            "export RUSTUP_TOOLCHAIN=\"${{ matrix.rust }}\""
+        ),
+        [installs("nightly")]
+    );
+    let writes = "ci.yaml: a script writes rust-toolchain.toml, so CI may build with another \
+                  toolchain than the one checked";
+    for script in [
+        "sed --in-place s/a/b/ rust-toolchain.toml",
+        "perl -pi -e s/a/b/ rust-toolchain.toml",
+        "rm -f rust-toolchain.toml",
+        "cp other.toml rust-toolchain.toml",
+        "mv other.toml ./rust-toolchain",
+    ] {
+        assert_eq!(
+            after_setup(&format!("      - run: {script}\n")),
+            [writes],
+            "{script}"
+        );
+    }
+}
+
+/// No false refusal: a copy from `rust-toolchain.toml`, rustup's flags with their values before
+/// the release, a value up to a backslash, and a bare `rustup default` before another line.
+#[test]
+fn script_toolchain_forms_are_not_misread() {
+    for script in [
+        "cp rust-toolchain.toml /tmp/saved.toml",
+        "rustup toolchain install --profile minimal -c clippy,rustfmt -t x86_64-unknown-linux-musl \
+         1.98.1",
+        "rustup toolchain install --profile=minimal 1.98.1",
+        "printf 'RUSTUP_TOOLCHAIN=1.98.1\\n' >> \"$GITHUB_ENV\"",
+        "rustup update --no-self-update",
+        "rustup default\n          cargo test",
+    ] {
+        let run = format!("      - run: |\n          {script}\n");
+        assert_eq!(after_setup(&run), Vec::<String>::new(), "{script}");
+    }
+    assert_eq!(
+        after_setup("      - run: rustup toolchain install --profile minimal 1.98.0\n"),
+        [installs("1.98.0")]
+    );
 }

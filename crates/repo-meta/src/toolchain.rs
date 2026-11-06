@@ -43,7 +43,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::yaml::{ActionStep, Value, action_steps, scalar_text};
-use crate::{Problem, Repo, pattern, regex};
+use crate::{Problem, Repo, case_arm, pattern, regex};
 
 /// One place a pin is written: a file, its content (`None` when it cannot be read), and the
 /// pattern whose first group is the pin there; every match counts. A required source that is
@@ -197,6 +197,12 @@ static EXACT_RUST: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d+\.\d+\.\d+$"))
 /// The Rust release of a `dhi.io/rust` base's tag, on a FROM line.
 static RUST_IMAGE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?mi)^[ \t]*FROM[ \t]+(?:--\S+[ \t]+)*dhi\.io/rust:([0-9][\w.]*?)-"));
+/// Any `dhi.io/rust` reference, with what follows the repository up to a word break: a FROM, a
+/// `--from=`, a `--mount=from=`, an ARG default or any other text.
+static RUST_IMAGE_REFERENCE: LazyLock<Regex> =
+    LazyLock::new(|| regex(r#"(?i)dhi\.io/rust([^\s"'\\,;)\]]*)"#));
+/// The release of a reference's tag.
+static RUST_IMAGE_RELEASE: LazyLock<Regex> = LazyLock::new(|| regex(r"^:(\d+\.\d+\.\d+)(?:-|$)"));
 /// The release a build stage's musl standard libraries are downloaded for.
 static RUST_VERSION_ARG: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?m)^ARG RUST_VERSION=(\S+)\s*$"));
@@ -297,8 +303,10 @@ pub fn rust_version_problems(
 /// What is wrong with an image's Rust against `release`: the `dhi.io/rust` tag of its build
 /// stage's FROM and its `ARG RUST_VERSION` (the release its musl standard libraries are
 /// downloaded for) are each written once, as an exact `X.Y.Z` release, and are the same release;
-/// and that release is `release` ([`RustVersion::Exact`]) or of its line ([`RustVersion::Line`],
-/// awtrix-controller and swarm-rootless-docker, whose image may take a later patch).
+/// that release is `release` ([`RustVersion::Exact`]) or of its line ([`RustVersion::Line`],
+/// awtrix-controller and swarm-rootless-docker, whose image may take a later patch); and every
+/// other `dhi.io/rust` reference outside a comment line (a `COPY --from=`, a `RUN --mount=from=`,
+/// an ARG default) has a tag of that same release, so no second Rust image builds a part.
 #[must_use]
 pub fn image_rust_problems(
     file: &str,
@@ -359,6 +367,53 @@ pub fn image_rust_problems(
             ));
         }
     }
+    let tags: Vec<&str> = RUST_IMAGE
+        .captures_iter(dockerfile)
+        .filter_map(|captures| captures.get(1).map(|version| version.as_str()))
+        .collect();
+    if let [tag] = tags.as_slice()
+        && EXACT_RUST.is_match(tag)
+    {
+        problems.extend(rust_reference_problems(file, dockerfile, tag));
+    }
+    problems
+}
+
+/// The `dhi.io/rust` references of `dockerfile`, outside comment lines, whose tag is not of the
+/// build FROM's release `tag`; another repository under `dhi.io/rust` (`dhi.io/rust-<name>`) is
+/// not one.
+fn rust_reference_problems(file: &str, dockerfile: &str, tag: &str) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    for line in dockerfile
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+    {
+        for captures in RUST_IMAGE_REFERENCE.captures_iter(line) {
+            let rest = &captures[1];
+            if rest
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_ascii_alphanumeric() || "_.-/".contains(next))
+            {
+                continue;
+            }
+            let reference = &captures[0];
+            match RUST_IMAGE_RELEASE.captures(rest) {
+                Some(release) if &release[1] == tag => {}
+                Some(_) => problems.push(Problem::at(
+                    file,
+                    format!(
+                        "references {reference}, another release than the build stage's \
+                         dhi.io/rust {tag}"
+                    ),
+                )),
+                None => problems.push(Problem::at(
+                    file,
+                    format!("references {reference}, with no exact X.Y.Z release in its tag"),
+                )),
+            }
+        }
+    }
     problems
 }
 
@@ -370,16 +425,65 @@ pub const RUST_TOOLCHAIN_ACTIONS: &[(&str, bool)] = &[
     ("actions-rust-lang/setup-rust-toolchain", true),
 ];
 
+/// The `with:` inputs that name a Rust toolchain on any step, whatever its action: the setup-rust
+/// actions' names for it (`rust-version` on hecrj/setup-rust-action, among others), matched in
+/// any case as GitHub reads input names. [`TOOLCHAIN_KEYS`] are not listed: every key of those
+/// names is read, under `with:` or anywhere else.
+const TOOLCHAIN_INPUTS: &[&str] = &["rust-toolchain", "rust-version", "rust-channel"];
+
+/// The keys that name a Rust toolchain wherever they are written: a step input, an `env:`, a
+/// matrix axis, a declared input.
+const TOOLCHAIN_KEYS: &[&str] = &["toolchain", "RUSTUP_TOOLCHAIN"];
+
+/// The inputs that name a Rust toolchain on one action only, too generic a name to read on
+/// another: moonrepo/setup-rust's `channel`.
+const ACTION_TOOLCHAIN_INPUTS: &[(&str, &str)] = &[("moonrepo/setup-rust", "channel")];
+
+/// A whole `${{ matrix.<name> }}` expression.
+static MATRIX_EXPRESSION: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"^\$\{\{\s*matrix\.([A-Za-z_][\w-]*)\s*\}\}$"));
+
 static COMMIT_REF: LazyLock<Regex> = LazyLock::new(|| regex(r"^[0-9a-f]{40}$"));
 
-/// A toolchain a script names: `rustup` installing or selecting one, or `cargo +<toolchain>`.
-/// Option flags before the toolchain are skipped; a flag's value is read as the toolchain, which
-/// errs toward a false failure, never a silent pass.
+/// The toolchain token of a script: a `${{ }}` expression, or a word up to a space, a quote, a
+/// shell operator or a backslash (`printf 'RUSTUP_TOOLCHAIN=1.98.1\n'`), after an optional
+/// quote; never a flag.
+const SCRIPT_TOKEN: &str = r"[\x22']?(\$\{\{.*?\}\}|[^\s\x22';&|<>()\\`-][^\s\x22';&|<>()\\`]*)";
+
+/// A toolchain a script names: `rustup` installing, updating, linking, selecting or running one,
+/// a `--toolchain` option, `+<toolchain>` on a Rust tool (quoted or not), or a
+/// `RUSTUP_TOOLCHAIN=` assignment (inline, exported, quoted, pwsh's `$env:`, or appended to
+/// `$GITHUB_ENV`). The whole token is captured, a `${{ }}` expression included. Before a rustup
+/// toolchain, flags are skipped, with the values of `--profile`, `-c`/`--component` and
+/// `-t`/`--target`; another flag's value is read as the toolchain, which errs toward a false
+/// failure, never a silent pass. A command and its toolchain are on one line, line continuations
+/// folded first.
 static SCRIPT_TOOLCHAIN: LazyLock<Regex> = LazyLock::new(|| {
+    regex(&format!(
+        concat!(
+            r"\brustup[ \t]+(?:toolchain[ \t]+(?:install|add|link)|install|update|default",
+            r"|override[ \t]+set|run)",
+            r"(?:[ \t]+(?:(?:--profile|--components?|--targets?|-c|-t)(?:[ \t]+|=)[^\s-]\S*",
+            r"|-\S+))*[ \t]+{token}",
+            r"|(?:(?m:^)|[ \t])--toolchain(?:[ \t]+|=){token}",
+            r"|\b(?:cargo-clippy|cargo|rustc|rustdoc|rustfmt|rustup|cross|clippy-driver)[ \t]+",
+            r"[\x22']?\+{token}",
+            r"|(?i:\bRUSTUP_TOOLCHAIN)[ \t]*=[ \t]*{token}",
+        ),
+        token = SCRIPT_TOKEN
+    ))
+});
+
+/// A script writing or removing `rust-toolchain` or `rust-toolchain.toml`: a redirection, `tee`,
+/// `sed -i` or `--in-place`, `perl -i`, or `rm` naming it, or `cp`, `mv`, `ln` or `install` with
+/// it as the destination (the last argument).
+static TOOLCHAIN_FILE_WRITE: LazyLock<Regex> = LazyLock::new(|| {
     regex(concat!(
-        r"\brustup\s+(?:toolchain\s+install|install|default|override\s+set)\s+",
-        r"(?:-\S+\s+)*([A-Za-z0-9][\w.-]*)",
-        r"|\bcargo\s+\+([A-Za-z0-9][\w.-]*)",
+        r"(?m)(?:>>?|\btee[ \t]|\bsed[ \t]+(?:-\S+[ \t]+)*?(?:-i|--in-place)",
+        r"|\bperl[ \t]+(?:-[a-hj-zA-Z]*[ \t]+)*-[a-zA-Z]*i|\brm[ \t])[^\n;&|]*?",
+        r"\brust-toolchain(?:\.toml)?(?:[\s\x22';)]|$)",
+        r"|\b(?:cp|mv|ln|install)[ \t][^\n;&|]*[ \t][\x22']?(?:[\w./-]*/)?",
+        r"rust-toolchain(?:\.toml)?[\x22']?[ \t]*(?:$|[;&|])",
     ))
 });
 
@@ -397,8 +501,19 @@ pub enum ToolchainRef {
 
 /// Every Rust toolchain the CI documents (path and parsed YAML) name, and a problem for every
 /// toolchain action that names none and does not read `rust-toolchain.toml`, or when no step sets
-/// up Rust at all. An action's toolchain is read as `refs` says; a script's is a
-/// `RUSTUP_TOOLCHAIN` variable, or a `rustup` or `cargo +` command in any string.
+/// up Rust at all. A toolchain action's toolchain is read as `refs` says. Whatever the action,
+/// a step's `rust-toolchain`, `rust-version` or `rust-channel` input (and moonrepo/setup-rust's
+/// `channel`) names one too, and so does every key named `toolchain` anywhere in a document (a
+/// step input, an `env:`, a matrix), each item of a list. A `${{ matrix.<name> }}` value is read
+/// as the values its job's matrix lists for the name (a matrix's `exclude:` installs nothing),
+/// and a declared input (`toolchain`, `rust-version`, ...) as its `default`; any other
+/// expression, a shell variable, an input with no default, or a matrix name the matrix does not
+/// list is a problem, so what the check cannot read fails it. Input and key names, and the
+/// actions, match in any case. A script's toolchain is a `RUSTUP_TOOLCHAIN` variable or
+/// assignment, a `rustup` command or a `+<toolchain>` in any string, read the same way; a script
+/// that writes `rust-toolchain.toml` is a problem. A job's `container:` image (`docker://rust:`)
+/// and a self-hosted runner's preinstalled Rust are out of scope: rustup there still obeys
+/// `rust-toolchain.toml`.
 #[must_use]
 pub fn ci_rust_toolchains(
     documents: &[(String, Value)],
@@ -412,16 +527,216 @@ pub fn ci_rust_toolchains(
     if !steps.iter().any(|step| {
         RUST_TOOLCHAIN_ACTIONS
             .iter()
-            .any(|(action, _)| *action == step.action)
+            .any(|(action, _)| action.eq_ignore_ascii_case(&step.action))
     }) {
         problems.push(Problem::new(
             "no CI step sets up a Rust toolchain; the check would see nothing",
         ));
     }
     for (file, document) in documents {
-        values.extend(script_rust_toolchains(file, document));
+        named_rust_toolchains(file, document, None, &mut values, &mut problems);
     }
     (values, problems)
+}
+
+/// The toolchains `node` names ([`ci_rust_toolchains`]): each toolchain key, each step's and each
+/// declared input's toolchain inputs, and each script's; `matrix` is the matrix of the job `node`
+/// is in.
+fn named_rust_toolchains<'doc>(
+    file: &str,
+    node: &'doc Value,
+    matrix: Option<&'doc Value>,
+    values: &mut Vec<PinValue>,
+    problems: &mut Vec<Problem>,
+) {
+    match node {
+        Value::Object(map) => {
+            let matrix = map
+                .get("strategy")
+                .and_then(|strategy| strategy.get("matrix"))
+                .or(matrix);
+            if let (Some(Value::String(uses)), Some(Value::Object(inputs))) =
+                (map.get("uses"), map.get("with"))
+            {
+                let action = uses
+                    .split_once('@')
+                    .map_or(uses.as_str(), |(action, _)| action);
+                for (key, input) in inputs {
+                    if is_toolchain_input(key)
+                        || ACTION_TOOLCHAIN_INPUTS.iter().any(|(named, name)| {
+                            named.eq_ignore_ascii_case(action) && name.eq_ignore_ascii_case(key)
+                        })
+                    {
+                        named_toolchain(file, input, matrix, true, values, problems);
+                    }
+                }
+            }
+            // A workflow's or a composite action's declared inputs: their defaults.
+            if let Some(Value::Object(declared)) = map.get("inputs") {
+                for (key, input) in declared {
+                    if is_toolchain_input(key) {
+                        named_toolchain(file, input, matrix, true, values, problems);
+                    }
+                }
+            }
+            let in_matrix = matrix.is_some_and(|matrix| std::ptr::eq(matrix, node));
+            for (key, value) in map {
+                if is_toolchain_key(key) {
+                    named_toolchain(file, value, matrix, true, values, problems);
+                }
+                if !(in_matrix && key == "exclude") {
+                    named_rust_toolchains(file, value, matrix, values, problems);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                named_rust_toolchains(file, item, matrix, values, problems);
+            }
+        }
+        Value::String(text) => script_rust_toolchains(file, text, matrix, values, problems),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// A key that names a toolchain wherever it is written, in any case: `toolchain` and
+/// `RUSTUP_TOOLCHAIN`.
+fn is_toolchain_key(key: &str) -> bool {
+    TOOLCHAIN_KEYS
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(key))
+}
+
+/// An input that names a toolchain on any action, in any case, as GitHub reads input names.
+fn is_toolchain_input(key: &str) -> bool {
+    TOOLCHAIN_INPUTS
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(key))
+}
+
+/// The toolchains a script (any string) names ([`SCRIPT_TOOLCHAIN`]), and a problem when it
+/// writes `rust-toolchain.toml`, which would change the toolchain under every other check.
+fn script_rust_toolchains(
+    file: &str,
+    text: &str,
+    matrix: Option<&Value>,
+    values: &mut Vec<PinValue>,
+    problems: &mut Vec<Problem>,
+) {
+    let folded = text.replace("\\\r\n", " ").replace("\\\n", " ");
+    let text = folded.as_str();
+    for captures in SCRIPT_TOOLCHAIN.captures_iter(text) {
+        let Some(token) = captures.iter().skip(1).flatten().next() else {
+            continue;
+        };
+        let token = token
+            .as_str()
+            .trim_end_matches([';', ')'])
+            .trim_matches(['"', '\'']);
+        if token.starts_with('$') && !token.starts_with("${{") {
+            problems.push(Problem::at(
+                file,
+                format!("names toolchain {token:?}, which the check cannot read as a release"),
+            ));
+        } else {
+            named_toolchain(
+                file,
+                &Value::String(token.to_owned()),
+                matrix,
+                true,
+                values,
+                problems,
+            );
+        }
+    }
+    if TOOLCHAIN_FILE_WRITE.is_match(text) {
+        problems.push(Problem::at(
+            file,
+            "a script writes rust-toolchain.toml, so CI may build with another toolchain than \
+             the one checked",
+        ));
+    }
+}
+
+/// The toolchain or toolchains one value names: a scalar, each item of a list, a declared input's
+/// `default`, or, when `resolve`, a `${{ matrix.<name> }}` read from `matrix`; anything else (an
+/// input with no default, another expression) is unreadable.
+fn named_toolchain(
+    file: &str,
+    value: &Value,
+    matrix: Option<&Value>,
+    resolve: bool,
+    values: &mut Vec<PinValue>,
+    problems: &mut Vec<Problem>,
+) {
+    let unreadable = |problems: &mut Vec<Problem>| {
+        problems.push(Problem::at(
+            file,
+            format!(
+                "names toolchain {:?}, which the check cannot read as a release",
+                scalar_text(value)
+            ),
+        ));
+    };
+    match value {
+        Value::String(text) if text.contains("${{") => {
+            let name = MATRIX_EXPRESSION
+                .captures(text.trim())
+                .filter(|_| resolve)
+                .map(|captures| captures[1].to_owned());
+            let Some(name) = name else {
+                unreadable(problems);
+                return;
+            };
+            let Some(Value::Object(axes)) = matrix else {
+                unreadable(problems);
+                return;
+            };
+            let lookup = |within: &'_ serde_json::Map<String, Value>| {
+                within
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(&name))
+                    .map(|(_, value)| value)
+                    .cloned()
+            };
+            let mut defined: Vec<Value> = lookup(axes).into_iter().collect();
+            if let Some(Value::Array(includes)) = axes.get("include") {
+                defined.extend(
+                    includes
+                        .iter()
+                        .filter_map(Value::as_object)
+                        .filter_map(lookup),
+                );
+            }
+            if defined.is_empty() {
+                unreadable(problems);
+            } else if !is_toolchain_key(&name) {
+                // A matrix `toolchain` is read where it is written; another name only here.
+                for definition in &defined {
+                    named_toolchain(file, definition, None, false, values, problems);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                named_toolchain(file, item, matrix, resolve, values, problems);
+            }
+        }
+        Value::Object(declared) => {
+            match declared
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("default"))
+            {
+                Some((_, default)) => {
+                    named_toolchain(file, default, None, false, values, problems);
+                }
+                None => unreadable(problems),
+            }
+        }
+        Value::String(_) | Value::Null | Value::Bool(_) | Value::Number(_) => {
+            values.push(PinValue::new(&scalar_text(value), file));
+        }
+    }
 }
 
 fn action_rust_toolchains(
@@ -433,13 +748,19 @@ fn action_rust_toolchains(
     for step in steps {
         let Some(&(_, reads_file)) = RUST_TOOLCHAIN_ACTIONS
             .iter()
-            .find(|(action, _)| *action == step.action)
+            .find(|(action, _)| action.eq_ignore_ascii_case(&step.action))
         else {
             continue;
         };
-        if let Some(toolchain) = step.with.get("toolchain") {
-            values.push(PinValue::new(toolchain, &step.file));
-        } else if refs == ToolchainRef::InputOrRef
+        if step
+            .with
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("toolchain"))
+        {
+            // Read with every other `toolchain` key, by named_rust_toolchains.
+            continue;
+        }
+        if refs == ToolchainRef::InputOrRef
             && !step.reference.is_empty()
             && !COMMIT_REF.is_match(&step.reference)
         {
@@ -455,31 +776,6 @@ fn action_rust_toolchains(
         }
     }
     (values, problems)
-}
-
-fn script_rust_toolchains(file: &str, document: &Value) -> Vec<PinValue> {
-    let mut values = Vec::new();
-    let mut pending = vec![document];
-    while let Some(node) = pending.pop() {
-        match node {
-            Value::Object(map) => {
-                if let Some(toolchain) = map.get("RUSTUP_TOOLCHAIN") {
-                    values.push(PinValue::new(&scalar_text(toolchain), file));
-                }
-                pending.extend(map.values());
-            }
-            Value::Array(items) => pending.extend(items),
-            Value::String(text) => {
-                for captures in SCRIPT_TOOLCHAIN.captures_iter(text) {
-                    if let Some(toolchain) = captures.get(1).or_else(|| captures.get(2)) {
-                        values.push(PinValue::new(toolchain.as_str(), file));
-                    }
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) => {}
-        }
-    }
-    values
 }
 
 /// What is wrong with the Rust toolchains CI names ([`ci_rust_toolchains`], read as `refs` says)
@@ -726,14 +1022,8 @@ fn archive_problems(
         )));
         return (0, problems);
     }
-    let found: BTreeSet<Arm> = pattern(&format!(
-        r"(?:^|[\s;])([A-Za-z0-9_*]+)\)\s*{}=([^;\s]+);\s*{}=([^;\s]+)",
-        regex::escape(archive.key),
-        regex::escape(archive.sha)
-    ))
-    .captures_iter(dockerfile)
-    .map(|arm| (arm[1].to_owned(), arm[2].to_owned(), arm[3].to_owned()))
-    .collect();
+    let case = case_arm::arms(dockerfile, archive.key, archive.sha);
+    let found: BTreeSet<Arm> = case.labelled();
     let mut recorded: BTreeMap<String, String> = BTreeMap::new();
     for captures in pattern(&format!(
         r"(?m)^{}([\w.-]+)[ \t]*:?=[ \t]*(\S*)[ \t]*$",
@@ -767,7 +1057,13 @@ fn archive_problems(
             ));
         }
     }
-    if found != want {
+    if found == want {
+        problems.extend(
+            case.problems(archive.key, archive.sha, &want)
+                .into_iter()
+                .map(|problem| Problem::at(dockerfile_file, problem)),
+        );
+    } else {
         problems.push(Problem::at(
             dockerfile_file,
             format!(
@@ -776,9 +1072,11 @@ fn archive_problems(
             ),
         ));
     }
-    let paired = found
+    // Each arm once, however many labels its pattern lists.
+    let paired = case
+        .arms
         .iter()
-        .filter(|(_, _, digest)| SHA256.is_match(digest))
+        .filter(|arm| SHA256.is_match(&arm.sha))
         .count();
     (paired, problems)
 }

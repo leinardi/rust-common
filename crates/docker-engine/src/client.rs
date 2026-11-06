@@ -267,7 +267,8 @@ impl Settings {
 
     /// The longest wait for a response's headers, from the request written (Go's
     /// `Transport.ResponseHeaderTimeout`), or `None` for moby's default, no bound: the caller
-    /// bounds every call.
+    /// bounds every call. It also bounds each body read of the ping the negotiation sends
+    /// ([`Client::ping`]), which every request waits on.
     #[must_use]
     pub fn response_header_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.response_header_timeout = timeout;
@@ -568,7 +569,12 @@ impl Client {
     /// `GET /_ping`, whose failure fails the ping and whose status of 400 or above is moby's
     /// response error. Returns the `Api-Version` header, empty when absent. Each answer's body
     /// is drained as moby's `ensureReaderClosed` drains it (up to 512 bytes), so its connection
-    /// is reused. It is moby's `Ping` without `NegotiateAPIVersion`, and the first step of the
+    /// is reused. With a [`Settings::response_header_timeout`], each drain, and the read of a
+    /// `GET /_ping` error body, is bounded by it too: a body that stalls is dropped with its
+    /// connection when the bound passes (an error body's ping then fails), so a stalled ping
+    /// holds the negotiation (which every request waits on) no longer than its headers could.
+    /// Without one, as moby's default, the reads wait as moby's do and the caller bounds the
+    /// call. It is moby's `Ping` without `NegotiateAPIVersion`, and the first step of the
     /// negotiation.
     ///
     /// # Errors
@@ -587,7 +593,7 @@ impl Client {
         if let Ok(response) = self.send(&target, head).await {
             let status = response.status();
             let api_version = api_version_header(&response);
-            ensure_reader_closed(response).await;
+            self.drain_ping(response).await;
             if status == StatusCode::OK {
                 return Ok(api_version);
             }
@@ -595,12 +601,45 @@ impl Client {
         let response = self.send(&target, || self.request(&target, &[])).await?;
         let api_version = api_version_header(&response);
         if (200..400).contains(&response.status().as_u16()) {
-            ensure_reader_closed(response).await;
+            self.drain_ping(response).await;
             return Ok(api_version);
         }
-        self.check_response(response, "GET", &self.url(&target))
-            .await?;
+        let url = self.url(&target);
+        match self.settings.response_header_timeout {
+            // The error body is read under the same bound as a drain (see above): a body that
+            // stalls fails the ping, which fails anyway, instead of holding the negotiation.
+            Some(limit) => {
+                let status = response.status();
+                let status_message = go_status(&response);
+                match tokio::time::timeout(limit, self.check_response(response, "GET", &url)).await
+                {
+                    Ok(checked) => checked?,
+                    Err(_) => {
+                        return Err(Error::response(
+                            status,
+                            format!(
+                                "request returned {status_message} for API route and version \
+                                 {url}; its body did not arrive within {limit:?}"
+                            ),
+                        ));
+                    }
+                }
+            }
+            None => self.check_response(response, "GET", &url).await?,
+        }
         Ok(api_version)
+    }
+
+    /// [`ensure_reader_closed`] for a ping's answer, bounded by the response-header timeout when
+    /// there is one (see [`Client::ping`]).
+    async fn drain_ping(&self, response: Response<Body>) {
+        match self.settings.response_header_timeout {
+            Some(limit) => {
+                // On expiry the response, and with it the connection, is dropped.
+                let _ = tokio::time::timeout(limit, ensure_reader_closed(response)).await;
+            }
+            None => ensure_reader_closed(response).await,
+        }
     }
 
     /// moby's `checkVersion`: negotiates once, and again on the next request after a failure,

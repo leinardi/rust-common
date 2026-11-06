@@ -64,8 +64,10 @@ tracked crate is a member (`workspace_layout.rs`); every relative Markdown link 
 should (`license_headers.rs`, `suppressions.rs`); one Rust release and one ShellCheck are pinned
 everywhere (`toolchain.rs`); no gate passes on nothing (`vacuous_flags.rs`); `ci-result` needs every
 gate, every skipped hook is run elsewhere, the whole-tree hooks always run and the rustdoc gate
-fails on warnings (`ci_gates.rs`); and `feature-sets.toml` covers every crate and every feature it
-declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on `meta/src`).
+fails on warnings (`ci_gates.rs`); repo-meta's `BUILDINFO_FIELDS` are the fields service-kit's
+`buildinfo!` reads (`buildinfo_fields.rs`); and `feature-sets.toml` covers every crate and every
+feature it declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on
+`meta/src`).
 Each test file also runs its checks on a scratch tree or an altered copy with a planted violation,
 so none is trusted on the strength of having found nothing to check.
 
