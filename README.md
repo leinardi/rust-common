@@ -166,7 +166,7 @@ program makes and the types it decodes stay the program's; it builds them on the
 
 | Item | What it is |
 | --- | --- |
-| `Settings`, `Settings::unix` | the daemon's socket (moby's `WithHost("unix://…")`); `user_agent` (moby's own, `moby_user_agent()`, by default; a value no header may carry is refused, `check_user_agent` tests one first) and `response_header_timeout` (none by default) are the caller's |
+| `Settings`, `Settings::unix` | the daemon's socket (moby's `WithHost("unix://…")`); `user_agent` (moby's own, `moby_user_agent()`, by default; a value no header may carry is refused, `check_user_agent` tests one first) and `response_header_timeout` (none by default; it also bounds the body reads of the negotiation's ping) are the caller's |
 | `Settings::from_env` (`tcp`) | `DOCKER_HOST` (unix, TCP and its base path, scoped IPv6), `DOCKER_API_VERSION` (a pin, no negotiation) and, with `tls`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY`, an empty one refused |
 | `Client` | the pool (two idle connections for 30s, a `GET` or `HEAD` sent again on a dropped reused connection, any other request only if it was never written), the lazy negotiation down from 1.56 with one shared ping, gzip on TCP, moby's error wording with the cause kept as the `source` |
 | `Client::get`, `get_body`, `get_list`, `get_object`, `events`, `ping` | a versioned `GET`; Go's decoding of a list or an object; moby's event stream; moby's `Ping` |
