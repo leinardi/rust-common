@@ -135,6 +135,13 @@ impl Request {
         path
     }
 
+    /// The target as sent: the `/v1.xx` prefix (when the client sent one) and the query included,
+    /// which is what an assertion on the API version reads.
+    #[must_use]
+    pub fn raw_path(&self) -> &str {
+        &self.target
+    }
+
     /// The query string without its `?`, as sent (percent-encoded); routes ignore it, so a test
     /// asserts the parameters here.
     #[must_use]

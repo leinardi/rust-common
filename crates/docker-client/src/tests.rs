@@ -552,3 +552,80 @@ mod attach_tests {
         assert!(receiver.await.is_err());
     }
 }
+
+#[tokio::test]
+async fn requests_carry_the_fixed_api_version() {
+    let engine = FakeEngine::start(&[("/containers/json", Reply::ok("[]"))]).unwrap();
+    let socket = engine.socket().to_str().unwrap();
+    let config = Config::from_env(env(&[
+        ("DOCKER_HOST", &format!("unix://{socket}")),
+        ("DOCKER_API_VERSION", "1.43"),
+    ]))
+    .unwrap();
+    let docker = negotiate(connect(config.clone()).unwrap(), &config)
+        .await
+        .unwrap();
+    docker
+        .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
+        .await
+        .unwrap();
+    let requests = engine.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].raw_path(), "/v1.43/containers/json");
+    assert_eq!(requests[0].path(), "/containers/json");
+}
+
+#[tokio::test]
+async fn requests_carry_the_negotiated_version_and_negotiation_itself_is_unversioned() {
+    let engine = FakeEngine::start(&[
+        ("/version", Reply::ok(r#"{"ApiVersion":"1.41"}"#)),
+        ("/containers/json", Reply::ok("[]")),
+    ])
+    .unwrap();
+    let socket = engine.socket().to_str().unwrap();
+    let config = Config::unix(socket).user_agent("tool/1.2");
+    let docker = connect(config.clone()).unwrap();
+
+    // Before negotiation: unversioned, as bollard has always sent it.
+    docker
+        .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
+        .await
+        .unwrap();
+    let docker = negotiate(docker, &config).await.unwrap();
+    docker
+        .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
+        .await
+        .unwrap();
+
+    let targets: Vec<String> = engine
+        .requests()
+        .iter()
+        .map(|request| request.raw_path().to_owned())
+        .collect();
+    assert_eq!(
+        targets,
+        ["/containers/json", "/version", "/v1.41/containers/json"]
+    );
+    // The other modifier duty survives.
+    assert_eq!(engine.requests()[2].header("user-agent"), Some("tool/1.2"));
+}
+
+#[test]
+fn a_version_prefix_is_added_once_and_the_query_kept() {
+    use crate::config::versioned;
+    let version = bollard::ClientVersion {
+        major_version: 1,
+        minor_version: 44,
+    };
+    let uri = |text: &str| text.parse::<http::Uri>().unwrap();
+    assert_eq!(
+        versioned(&uri("http://h/containers/json?all=1"), version),
+        Some(uri("http://h/v1.44/containers/json?all=1"))
+    );
+    assert_eq!(versioned(&uri("http://h/v1.40/version"), version), None);
+    // `/volumes` starts with a `v` but is not a version.
+    assert_eq!(
+        versioned(&uri("http://h/volumes"), version),
+        Some(uri("http://h/v1.44/volumes"))
+    );
+}
