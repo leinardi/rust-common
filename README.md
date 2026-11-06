@@ -27,7 +27,7 @@ it. All eleven are available.
 | `http-framing` (available) | HTTP/1 request framing over the bytes a connection read, as hyper frames them, std only | – |
 | `go-http` (available) | Go `net/http` server behaviours on hyper: the mux's answers, header order and framing, the four timeouts, `bind` and `parse_port`, `serve` and its drain | `testing` (the timeouts, the routes, the log callback and the listen-error prefix are parameters) |
 | `docker-engine` (available) | A Docker Engine API client over HTTP/1 that sends what moby client v0.6.0 sends: transport, version negotiation, events, decoding, moby's error texts | `tcp`, `tls`, `write`, `attach`, `test-util` (the `User-Agent` and the response-header timeout are parameters) |
-| `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
+| `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact`, `redact-go-slog` (temporary) (the labels, variables, tools and runner output are parameters) |
 | `repo-meta` (available) | Repository meta-test checks returning problems: workspace lints and layout, Markdown links, Dockerfiles and images, toolchain pins, CI gates, lint allowlists, vacuous flags, and the licence-header and suppression script harnesses | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals | `runtime` |
@@ -209,7 +209,8 @@ The suites' tests, clusters, images, label names and variables stay theirs; they
 | `context` (`async`) | Go's `context.Context` on tokio: `with_timeout`, `with_cancel`, `without_cancel`, `run` |
 | `testing` (`async`) | `TestHandle` (`log`, `error`, `fatal`, `skip`, `cleanup`, `run`), `Fatal`, `OrFatal`, `Outcome`, `Test`, `Suite<S>`, and `Runner` over a `RunnerConfig` (`--run`, the suite deadline, SIGINT and SIGTERM, the tally) |
 | `runner` (`sync`) | bitgauge's runner: `TestCase<S>`, `Test`, `main`, `main_selected`, `run`, `run_selected`, each given the prefix of the tests' temporary directories (bitgauge's `bitgauge-test-`); libtest's flags accepted |
-| `redact` (`redact`) | `RedactingLogger` (Go's text handler at debug, the caller's clock and zone), `Secret`, `redact_env` |
+| `redact` (`redact`) | no logging crate: `Log` (the trait the sweep logs through), `Logger` (plain `&str` fields to a writer, `secret` fields redacted), `Level`, `Secret`, `redact_env` |
+| `redact::RedactingLogger` (`redact-go-slog`) | the earlier go-slog logger (Go's text handler at debug, the caller's clock and zone), unchanged, and a `Log` too. **Temporary: it will be removed**; nothing implies it (not `bollard`), so a suite that still needs it names the feature itself and moves to `Logger` |
 | `host` (`bollard`) | `HostSweep {labels, resources, op_timeout}`: `sweep`, `list_environments`, `cleanup`, the removals; `sweep_rules`, `process_alive`, `with_timeout`, `OpError` |
 
 Each consumer passes its own: swarm-scheduler-exporter and swarm-device-access build `async`,
@@ -219,9 +220,9 @@ swarm-rootless-docker and `repo-meta` the default features, for the tool gate an
 `bollard` builds bollard 0.21.1 with `pipe` only; a suite that also needs `http` or `ssl` enables
 them on its own bollard dependency.
 
-It depends on `go-compat`, `jiff` (as `go-compat`) and `regex`; `async` adds `tokio` (`rt`,
-`time`, `signal`, `macros`) and `tokio-util`, `sync` adds `tempfile`, `redact` adds `go-slog`, and
-`bollard` adds `bollard` and `rustix` (`process`).
+It depends on `jiff` (as `go-compat`) and `regex`, and not on `go-compat`; `async` adds `tokio` (`rt`,
+`time`, `signal`, `macros`) and `tokio-util`, `sync` adds `tempfile`, `redact` adds nothing,
+`redact-go-slog` adds `go-slog`, and `bollard` adds `bollard` and `rustix` (`process`).
 
 ### repo-meta
 

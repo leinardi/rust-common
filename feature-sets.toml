@@ -106,13 +106,14 @@ service-kit = [
 # resources); bitgauge with `sync` (its runner, beside the run filter, the tool gate, gitenv, envid
 # and the identity rule of the default build); awtrix-controller, swarm-rootless-docker and
 # repo-meta with the default features, which enable nothing (toolgate::Gate, gitenv). Every feature
-# is also built alone.
+# is also built alone. `redact-go-slog` is temporary, implied by nothing.
 testenv-core = [
     { no-default-features = true },
     { features = ["async"] },
     { features = ["sync"] },
     { features = ["bollard"] },
     { features = ["redact"] },
+    { features = ["redact-go-slog"] }, # temporary, until the suites log through redact::Logger
     { features = ["async", "bollard", "redact"] }, # swarm-scheduler-exporter, swarm-device-access
     { all-features = true },
 ]

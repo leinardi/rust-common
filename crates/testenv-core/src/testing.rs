@@ -51,7 +51,7 @@ use std::sync::OnceLock;
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
-use go_compat::{duration, quote};
+use crate::text::{parse_duration, quote};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::Instant;
 
@@ -535,19 +535,19 @@ impl Runner {
             return Ok(self.config.default_timeout);
         }
         match self.config.timeout_rule {
-            TimeoutRule::Clamped => match duration::parse(&raw) {
+            TimeoutRule::Clamped => match parse_duration(&raw) {
                 Ok(nanos) => Ok(Duration::from_nanos(nanos.max(0).unsigned_abs())),
                 Err(error) => {
                     self.say(&format!("parse {name}: {error}"));
                     Err(1)
                 }
             },
-            TimeoutRule::Positive => match duration::parse(&raw) {
+            TimeoutRule::Positive => match parse_duration(&raw) {
                 Ok(nanos) if nanos > 0 => Ok(Duration::from_nanos(nanos.unsigned_abs())),
                 Ok(_) | Err(_) => {
                     self.out.say(&format!(
                         "invalid {name}={}: want a positive duration",
-                        quote::quote(&raw)
+                        quote(&raw)
                     ));
                     Err(2)
                 }

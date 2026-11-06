@@ -38,12 +38,11 @@ use bollard::query_parameters::{
     ListContainersOptions, ListImagesOptions, ListNetworksOptions, RemoveContainerOptions,
     RemoveImageOptions,
 };
-use go_slog::Attr;
 use jiff::Timestamp;
 
 use crate::Error;
 use crate::context::{Context, Ended};
-use crate::redact::RedactingLogger;
+use crate::redact::Log;
 use crate::sweep_rules::{Found, Labels, Owner, Resources, SweepRules};
 
 /// Bounds one ordinary Docker call in both suites, so a hung daemon fails that call instead of
@@ -66,13 +65,7 @@ impl HostSweep {
     /// their cleanup ran. A run that may still belong to a running suite, on this host or another,
     /// is left alone, and the reason is logged at debug; a removal is logged at info, and a
     /// cleanup that did not finish at warn.
-    pub async fn sweep(
-        &self,
-        ctx: &Context,
-        client: &Docker,
-        rules: &SweepRules,
-        log: &RedactingLogger,
-    ) {
+    pub async fn sweep(&self, ctx: &Context, client: &Docker, rules: &SweepRules, log: &dyn Log) {
         for env in self.list_environments(ctx, client, log).await {
             let verdict = rules.decide(env);
             if !verdict.remove {
@@ -80,8 +73,8 @@ impl HostSweep {
                     log.debug(
                         "sweep: keeping environment",
                         &[
-                            Attr::string("other_envid", verdict.env.id.clone()),
-                            Attr::string("reason", verdict.reason.clone()),
+                            ("other_envid", verdict.env.id.as_str()),
+                            ("reason", verdict.reason.as_str()),
                         ],
                     );
                 }
@@ -91,8 +84,8 @@ impl HostSweep {
             log.info(
                 "sweep: removing leaked environment",
                 &[
-                    Attr::string("leaked_envid", verdict.env.id.clone()),
-                    Attr::string("reason", verdict.reason.clone()),
+                    ("leaked_envid", verdict.env.id.as_str()),
+                    ("reason", verdict.reason.as_str()),
                 ],
             );
 
@@ -100,8 +93,8 @@ impl HostSweep {
                 log.warn(
                     "sweep: cleanup incomplete",
                     &[
-                        Attr::string("leaked_envid", verdict.env.id.clone()),
-                        Attr::string("err", error.to_string()),
+                        ("leaked_envid", verdict.env.id.as_str()),
+                        ("err", error.to_string().as_str()),
                     ],
                 );
             }
@@ -115,7 +108,7 @@ impl HostSweep {
         &self,
         ctx: &Context,
         client: &Docker,
-        log: &RedactingLogger,
+        log: &dyn Log,
     ) -> Vec<Found> {
         let filters = label_filters(self.labels.env_id.to_owned());
         let mut by_id = BTreeMap::new();
@@ -138,7 +131,7 @@ impl HostSweep {
             }
             Err(error) => log.warn(
                 "sweep: list containers",
-                &[Attr::string("err", error.to_string())],
+                &[("err", error.to_string().as_str())],
             ),
         }
 
@@ -159,7 +152,7 @@ impl HostSweep {
                 }
                 Err(error) => log.warn(
                     "sweep: list networks",
-                    &[Attr::string("err", error.to_string())],
+                    &[("err", error.to_string().as_str())],
                 ),
             }
         }
@@ -180,10 +173,9 @@ impl HostSweep {
                         self.labels.record(&mut by_id, Some(&image.labels));
                     }
                 }
-                Err(error) => log.warn(
-                    "sweep: list images",
-                    &[Attr::string("err", error.to_string())],
-                ),
+                Err(error) => {
+                    log.warn("sweep: list images", &[("err", error.to_string().as_str())]);
+                }
             }
         }
 

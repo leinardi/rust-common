@@ -33,9 +33,8 @@
 //! with Rust's quoting, the Go answer's stdout); the suites' answers, `check_identity`,
 //! `check_go_identity`, `check_help` and the image checks stay in the suites.
 
-use go_compat::quote;
-
 use crate::Error;
+use crate::text::quote;
 
 /// The argument both checks run the binary with.
 pub const IDENTITY_FLAG: &str = "-help";
@@ -88,7 +87,7 @@ impl Answer {
 /// How [`excerpt`] quotes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quoting {
-    /// Go's `strconv.Quote` (swarm-device-access).
+    /// Formerly Go's `strconv.Quote` (swarm-device-access); now the same as [`Quoting::Debug`].
     Go,
     /// Rust's `{:?}` (bitgauge).
     Debug,
@@ -99,8 +98,7 @@ pub enum Quoting {
 #[must_use]
 pub fn excerpt(text: &str, quoting: Quoting) -> String {
     let quoted = |text: &str| match quoting {
-        Quoting::Go => quote::quote(text),
-        Quoting::Debug => format!("{text:?}"),
+        Quoting::Go | Quoting::Debug => quote(text),
     };
     let first = text.lines().next().unwrap_or_default();
     if first.len() + 1 >= text.len() {

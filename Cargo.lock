@@ -1451,7 +1451,6 @@ version = "0.3.0"
 dependencies = [
  "bollard",
  "go-clock",
- "go-compat",
  "go-slog",
  "jiff",
  "regex",

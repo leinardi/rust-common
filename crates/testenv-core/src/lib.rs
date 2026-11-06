@@ -39,7 +39,10 @@
 //!   `--run`, suite deadline, signals and tally), whose output is Go's verbose test output.
 //! - `sync`: `runner`, the runner without async (`TestCase`, `main`, `run_selected`), which also
 //!   takes libtest's flags.
-//! - `redact`: `redact`, the harness's slog text log with secrets redacted, on `go-slog`.
+//! - `redact`: `redact`, the harness's log with secrets redacted, on plain strings: `Secret`,
+//!   `redact_env`, `Log` and `Logger`.
+//! - `redact-go-slog` (temporary, implied by nothing): the earlier go-slog `RedactingLogger`, which
+//!   implements `Log` too; removed once the suites log through `Logger`.
 //! - `bollard` (implies `async` and `redact`): `host`, the host daemon's sweep, listing and
 //!   cleanup of runs on bollard, and the PID liveness check.
 
@@ -59,6 +62,7 @@ pub mod runner;
 pub mod sweep_rules;
 #[cfg(feature = "async")]
 pub mod testing;
+mod text;
 pub mod toolgate;
 
 pub use error::Error;

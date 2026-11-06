@@ -176,8 +176,8 @@ fn the_excerpt_quotes_as_each_suite() {
         excerpt(BG_GO_STDERR, Quoting::Debug),
         r#""Usage of bitgauge serve:" (first line of 121 bytes)"#
     );
-    // The two quotings part on a control character.
-    assert_eq!(excerpt("a\u{1}", Quoting::Go), r#""a\x01""#);
+    // The two quotings are now the same.
+    assert_eq!(excerpt("a\u{1}", Quoting::Go), r#""a\u{1}""#);
     assert_eq!(excerpt("a\u{1}", Quoting::Debug), r#""a\u{1}""#);
 }
 

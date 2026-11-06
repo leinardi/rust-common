@@ -35,10 +35,10 @@ use std::fmt::Write as _;
 use std::fs;
 use std::time::Duration;
 
-use go_compat::{duration, quote};
 use jiff::Timestamp;
 
 use crate::Error;
+use crate::text::{format_nanos, parse_duration, quote};
 
 /// The age below which no other environment is ever removed, unless the suite's variable says
 /// otherwise ([`stale_after_from_env`]).
@@ -215,12 +215,7 @@ pub fn current_pid_namespace() -> String {
 /// No colon, nothing before it, or a PID that is not a positive integer (Go's `strconv.Atoi`):
 /// `owner is not <hostname>:<pid>: <value, Go-quoted>`.
 pub fn parse_owner(value: &str) -> Result<Owner, Error> {
-    let bad = || {
-        Error::new(format!(
-            "owner is not <hostname>:<pid>: {}",
-            quote::quote(value)
-        ))
-    };
+    let bad = || Error::new(format!("owner is not <hostname>:<pid>: {}", quote(value)));
     let colon = value
         .rfind(':')
         .filter(|&colon| colon > 0)
@@ -307,8 +302,8 @@ impl SweepRules {
                 env,
                 format!(
                     "started {} ago, under {}",
-                    duration::format(round(age, NANOS_PER_MINUTE)),
-                    duration::format(stale_after)
+                    format_nanos(round(age, NANOS_PER_MINUTE)),
+                    format_nanos(stale_after)
                 ),
             );
         }
@@ -359,11 +354,11 @@ pub fn stale_after_from_env(
     if raw.is_empty() {
         return Ok(default);
     }
-    match duration::parse(&raw) {
+    match parse_duration(&raw) {
         Ok(nanos) if nanos > 0 => Ok(Duration::from_nanos(nanos.unsigned_abs())),
         Ok(_) | Err(_) => Err(Error::new(format!(
             "bad stale-after window: {name}={} is not a positive duration",
-            quote::quote(&raw)
+            quote(&raw)
         ))),
     }
 }

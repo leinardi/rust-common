@@ -14,13 +14,10 @@
 //! The harness's one error type: a message that carries its context the way Go's wrapped errors
 //! do (`sweep: remove container 1a2b3c4d5e6f: ...`).
 //!
-//! Extracted from swarm-device-access/testenv/src/error.rs at 8b4ab3a3e417 (`join` on
-//! `go_compat::errors::join`), with swarm-scheduler-exporter/testenv/src/error.rs at c9e79afa8810,
+//! Extracted from swarm-device-access/testenv/src/error.rs at 8b4ab3a3e417 (`join`), with swarm-scheduler-exporter/testenv/src/error.rs at c9e79afa8810,
 //! which inlined the same join.
 
 use std::fmt;
-
-use go_compat::errors;
 
 /// A harness failure, with the chain of what was being done.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,11 +36,15 @@ impl Error {
         Self(format!("{context}: {}", self.0))
     }
 
-    /// Several errors as one, one message per line, as Go's `errors.Join`; `None` when there are
+    /// Several errors as one, one message per line, as `errors.Join` in Go; `None` when there are
     /// none.
     #[must_use]
     pub fn join(errors: Vec<Self>) -> Option<Self> {
-        errors::join(errors.into_iter().map(|error| Some(error.0))).map(Self)
+        if errors.is_empty() {
+            return None;
+        }
+        let lines: Vec<String> = errors.into_iter().map(|error| error.0).collect();
+        Some(Self(lines.join("\n")))
     }
 }
 

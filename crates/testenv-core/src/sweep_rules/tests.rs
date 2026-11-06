@@ -123,7 +123,7 @@ fn sweep_rules_decide() {
             "recent, owner gone",
             found("a", "here:200", &recent, "pid:[1]"),
             false,
-            "started 10m0s ago, under 1h0m0s",
+            "started 600s ago, under 3600s",
         ),
         (
             "stale, owner running",
