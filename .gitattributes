@@ -1,0 +1,5 @@
+# Byte-for-byte fixtures: the wire captures and golden files the crates' tests compare against are
+# copies of another program's output (Go's, an Engine's), some with CRLF line ends that are the
+# bytes under test, so no line-end conversion (a core.autocrlf of input or true would rewrite them).
+# The whitespace pre-commit hooks skip the same directories.
+crates/*/tests/testdata/** -text

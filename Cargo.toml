@@ -1,0 +1,71 @@
+[workspace]
+# Listed explicitly, never as a glob: meta/tests/workspace_lints.rs checks each member's manifest.
+# Library crates live under crates/<name> and are added here, and to feature-sets.toml, by the
+# change that brings them in.
+members = [
+    "crates/docker-engine",
+    "crates/go-clock",
+    "crates/go-compat",
+    "crates/go-prom",
+    "crates/go-slog",
+    "crates/go-http",
+    "crates/http-framing",
+    "crates/repo-meta",
+    "crates/service-kit",
+    "crates/testenv-core",
+    "crates/tracing-setup",
+    "meta",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# The language line, not the patch release rust-toolchain.toml pins, so a consumer still on an
+# earlier 1.98 patch release builds these crates.
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+authors = ["Roberto Leinardi"]
+repository = "https://github.com/leinardi/rust-common"
+# Consumed as a git dependency by tag, never from crates.io.
+publish = false
+
+# The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
+# not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
+# workspace-wide. It is the consumers' set (swarm-scheduler-exporter's), so code extracted from them
+# keeps compiling under the lints it was written for.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Only `#[expect(lint, reason = "...")]` may silence a lint: it fails once the lint stops firing,
+# and the reason is mandatory. Every one is counted by scripts/check-suppressions.sh.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# No panics outside tests; clippy.toml allows both in tests.
+unwrap_used = "deny"
+expect_used = "deny"
+# A library writes to the handle its caller gives it, never to the process's own output.
+print_stdout = "deny"
+print_stderr = "deny"
+# A match on an enum names every variant, so a new variant is a compile-time decision everywhere.
+wildcard_enum_match_arm = "deny"
+# Descriptive names; clippy's default allow-list applies.
+min_ident_chars = "deny"
+# No disallowed_methods: clippy.toml bans nothing yet. The consumers' bans (the wall clock read
+# outside the injected Clock, file writes, outbound connections) are application policy; a crate
+# here that needs one adds the clippy.toml entry and this lint together.
+
+# The meta-tests scan the tree with regexes; unoptimised, regex compilation and matching dominate
+# their run time. Only the regex crates are optimised in dev and test builds, which costs a few
+# seconds on a clean build and nothing on an incremental one; the workspace's own code stays at
+# opt-level 0 for debugging.
+[profile.dev.package.regex]
+opt-level = 3
+
+[profile.dev.package.regex-automata]
+opt-level = 3
+
+[profile.dev.package.regex-syntax]
+opt-level = 3

@@ -1,38 +1,47 @@
 #!/usr/bin/env bash
 #
-# License header checker, off until the repository picks a license.
+# Copyright (c) 2026 Roberto Leinardi
 #
-# Once enabled, it fails on any tracked code file whose first lines do not carry the project's
-# license notice and copyright line, so a missing header is caught as surely as one copied from
-# another project. YAML, JSON and Markdown are never governed: they are configuration and
+# Licensed under either of
+#
+#  * Apache License, Version 2.0 (LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0)
+#  * MIT license (LICENSE-MIT or https://opensource.org/licenses/MIT)
+#
+# at your option.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# License header checker.
+#
+# rust-common is dual-licensed MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE), and every code file
+# says so in its own header. This fails on any tracked code file whose first lines do not carry the
+# dual-license notice and the copyright line, so a header copied from another project (the MIT,
+# Apache-2.0 or GPL-3.0 header of the repository a file was extracted from) is caught as surely as
+# a missing one. YAML, JSON and Markdown are never governed: they are configuration and
 # documentation, not code files in this sense.
 #
-# The template ships no LICENSE, so nothing runs this yet. To enable it (AGENTS.md, "License
-# headers"):
-#   1. add the LICENSE and fill in the configuration block below;
-#   2. add the header to every file the script lists, this one included, with the year each file
-#      was first committed;
-#   3. wire the check-license-headers hook into .pre-commit-config.yaml.
-#
-# Exempt by default: the make-common files the bootstrap fetches (they carry make-common's own MIT
-# header; read from the Makefile's MK_COMMON_FILES) and scripts/bootstrap-mk-common.sh, which comes
-# from make-common too. Add generated and vendored files to the exemptions, each for a reason.
+# Governed: Rust and shell sources, the Makefile and the repo-local .mk snippets.
+# Exempt: the make-common files the bootstrap fetches (they carry make-common's own MIT header;
+# read from the Makefile's MK_COMMON_FILES) and scripts/bootstrap-mk-common.sh, which comes from
+# make-common too.
 
 set -euo pipefail
 
 # --- Configuration -------------------------------------------------------------------------------
 
 # Named in the messages, and in a GPL notice's "This file is part of ..." line.
-PROJECT_NAME="template-default"
+PROJECT_NAME="rust-common"
 
 # The copyright holder, as the copyright line names it.
 COPYRIGHT_HOLDER="Roberto Leinardi"
 
 # The license, as the messages name it.
-LICENSE_NAME=""
+LICENSE_NAME="MIT OR Apache-2.0"
 
-# Lines the header must contain, verbatim. Empty means "not configured", and the check refuses to
-# run rather than pass on nothing. Copy one preset, or write your own:
+# Lines the header must contain, verbatim (substrings, so the comment leader does not matter: Rust
+# files carry the notice in a /* */ block, the others in # comments). Empty means "not
+# configured", and the check refuses to run rather than pass on nothing. Other presets, for
+# reference:
 #
 #   MIT:
 #     "MIT License"
@@ -46,7 +55,15 @@ LICENSE_NAME=""
 #     "it under the terms of the GNU General Public License as published by"
 #     "the Free Software Foundation, either version 3 of the License, or"
 #     "(at your option) any later version."
-REQUIRED_LINES=()
+#
+# MIT OR Apache-2.0, the rust-lang dual-license block this repository uses:
+REQUIRED_LINES=(
+	"Licensed under either of"
+	"Apache License, Version 2.0 (LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0)"
+	"MIT license (LICENSE-MIT or https://opensource.org/licenses/MIT)"
+	"at your option."
+	"SPDX-License-Identifier: MIT OR Apache-2.0"
+)
 
 # The copyright line: the year (or years) and the holder, on one line. Matches both
 # "Copyright (c) 2026 Name" (MIT, GPL) and "Copyright 2026 Name." (Apache-2.0). An extended regex,
@@ -58,8 +75,8 @@ HEADER_WINDOW=30
 
 # Governed file extensions (without the dot), and governed file names matched on the base name.
 # Repo-local .mk fragments are governed too; the make-common ones are exempt below.
-GOVERNED_EXTENSIONS=(sh bash py go ts tsx mts cts js mjs cjs vue rs rb tf lua)
-GOVERNED_NAMES=(Makefile Dockerfile "*.Dockerfile")
+GOVERNED_EXTENSIONS=(sh bash rs)
+GOVERNED_NAMES=(Makefile)
 
 # Path prefixes and exact paths that are not this project's own code.
 EXEMPT_PREFIXES=()

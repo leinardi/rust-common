@@ -1,0 +1,25 @@
+[package]
+name = "meta"
+version = "0.0.0"
+description = "Repository meta-tests for rust-common"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# The repository checks the meta-tests run (repo-meta), the repository root (testenv-core's
+# repo_root!), and the feature-sets.toml reader the feature-matrix runner and the meta-tests share,
+# with the crate manifests (toml).
+[dependencies]
+repo-meta = { path = "../crates/repo-meta" }
+testenv-core = { path = "../crates/testenv-core" }
+toml = "1.1.8"
+
+# The scratch trees of the feature-set negative controls.
+[dev-dependencies]
+tempfile = "3.27.0"

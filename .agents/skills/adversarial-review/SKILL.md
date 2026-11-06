@@ -1,16 +1,18 @@
 ---
 name: adversarial-review
 description: >
-  Adversarial code review of a set of changes to template-default, the default leinardi/*
-  repository template — working tree, staged diff, a branch vs main, a commit range, or a PR.
-  Hunts for workflow permission and injection problems, unpinned actions, shell recipes that
-  break on unusual input, commit types that ship the wrong release, and docs that no longer
-  match the code, then reports ranked findings. Use when the user asks to review changes/a
+  Adversarial code review of a set of changes to rust-common, the workspace of library crates
+  the leinardi/* Rust projects share — working tree, staged diff, a branch vs main, a commit
+  range, or a PR. Hunts for behaviour that changes for one consumer to suit another, extracted
+  code that lost a fix or its provenance, public API and feature breaks, panics and lint
+  escapes in library code, feature sets that compile only by unification, meta-tests that pass
+  on nothing, workflow permission and pinning problems, and commit types that ship the wrong
+  release, then reports ranked findings. Use when the user asks to review changes/a
   diff/a PR/a branch, "check my work before committing", "is this ready to merge", or "poke
   holes in this".
 ---
 
-# Adversarial Review — template-default
+# Adversarial Review — rust-common
 
 You are a hostile reviewer. Assume the change is **wrong until proven right**. Find the input,
 state or event where it breaks. A review that finds nothing is only credible after you tried to
@@ -51,6 +53,42 @@ Read `AGENTS.md` first: its conventions are the review checklist's floor, and `R
 user-facing contract a change must keep true.
 
 ## 3. Repository invariants — check on every review
+
+### Library crates
+
+- **A difference between consumers is a parameter, never a fork.** The crates replace copies
+  that several projects ran with different behaviour on purpose (an exposition version, a log
+  style, a timeout, a user agent). A change that alters what one consumer observes to suit
+  another, or a default that silently picks one project's behaviour, is **high**: name the
+  consumer and the output that changes. A second copy of the same logic for another consumer is
+  a finding too.
+- **Extraction keeps every fix and names its origin.** An extracted file carries
+  `Extracted from <repo>/<path> at <sha>` in its module doc and the dual-license header in place
+  of its original one. Diff it against the copies it replaces: a fix present in one copy and
+  missing here is a regression for that consumer. Tests and fixtures move with the code, and
+  byte-for-byte fixtures (`testdata/`) are moved, never re-generated or tidied.
+- **Public API is the contract.** A changed `pub` signature, a removed item, a renamed feature
+  or a new required parameter breaks consumers pinned to a tag: it needs a `!` (§4) and a
+  migration note in the commit body.
+- **Features compile alone.** Each crate is built and tested on its own under every set in
+  `feature-sets.toml` (`make rust-feature-matrix`). A `#[cfg(feature = ...)]` that names an
+  undeclared feature, a feature that compiles only because another member enables a
+  dependency feature, or a new feature with no set naming it is a finding.
+- **Library hygiene.** No `unwrap`/`expect`, `print!`/`eprint!` or panic on input outside tests;
+  no wall-clock read the caller cannot inject; no `unsafe` (`unsafe_code = "forbid"`); lints
+  silenced only by `#[expect(lint, reason = "...")]`, counted in `.suppressions-baseline`. A new
+  dependency uses `default-features = false` where the defaults pull in more, and its licence is
+  in `deny.toml`'s allow list for a stated reason.
+- **Dependencies run downward.** A crate depends only on crates above it in the README's table.
+
+### Meta-tests must not pass on nothing
+
+`meta/tests/` guards claims nothing else checks: the workspace lints (`workspace_lints.rs`), the
+Markdown links (`docs.rs`), the feature-set coverage (`feature_sets.rs`). Make the guarded thing
+go wrong and see whether the test still notices. A test that passes because its walk found no
+file, its pattern matched nothing or its input was empty is a false pass; every rule needs a
+negative control over a scratch tree. A change that loosens one (a wider allowlist, a narrower
+walk, a dropped negative control) is a finding unless it says why.
 
 ### Workflows
 
@@ -109,8 +147,12 @@ it, report it; if not, dig once more, then drop it. No named input and wrong res
 | Diff touched | Run |
 | --- | --- |
 | anything | `make check` |
+| any `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rust-toolchain.toml` | `make verify` |
+| a crate's features or dependencies, `feature-sets.toml` | `make rust-feature-matrix` |
+| `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (network) |
+| `scripts/check-suppressions.sh`, `.suppressions-baseline` | the script, once as is and once with an added `#[expect]` staged without a baseline change |
 | a workflow | `make check` (actionlint), then reason through each trigger it has: pull request, push, dispatch, schedule |
-| `scripts/check-license-headers.sh` | the script, once as is and once on a file without the header (configure it first in a scratch copy if the repository has none) |
+| `scripts/check-license-headers.sh` | the script, once as is and once on a tracked file without the header |
 
 Say which gates you could not run rather than implying they passed.
 

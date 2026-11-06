@@ -43,10 +43,9 @@ assignees: []
 
 <!-- Fill in what makes sense for your question, or remove fields that don't apply. -->
 
-* Project version / commit SHA: `?`
+* Crate(s) and rust-common tag or commit SHA: `?`
+* Rust toolchain (`rustc --version`) and target: `?`
 * Operating system and version: `?`
-* Runtime and version (e.g., Node, Python, Java): `?`
-* Any relevant tooling / dependencies and versions: `?`
 
 ---
 

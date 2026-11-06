@@ -1,0 +1,325 @@
+/*
+ * Copyright (c) 2026 Roberto Leinardi
+ *
+ * Licensed under either of
+ *
+ *  * Apache License, Version 2.0 (LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0)
+ *  * MIT license (LICENSE-MIT or https://opensource.org/licenses/MIT)
+ *
+ * at your option.
+ *
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ */
+
+//! Go's `http.Server` deadlines, kept by a per-connection state that an I/O wrapper enforces and
+//! the service updates at the request boundaries hyper does not expose.
+//!
+//! Go's `conn.serve` and `readRequest`:
+//! - the first request's `t0` is when its read starts, right after the accept; the read deadline
+//!   is `t0 + ReadHeaderTimeout` while the head is read, then `t0 + ReadTimeout` for the body;
+//! - the write deadline is `now + WriteTimeout`, set once the head is read, and stays until the
+//!   next request's head is read;
+//! - after a response the read deadline is `now + IdleTimeout`, waiting for the next request's
+//!   first bytes, whose arrival is that request's `t0`; when they were already read with the
+//!   previous request (pipelining), `t0` is the end of the response, and the idle deadline is
+//!   skipped. hyper keeps such bytes in its own buffer, so `Framer` follows the request
+//!   framing to know they are there.
+//!
+//! A read waiting for bytes keeps its waker, and every change of the deadlines wakes it, so the
+//! new deadline is armed at once: a pipelined head's deadline, set when the previous response
+//! ends, can be earlier than the read deadline a read already waiting armed (the first request's
+//! `t0 + ReadTimeout`).
+//!
+//! hyper's own `header_read_timeout` cannot express this: hyper 1.12 arms it as soon as a
+//! connection goes idle, so it also closes an idle keep-alive connection after the header
+//! timeout, and it panics on the first poll when no hyper timer is set. It stays off.
+//!
+//! Extracted from swarm-scheduler-exporter/src/server/timeouts.rs at c9e79afa8810 (the same code
+//! as swarm-device-access/src/server/timeouts.rs at 8b4ab3a3e417), without either program's
+//! constant (`Timeouts::EXPORTER`, `Timeouts::DAEMON`): the caller passes its [`Timeouts`]. The
+//! waiting read's waker is kept as bitgauge/src/server/timeouts.rs at 600fc3905200 keeps it; the
+//! two copies kept it only once a read had met its deadline.
+
+use std::future::Future as _;
+use std::io;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::time::{Instant, Sleep};
+
+use http_framing::Framer;
+
+/// The four `http.Server` timeouts. There is no default: each program passes its own (Go's
+/// `http.Server` fields, as the program it replaces set them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timeouts {
+    /// `ReadHeaderTimeout`.
+    pub read_header: Duration,
+    /// `ReadTimeout`.
+    pub read: Duration,
+    /// `WriteTimeout`.
+    pub write: Duration,
+    /// `IdleTimeout`.
+    pub idle: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// Reading a request head.
+    Header,
+    /// Head read: the handler runs, or its response is written.
+    Request,
+    /// Response done, waiting for the next request's first bytes.
+    Idle,
+}
+
+#[derive(Debug)]
+struct Inner {
+    phase: Phase,
+    started: Instant,
+    read_deadline: Instant,
+    write_deadline: Option<Instant>,
+    // The waker of the read side while it waits, kept on every pending read and woken on every
+    // change of the deadlines, so the read arms the new deadline at once rather than when its old
+    // timer fires or bytes arrive: a pipelined head's deadline, set when the response ends, can
+    // be earlier than the one the waiting read armed.
+    //
+    // It also resumes a read that met its deadline while a handler ran. Go's background read then
+    // only cancels the request's context: the response is still written and the connection stays
+    // usable. So the read stalls until the response is done. Stalling without keeping the waker
+    // would hang the connection for good: hyper would never poll the read side again, and the
+    // idle deadline would never be armed.
+    read_waker: Option<Waker>,
+    // Where the requests read so far start and end, and how many responses are done: more
+    // requests started than answered means the next one is already (partly) read.
+    framer: Framer,
+    responses_done: u64,
+}
+
+impl Inner {
+    /// The next request's head is due within the header timeout from `now`.
+    fn start_header(&mut self, timeouts: Timeouts, now: Instant) {
+        self.phase = Phase::Header;
+        self.started = now;
+        self.read_deadline = now + timeouts.read_header;
+    }
+
+    fn next_request_read(&self) -> bool {
+        self.framer.started() > self.responses_done
+    }
+}
+
+/// One connection's deadlines, shared by its I/O wrapper, its service and its response bodies.
+#[derive(Debug, Clone)]
+pub struct ConnState {
+    timeouts: Timeouts,
+    inner: Arc<Mutex<Inner>>,
+}
+
+impl ConnState {
+    /// A connection accepted now: its first head is due within the header timeout.
+    #[must_use]
+    pub fn new(timeouts: Timeouts) -> Self {
+        let now = Instant::now();
+        Self {
+            timeouts,
+            inner: Arc::new(Mutex::new(Inner {
+                phase: Phase::Header,
+                started: now,
+                read_deadline: now + timeouts.read_header,
+                write_deadline: None,
+                read_waker: None,
+                framer: Framer::new(),
+                responses_done: 0,
+            })),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Applies `change`, then wakes a waiting read, which arms the new read deadline.
+    fn update(&self, change: impl FnOnce(&mut Inner, Timeouts, Instant)) {
+        let waker = {
+            let mut inner = self.lock();
+            change(&mut inner, self.timeouts, Instant::now());
+            inner.read_waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// hyper parsed a request head and calls the service.
+    pub fn on_request_head(&self) {
+        self.update(|inner, timeouts, now| {
+            inner.phase = Phase::Request;
+            inner.read_deadline = inner.started + timeouts.read;
+            inner.write_deadline = Some(now + timeouts.write);
+        });
+    }
+
+    /// hyper dropped the response body: written, or the connection ended.
+    pub fn on_response_done(&self) {
+        self.update(|inner, timeouts, now| {
+            inner.responses_done += 1;
+            if inner.next_request_read() {
+                inner.start_header(timeouts, now);
+            } else {
+                inner.phase = Phase::Idle;
+                inner.read_deadline = now + timeouts.idle;
+            }
+        });
+    }
+
+    /// The connection read `bytes`. On an idle connection, the first bytes of a new request
+    /// start its header timer; the rest of a body the handler did not read does not.
+    fn on_bytes_read(&self, bytes: &[u8]) {
+        let now = Instant::now();
+        let mut inner = self.lock();
+        inner.framer.feed(bytes);
+        if inner.phase == Phase::Idle && inner.next_request_read() {
+            inner.start_header(self.timeouts, now);
+        }
+    }
+
+    fn read_deadline(&self) -> Instant {
+        self.lock().read_deadline
+    }
+
+    /// Keeps the waiting read's waker, returning the deadline it waits under.
+    fn park_read(&self, context: &Context<'_>) -> Instant {
+        let mut inner = self.lock();
+        inner.read_waker = Some(context.waker().clone());
+        inner.read_deadline
+    }
+
+    fn write_deadline(&self) -> Option<Instant> {
+        self.lock().write_deadline
+    }
+
+    /// What a read that met its deadline does: stalls (none) while a request runs, else fails.
+    fn on_read_deadline(&self, context: &Context<'_>) -> Option<io::Error> {
+        let mut inner = self.lock();
+        if inner.phase == Phase::Request {
+            inner.read_waker = Some(context.waker().clone());
+            None
+        } else {
+            Some(timed_out("read"))
+        }
+    }
+}
+
+fn timed_out(what: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, format!("{what} deadline exceeded"))
+}
+
+/// An I/O wrapper failing reads and writes once their deadline passed, as a Go `net.Conn` with
+/// `SetReadDeadline` and `SetWriteDeadline` does.
+#[derive(Debug)]
+pub struct TimedIo<T> {
+    io: T,
+    state: ConnState,
+    read_sleep: Pin<Box<Sleep>>,
+    write_sleep: Pin<Box<Sleep>>,
+}
+
+impl<T> TimedIo<T> {
+    /// `io` under the deadlines of `state`.
+    #[must_use]
+    pub fn new(io: T, state: ConnState) -> Self {
+        let now = Instant::now();
+        Self {
+            io,
+            read_sleep: Box::pin(tokio::time::sleep_until(state.read_deadline().max(now))),
+            write_sleep: Box::pin(tokio::time::sleep_until(now)),
+            state,
+        }
+    }
+}
+
+/// Polls `sleep`, moved to `deadline` first; whether the deadline passed.
+fn expired(sleep: &mut Pin<Box<Sleep>>, deadline: Instant, context: &mut Context<'_>) -> bool {
+    if sleep.deadline() != deadline {
+        sleep.as_mut().reset(deadline);
+    }
+    sleep.as_mut().poll(context).is_ready()
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for TimedIo<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = &mut *self;
+        let deadline = this.state.read_deadline();
+        if Instant::now() >= deadline {
+            return this
+                .state
+                .on_read_deadline(context)
+                .map_or(Poll::Pending, |error| Poll::Ready(Err(error)));
+        }
+        let before = buf.filled().len();
+        match Pin::new(&mut this.io).poll_read(context, buf) {
+            Poll::Ready(Ok(())) => {
+                let read = &buf.filled()[before..];
+                if !read.is_empty() {
+                    this.state.on_bytes_read(read);
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => {
+                // The deadline as of now, with the waker kept, so a change made after the poll
+                // started (or while it waits) is not missed.
+                let deadline = this.state.park_read(context);
+                if expired(&mut this.read_sleep, deadline, context) {
+                    this.state
+                        .on_read_deadline(context)
+                        .map_or(Poll::Pending, |error| Poll::Ready(Err(error)))
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for TimedIo<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = &mut *self;
+        let deadline = this.state.write_deadline();
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Poll::Ready(Err(timed_out("write")));
+        }
+        match Pin::new(&mut this.io).poll_write(context, buf) {
+            Poll::Pending => match deadline {
+                Some(deadline) if expired(&mut this.write_sleep, deadline, context) => {
+                    Poll::Ready(Err(timed_out("write")))
+                }
+                Some(_) | None => Poll::Pending,
+            },
+            ready @ Poll::Ready(_) => ready,
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.io).poll_flush(context)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.io).poll_shutdown(context)
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,0 +1,137 @@
+# The per-crate feature matrix: `make rust-feature-matrix` (meta/src/bin/feature-matrix.rs) lints
+# every target, warnings as errors, and runs the tests of each crate listed here under each of its
+# sets, one package at a time:
+#
+#   cargo clippy --locked --all-targets --manifest-path crates/<name>/Cargo.toml -p <name> <flags> \
+#       -- -D warnings
+#   cargo test   --locked               --manifest-path crates/<name>/Cargo.toml -p <name> <flags>
+#
+# Format: one key per crate (the directory name under crates/, which is also the package name),
+# holding a non-empty array of sets. A set is an inline table with any of:
+#
+#   no-default-features = true        -> --no-default-features
+#   features = ["a", "b"]             -> --features a,b
+#   all-features = true               -> --all-features
+#
+# `{}` is the default features. Any other key, an empty array, or a crate whose manifest is
+# missing fails the run. Example:
+#
+#   docker-engine = [
+#       { no-default-features = true },
+#       { features = ["tcp", "tls"] },      # swarm-scheduler-exporter
+#       { features = ["write", "attach"] }, # swarm-device-access
+#       { all-features = true },
+#   ]
+#
+# meta/tests/feature_sets.rs holds the file to the crates: every crate under crates/ has an entry,
+# with a --no-default-features set and an --all-features set, and every feature it declares is
+# named in at least one set. Add the exact set each consumer uses.
+
+# docker-engine: swarm-scheduler-exporter builds it with `tcp` and `tls` (DOCKER_HOST, TCP, TLS,
+# gzip; its own User-Agent and a 30s response-header timeout by parameter), adding `test-util` for
+# its tests; swarm-device-access with `write` and `attach` (its launcher's writes, the hijacked
+# attach, stdcopy and the wait answer; moby's User-Agent, no header timeout), adding `test-util`
+# likewise. Every feature is also built alone; with none it speaks to a unix socket only.
+docker-engine = [
+    { no-default-features = true },
+    { features = ["tcp"] },
+    { features = ["tls"] },
+    { features = ["write"] },
+    { features = ["attach"] },
+    { features = ["test-util"] },
+    { features = ["tcp", "tls"] },                 # swarm-scheduler-exporter
+    { features = ["tcp", "tls", "test-util"] },    # swarm-scheduler-exporter's tests
+    { features = ["write", "attach"] },            # swarm-device-access
+    { features = ["write", "attach", "test-util"] }, # swarm-device-access's tests
+    { all-features = true },
+]
+
+# go-compat has no features: both sets build the same crate, and are listed because every crate has
+# them.
+go-compat = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
+# go-clock has no features; swarm-scheduler-exporter, swarm-device-access and awtrix-controller use
+# it as it is.
+go-clock = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
+# go-prom: swarm-scheduler-exporter and swarm-device-access build it with no features (the default
+# enables nothing) and pick their expfmt negotiation by parameter (ExpfmtVersion::V0_71_0 and
+# V0_70_1); swarm-scheduler-exporter's collector tests add `testing` (gather_series, series_id).
+go-prom = [
+    { no-default-features = true },
+    { features = ["testing"] },
+    { all-features = true },
+]
+
+# go-slog has no features: swarm-scheduler-exporter (the global logger, PlainStyle::Quoted, the
+# strict parsers) and swarm-device-access (LogHandle, PlainStyle::Raw, the fallback parsers) choose
+# by parameter, so both build it as it is.
+go-slog = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
+# go-http: swarm-scheduler-exporter and swarm-device-access build it with no features (each passes
+# its own Timeouts and ListenError prefix) and add `testing` for their Go wire-capture tests.
+go-http = [
+    { no-default-features = true },
+    { features = ["testing"] },
+    { all-features = true },
+]
+
+# http-framing has no features; swarm-scheduler-exporter and swarm-device-access use it through
+# go-http, and bitgauge directly.
+http-framing = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
+# service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
+# no-default-features set, as the default enables nothing); swarm-scheduler-exporter and
+# swarm-device-access also use the runtime and the signals, awtrix-controller the runtime only.
+service-kit = [
+    { no-default-features = true },
+    { features = ["runtime"] },
+    { all-features = true },
+]
+
+# testenv-core: swarm-scheduler-exporter and swarm-device-access build it with `async`, `bollard`
+# and `redact` (bollard implies the other two; each suite passes its own labels, variables and
+# resources); bitgauge with `sync` (its runner, beside the run filter, the tool gate, gitenv, envid
+# and the identity rule of the default build); awtrix-controller, swarm-rootless-docker and
+# repo-meta with the default features, which enable nothing (toolgate::Gate, gitenv). Every feature
+# is also built alone.
+testenv-core = [
+    { no-default-features = true },
+    { features = ["async"] },
+    { features = ["sync"] },
+    { features = ["bollard"] },
+    { features = ["redact"] },
+    { features = ["async", "bollard", "redact"] }, # swarm-scheduler-exporter, swarm-device-access
+    { all-features = true },
+]
+
+# repo-meta has no features: swarm-scheduler-exporter, swarm-device-access, bitgauge,
+# awtrix-controller, swarm-rootless-docker and this repository's meta crate build it as it is and
+# pick each check's strictness by parameter.
+repo-meta = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
+# tracing-setup: awtrix-controller builds it with `log-bridge` (its dependencies log through the
+# `log` facade), adding `testing` for its tests; swarm-rootless-docker and bitgauge with no features,
+# adding `testing` likewise. Which writer, level, format, target and JSON span fields are parameters.
+tracing-setup = [
+    { no-default-features = true },
+    { features = ["log-bridge"] },
+    { features = ["testing"] },
+    { features = ["log-bridge", "testing"] }, # awtrix-controller's tests
+    { all-features = true },
+]

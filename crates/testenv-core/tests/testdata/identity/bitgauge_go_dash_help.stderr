@@ -1,0 +1,3 @@
+Usage of bitgauge serve:
+  -config string
+    	path to the YAML configuration file (default "/etc/bitgauge/config.yaml")

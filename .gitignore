@@ -17,8 +17,12 @@ out/
 *.swp
 *~
 
-# Logs
+# Build outputs: cargo's
+/target/
+
+# Logs, but not the golden log captures the crates' tests compare against
 *.log
+!crates/*/tests/testdata/**/*.log
 
 # Local tooling / sandbox
 .env

@@ -1,0 +1,18 @@
+[package]
+name = "http-framing"
+description = "HTTP/1 request framing over the bytes a connection read, as hyper frames them: where each request starts and ends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "http_framing"
+
+[lints]
+workspace = true
+
+# No dependencies: the standard library only.

@@ -1,0 +1,34 @@
+[package]
+name = "repo-meta"
+description = "Parameterised repository checks for the meta-tests: links, Dockerfiles, toolchain pins, CI gates, lint opt-in and allowlists, vacuous flags, and the licence-header and suppression script harnesses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "repo_meta"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Go's strconv.Quote for a link target in a problem, path.Clean for a resolved link and
+# strings.ToLower for a heading slug, as the Go link checker the consumers ported.
+go-compat = { path = "../go-compat" }
+# The scan patterns: links, Dockerfile references, pins, flags and lint attributes.
+regex = "1.13.1"
+# The workflows, composite actions and the pre-commit configuration, read into serde_json's
+# Value as bitgauge reads them. Only the deserializer.
+serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+# The scratch repositories of the licence-header and suppression harnesses.
+tempfile = "3.27.0"
+# git isolation for the scratch repositories (gitenv), with the default features, which enable
+# nothing.
+testenv-core = { path = "../testenv-core" }
+# The manifests, rust-toolchain.toml and droast.toml.
+toml = "1.1.8"

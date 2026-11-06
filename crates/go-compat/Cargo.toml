@@ -1,0 +1,21 @@
+[package]
+name = "go-compat"
+description = "Ports of the Go standard library's formatting and parsing, byte for byte"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "go_compat"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Timestamps, offsets and TZif zones. The local zone is resolved here, the way Go does
+# (local_zone.rs), so none of jiff's tzdb or system features is on.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }

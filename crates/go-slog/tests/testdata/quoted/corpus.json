@@ -1,0 +1,876 @@
+{
+  "time": "2026-10-25T14:03:04.567891234+01:00",
+  "min_level": -100,
+  "records": [
+    {
+      "level": 0,
+      "message": "plain",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "plain"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "with space",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "with space"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "say \"hi\"",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "say \"hi\""
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "k=v",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "k=v"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "C:\\path\\x",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "C:\\path\\x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "line1\nline2",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "line1\nline2"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "a\tb",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "a\tb"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "a\rb",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "a\rb"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "a\u0001b",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "a\u0001b"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "ab",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "ab"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "a\bb\fc",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "a\bb\fc"
+        }
+      ]
+    },
+    {
+      "invalid_utf8": "slog.Info(\"a\\xffb\", \"s\", \"a\\xffb\")"
+    },
+    {
+      "invalid_utf8": "slog.Info(\"\\xff\", \"s\", \"\\xff\")"
+    },
+    {
+      "level": 0,
+      "message": "ok 🚀",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "ok 🚀"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "🚀",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "🚀"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "html <a>&amp;",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "html <a>&amp;"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "nbsp x",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "nbsp x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "zw​x",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "zw​x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "ls x",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "ls x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "é",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "é"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "repl�x",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "repl�x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "bidi‮x",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "bidi‮x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "c1x",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "c1x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "{brace}",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "{brace}"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "-dash",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "-dash"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "日本語",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "日本語"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "😀\u0000",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "😀\u0000"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "tab\tand space",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "tab\tand space"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "trailing ",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": "trailing "
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": " leading",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "s",
+          "value": " leading"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "keys",
+      "attrs": [
+        {
+          "kind": "string",
+          "key": "with space",
+          "value": "v"
+        },
+        {
+          "kind": "string",
+          "key": "",
+          "value": "emptykey"
+        },
+        {
+          "kind": "string",
+          "key": "a=b",
+          "value": "v"
+        },
+        {
+          "kind": "string",
+          "key": "q\"k",
+          "value": "v"
+        },
+        {
+          "kind": "string",
+          "key": "dot.key",
+          "value": "v"
+        },
+        {
+          "kind": "string",
+          "key": "k\nnl",
+          "value": "v"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "ints",
+      "attrs": [
+        {
+          "kind": "int",
+          "key": "zero",
+          "value": "0"
+        },
+        {
+          "kind": "int",
+          "key": "neg",
+          "value": "-42"
+        },
+        {
+          "kind": "int",
+          "key": "min",
+          "value": "-9223372036854775808"
+        },
+        {
+          "kind": "int",
+          "key": "max",
+          "value": "9223372036854775807"
+        },
+        {
+          "kind": "uint",
+          "key": "umax",
+          "value": "18446744073709551615"
+        },
+        {
+          "kind": "uint",
+          "key": "u",
+          "value": "7"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "floats",
+      "attrs": [
+        {
+          "kind": "float",
+          "key": "half",
+          "value": "0.5"
+        },
+        {
+          "kind": "float",
+          "key": "big",
+          "value": "1e+21"
+        },
+        {
+          "kind": "float",
+          "key": "e20",
+          "value": "1e+20"
+        },
+        {
+          "kind": "float",
+          "key": "small",
+          "value": "1e-07"
+        },
+        {
+          "kind": "float",
+          "key": "e6",
+          "value": "1e-06"
+        },
+        {
+          "kind": "float",
+          "key": "mil",
+          "value": "1.23456789e+08"
+        },
+        {
+          "kind": "float",
+          "key": "negzero",
+          "value": "-0"
+        },
+        {
+          "kind": "float",
+          "key": "sum",
+          "value": "0.3"
+        },
+        {
+          "kind": "float",
+          "key": "rsum",
+          "value": "0.30000000000000004"
+        },
+        {
+          "kind": "float",
+          "key": "stamp",
+          "value": "1.7297712345e+09"
+        },
+        {
+          "kind": "float",
+          "key": "one",
+          "value": "1"
+        },
+        {
+          "kind": "float",
+          "key": "maxf",
+          "value": "1.7976931348623157e+308"
+        },
+        {
+          "kind": "float",
+          "key": "sub",
+          "value": "5e-324"
+        },
+        {
+          "kind": "float",
+          "key": "e21m",
+          "value": "1.2345678901234568e+20"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "nan",
+      "attrs": [
+        {
+          "kind": "float",
+          "key": "nan",
+          "value": "NaN"
+        },
+        {
+          "kind": "string",
+          "key": "after",
+          "value": "x"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "inf",
+      "attrs": [
+        {
+          "kind": "float",
+          "key": "pinf",
+          "value": "+Inf"
+        },
+        {
+          "kind": "float",
+          "key": "ninf",
+          "value": "-Inf"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "bools",
+      "attrs": [
+        {
+          "kind": "bool",
+          "key": "t",
+          "value": true
+        },
+        {
+          "kind": "bool",
+          "key": "f",
+          "value": false
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "durations",
+      "attrs": [
+        {
+          "kind": "duration",
+          "key": "zero",
+          "value": "0"
+        },
+        {
+          "kind": "duration",
+          "key": "ms",
+          "value": "500000000"
+        },
+        {
+          "kind": "duration",
+          "key": "s30",
+          "value": "30000000000"
+        },
+        {
+          "kind": "duration",
+          "key": "m1",
+          "value": "60000000000"
+        },
+        {
+          "kind": "duration",
+          "key": "hms",
+          "value": "3723500000000"
+        },
+        {
+          "kind": "duration",
+          "key": "ns",
+          "value": "1"
+        },
+        {
+          "kind": "duration",
+          "key": "us",
+          "value": "1500"
+        },
+        {
+          "kind": "duration",
+          "key": "neg",
+          "value": "-2000000000"
+        },
+        {
+          "kind": "duration",
+          "key": "min",
+          "value": "-9223372036854775808"
+        },
+        {
+          "kind": "duration",
+          "key": "max",
+          "value": "9223372036854775807"
+        },
+        {
+          "kind": "duration",
+          "key": "h100",
+          "value": "360000000000000"
+        },
+        {
+          "kind": "duration",
+          "key": "frac",
+          "value": "1234567890"
+        },
+        {
+          "kind": "duration",
+          "key": "ms1",
+          "value": "1000001"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "times",
+      "attrs": [
+        {
+          "kind": "time",
+          "key": "cet",
+          "value": "2026-10-25T14:03:04.567891234+01:00"
+        },
+        {
+          "kind": "time",
+          "key": "utc",
+          "value": "2026-01-02T03:04:05Z"
+        },
+        {
+          "kind": "time",
+          "key": "frac",
+          "value": "2026-01-02T03:04:05.12Z"
+        },
+        {
+          "kind": "time",
+          "key": "neg",
+          "value": "1999-12-31T23:59:59.999999999-05:30"
+        },
+        {
+          "kind": "time",
+          "key": "zero",
+          "value": "0001-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "slices and errors",
+      "attrs": [
+        {
+          "kind": "strings",
+          "key": "list",
+          "value": [
+            "a",
+            "b c"
+          ]
+        },
+        {
+          "kind": "strings",
+          "key": "empty",
+          "value": []
+        },
+        {
+          "kind": "strings",
+          "key": "one",
+          "value": [
+            "x"
+          ]
+        },
+        {
+          "kind": "strings",
+          "key": "ctl",
+          "value": [
+            "a\bb\f",
+            "\u0001",
+            "  ",
+            "nl\n",
+            ""
+          ]
+        },
+        {
+          "kind": "strings",
+          "key": "quoted",
+          "value": [
+            "\"q\"",
+            "<&>"
+          ]
+        },
+        {
+          "kind": "error",
+          "key": "err",
+          "value": "dial tcp: \"x\" refused"
+        },
+        {
+          "kind": "error",
+          "key": "wrapped",
+          "value": "service list: boom\nline2"
+        },
+        {
+          "kind": "nil",
+          "key": "nilerr"
+        }
+      ]
+    },
+    {
+      "invalid_utf8": "slog.Info(\"invalid utf8 slice\", \"bad\", []string{\"\\xff\"})"
+    },
+    {
+      "level": 0,
+      "message": "groups",
+      "attrs": [
+        {
+          "kind": "group",
+          "key": "req",
+          "attrs": [
+            {
+              "kind": "string",
+              "key": "method",
+              "value": "GET"
+            },
+            {
+              "kind": "int",
+              "key": "n",
+              "value": "2"
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "key": "a",
+          "attrs": [
+            {
+              "kind": "group",
+              "key": "b",
+              "attrs": [
+                {
+                  "kind": "int",
+                  "key": "c",
+                  "value": "1"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "key": "empty"
+        },
+        {
+          "kind": "group",
+          "key": "",
+          "attrs": [
+            {
+              "kind": "int",
+              "key": "inl",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "kind": "group",
+          "key": "sp ace",
+          "attrs": [
+            {
+              "kind": "string",
+              "key": "k",
+              "value": "v w"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "level": -4,
+      "message": "debug"
+    },
+    {
+      "level": 0,
+      "message": "info"
+    },
+    {
+      "level": 4,
+      "message": "warn"
+    },
+    {
+      "level": 8,
+      "message": "error"
+    },
+    {
+      "level": 1,
+      "message": "info+1"
+    },
+    {
+      "level": -5,
+      "message": "debug-1"
+    },
+    {
+      "level": 12,
+      "message": "error+4"
+    },
+    {
+      "level": 3,
+      "message": "warn-1"
+    },
+    {
+      "level": 0,
+      "message": "with",
+      "attrs": [
+        {
+          "kind": "int",
+          "key": "y",
+          "value": "2"
+        }
+      ],
+      "with": [
+        {
+          "attrs": [
+            {
+              "kind": "string",
+              "key": "component",
+              "value": "reconciler"
+            }
+          ]
+        },
+        {
+          "group": "g"
+        },
+        {
+          "attrs": [
+            {
+              "kind": "int",
+              "key": "x",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "with empty group",
+      "with": [
+        {
+          "attrs": [
+            {
+              "kind": "string",
+              "key": "c",
+              "value": "d"
+            }
+          ]
+        },
+        {
+          "group": "eg"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "nested with groups",
+      "attrs": [
+        {
+          "kind": "group",
+          "key": "h",
+          "attrs": [
+            {
+              "kind": "int",
+              "key": "i",
+              "value": "3"
+            }
+          ]
+        }
+      ],
+      "with": [
+        {
+          "group": "g1"
+        },
+        {
+          "group": "g2"
+        }
+      ]
+    },
+    {
+      "level": 0,
+      "message": "",
+      "attrs": [
+        {
+          "kind": "int",
+          "key": "k",
+          "value": "1"
+        }
+      ]
+    }
+  ]
+}

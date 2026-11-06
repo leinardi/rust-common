@@ -1,0 +1,10 @@
+# Applies to every workspace member: clippy reads the clippy.toml of the workspace root.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# Proper names the docs cite (a format, a tool); ".." keeps clippy's default list.
+doc-valid-idents = ["OpenMetrics", "ShellCheck", ".."]
+
+# No disallowed-methods or disallowed-macros: the consumers' bans are application policy (their
+# own clippy.toml), not a property of these crates. See [workspace.lints.clippy] in Cargo.toml.

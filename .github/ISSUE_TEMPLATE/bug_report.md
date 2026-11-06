@@ -9,16 +9,15 @@ assignees: []
 
 * [ ] I have checked that there are no duplicate active or recent issues (bugs, questions, or
   feature requests) describing this problem.
-* [ ] I am using the latest released version of this project (or have tested on the main/default
-  branch).
+* [ ] I am using the latest `vX.Y.Z` tag of rust-common (or have tested on the `main` branch).
 
 ## Step 2: Describe your environment
 
-* Project name / repository: `?`
-* Project version / commit SHA: `?`
+* Crate(s) affected: `?`
+* rust-common tag or commit SHA (from your `Cargo.lock`): `?`
+* The project that depends on it, and the features it enables: `?`
+* Rust toolchain (`rustc --version`) and target: `?`
 * Operating system and version: `?`
-* Runtime and version (e.g., Node, Python, Java): `?`
-* Any relevant tooling or dependencies and versions: `?`
 
 ## Step 3: Describe the problem
 
@@ -44,7 +43,7 @@ assignees: []
 
 <!-- Paste the smallest possible code or config snippet that reproduces the issue. -->
 
-```text
+```rust
 // Example snippet (replace with your own)
 ```
 
