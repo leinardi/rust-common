@@ -247,19 +247,25 @@ static FETCH: LazyLock<Regex> = LazyLock::new(|| {
         r"(?:^|&&|\|\||;|\||\(|\bthen\b|\bdo\b)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:curl|wget)\b",
     )
 });
-/// The consumers' own fetch marker, counted wherever it appears: their per-stage rule counts every
-/// `curl -fsSL`, so a fetch in a `case` arm, after `if`, `env`, `command`, a path prefix, inside
-/// `{ }`, backticks or `sh -c` still counts even where [`FETCH`] sees no command start.
+/// A curl or wget run anywhere in a RUN, command start or not (`if`, a `case` arm, `env`,
+/// `command`, a path prefix such as `/usr/bin/`, `{ }`, backticks, `sh -c`, `xargs`): the word,
+/// not part of a longer name, followed by a flag, a variable, a quoted argument or a URL. A package
+/// name (`apt-get install -y curl wget`) is followed by none of these.
+static INVOCATION: LazyLock<Regex> =
+    LazyLock::new(|| regex(r#"(?:^|[^\w.-])(?:curl|wget)\s+(?:-|\$|["']|https?://|ftp://)"#));
+/// The consumers' own fetch marker: their per-stage rule counts every `curl -fsSL`.
 const CURL_FETCH: &str = "curl -fsSL";
 /// The check every fetch must have in its RUN.
 const SHA256_CHECK: &str = "| sha256sum -c -";
 
-/// How many files a RUN fetches: the larger of the command-start count and the consumers'
-/// `curl -fsSL` count, so neither reading can hide a fetch the other sees.
+/// How many files a RUN fetches: the largest of the command-start count, the invocation count and
+/// the consumers' `curl -fsSL` count, so no reading can hide a fetch another sees. The invocation
+/// count sees every fetch the other two do in the consumers' shapes; the other two stay as floors.
 fn fetch_count(run: &str) -> usize {
     FETCH
         .find_iter(run)
         .count()
+        .max(INVOCATION.find_iter(run).count())
         .max(run.matches(CURL_FETCH).count())
 }
 

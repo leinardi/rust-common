@@ -23,8 +23,9 @@
 
 use super::{
     BasePolicy, BuildBase, BuildStage, Download, RuntimeStage, STAMP_FIELDS, StampSources, Stamps,
-    build_stage_problems, dockerfiles, is_dockerfile_path, label_policy_problems, label_problems,
-    only_dockerfile_problems, platform_problems, runtime_problems, stage_problems, syntax_problems,
+    build_stage_problems, dockerfiles, fetch_count, is_dockerfile_path, label_policy_problems,
+    label_problems, only_dockerfile_problems, platform_problems, runtime_problems, stage_problems,
+    syntax_problems,
 };
 use crate::dockerfile::{Stage, parse, stage_named};
 use crate::scratch::ScratchRepo;
@@ -432,9 +433,40 @@ fn an_extra_download_beside_a_listed_one_fails() {
         "\t&& x=`curl -fsSL https://example.invalid/x` \\\n",
         "\t&& sh -c \"curl -fsSL -o /tmp/x https://example.invalid/x\" \\\n",
         "\t&& echo https://example.invalid/x | xargs curl -fsSL -o /tmp/x \\\n",
+        // Neither `curl -fsSL` nor at a command start: only the invocation count sees these.
+        "\t&& if curl -fSL -o /tmp/x https://example.invalid/x; then :; fi \\\n",
+        "\t&& if wget -qO /tmp/x https://example.invalid/x; then :; fi \\\n",
+        "\t&& env wget -qO /tmp/x https://example.invalid/x \\\n",
+        "\t&& /usr/bin/wget -qO /tmp/x https://example.invalid/x \\\n",
+        "\t&& case \"${BUILDARCH}\" in amd64) curl -L -o /tmp/x \"${EXTRA_URL}\" ;; esac \\\n",
     ] {
         let sample = SSE_DOCKERFILE.replacen(zig_check, &format!("{zig_check}{extra}"), 1);
         assert!(!check(&sample).is_empty(), "{extra:?} passes");
+    }
+}
+
+/// Each fetch counts once, whichever reading sees it, and a package name is no fetch.
+#[test]
+fn every_fetch_counts_once_and_a_package_name_is_none() {
+    for (run, want) in [
+        // A command-start wget and a curl only the marker and the invocation count see.
+        (
+            "wget -qO /tmp/a https://example.invalid/a && if curl -fsSL -o /tmp/b https://example.invalid/b; then :; fi",
+            2,
+        ),
+        (
+            "curl -fsSL -o /tmp/a https://example.invalid/a | sha256sum -c -",
+            1,
+        ),
+        ("FOO=1 curl \"${URL}\" -o /tmp/a", 1),
+        (
+            "apt-get install -y --no-install-recommends ca-certificates curl wget",
+            0,
+        ),
+        ("apt-get install -y curl && rm -rf /var/lib/apt/lists/*", 0),
+        ("cargo build --locked && cp target/curlish /out", 0),
+    ] {
+        assert_eq!(fetch_count(run), want, "{run:?}");
     }
 }
 
