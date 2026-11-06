@@ -43,7 +43,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::yaml::{ActionStep, Value, action_steps, scalar_text};
-use crate::{Problem, Repo, pattern, regex};
+use crate::{Problem, Repo, case_arm, pattern, regex};
 
 /// One place a pin is written: a file, its content (`None` when it cannot be read), and the
 /// pattern whose first group is the pin there; every match counts. A required source that is
@@ -197,6 +197,12 @@ static EXACT_RUST: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d+\.\d+\.\d+$"))
 /// The Rust release of a `dhi.io/rust` base's tag, on a FROM line.
 static RUST_IMAGE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?mi)^[ \t]*FROM[ \t]+(?:--\S+[ \t]+)*dhi\.io/rust:([0-9][\w.]*?)-"));
+/// Any `dhi.io/rust` reference, with what follows the repository up to a word break: a FROM, a
+/// `--from=`, a `--mount=from=`, an ARG default or any other text.
+static RUST_IMAGE_REFERENCE: LazyLock<Regex> =
+    LazyLock::new(|| regex(r#"(?i)dhi\.io/rust([^\s"'\\,;)\]]*)"#));
+/// The release of a reference's tag.
+static RUST_IMAGE_RELEASE: LazyLock<Regex> = LazyLock::new(|| regex(r"^:(\d+\.\d+\.\d+)(?:-|$)"));
 /// The release a build stage's musl standard libraries are downloaded for.
 static RUST_VERSION_ARG: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?m)^ARG RUST_VERSION=(\S+)\s*$"));
@@ -297,8 +303,10 @@ pub fn rust_version_problems(
 /// What is wrong with an image's Rust against `release`: the `dhi.io/rust` tag of its build
 /// stage's FROM and its `ARG RUST_VERSION` (the release its musl standard libraries are
 /// downloaded for) are each written once, as an exact `X.Y.Z` release, and are the same release;
-/// and that release is `release` ([`RustVersion::Exact`]) or of its line ([`RustVersion::Line`],
-/// awtrix-controller and swarm-rootless-docker, whose image may take a later patch).
+/// that release is `release` ([`RustVersion::Exact`]) or of its line ([`RustVersion::Line`],
+/// awtrix-controller and swarm-rootless-docker, whose image may take a later patch); and every
+/// other `dhi.io/rust` reference outside a comment line (a `COPY --from=`, a `RUN --mount=from=`,
+/// an ARG default) has a tag of that same release, so no second Rust image builds a part.
 #[must_use]
 pub fn image_rust_problems(
     file: &str,
@@ -357,6 +365,53 @@ pub fn image_rust_problems(
                 file,
                 format!("builds with Rust {tag}, but rust-toolchain.toml pins {release}"),
             ));
+        }
+    }
+    let tags: Vec<&str> = RUST_IMAGE
+        .captures_iter(dockerfile)
+        .filter_map(|captures| captures.get(1).map(|version| version.as_str()))
+        .collect();
+    if let [tag] = tags.as_slice()
+        && EXACT_RUST.is_match(tag)
+    {
+        problems.extend(rust_reference_problems(file, dockerfile, tag));
+    }
+    problems
+}
+
+/// The `dhi.io/rust` references of `dockerfile`, outside comment lines, whose tag is not of the
+/// build FROM's release `tag`; another repository under `dhi.io/rust` (`dhi.io/rust-<name>`) is
+/// not one.
+fn rust_reference_problems(file: &str, dockerfile: &str, tag: &str) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    for line in dockerfile
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+    {
+        for captures in RUST_IMAGE_REFERENCE.captures_iter(line) {
+            let rest = &captures[1];
+            if rest
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_ascii_alphanumeric() || "_.-/".contains(next))
+            {
+                continue;
+            }
+            let reference = &captures[0];
+            match RUST_IMAGE_RELEASE.captures(rest) {
+                Some(release) if &release[1] == tag => {}
+                Some(_) => problems.push(Problem::at(
+                    file,
+                    format!(
+                        "references {reference}, another release than the build stage's \
+                         dhi.io/rust {tag}"
+                    ),
+                )),
+                None => problems.push(Problem::at(
+                    file,
+                    format!("references {reference}, with no exact X.Y.Z release in its tag"),
+                )),
+            }
         }
     }
     problems
@@ -726,14 +781,8 @@ fn archive_problems(
         )));
         return (0, problems);
     }
-    let found: BTreeSet<Arm> = pattern(&format!(
-        r"(?:^|[\s;])([A-Za-z0-9_*]+)\)\s*{}=([^;\s]+);\s*{}=([^;\s]+)",
-        regex::escape(archive.key),
-        regex::escape(archive.sha)
-    ))
-    .captures_iter(dockerfile)
-    .map(|arm| (arm[1].to_owned(), arm[2].to_owned(), arm[3].to_owned()))
-    .collect();
+    let case = case_arm::arms(dockerfile, archive.key, archive.sha);
+    let found: BTreeSet<Arm> = case.labelled();
     let mut recorded: BTreeMap<String, String> = BTreeMap::new();
     for captures in pattern(&format!(
         r"(?m)^{}([\w.-]+)[ \t]*:?=[ \t]*(\S*)[ \t]*$",
@@ -767,7 +816,13 @@ fn archive_problems(
             ));
         }
     }
-    if found != want {
+    if found == want {
+        problems.extend(
+            case.problems(archive.key, archive.sha, &want)
+                .into_iter()
+                .map(|problem| Problem::at(dockerfile_file, problem)),
+        );
+    } else {
         problems.push(Problem::at(
             dockerfile_file,
             format!(
@@ -776,9 +831,11 @@ fn archive_problems(
             ),
         ));
     }
-    let paired = found
+    // Each arm once, however many labels its pattern lists.
+    let paired = case
+        .arms
         .iter()
-        .filter(|(_, _, digest)| SHA256.is_match(digest))
+        .filter(|arm| SHA256.is_match(&arm.sha))
         .count();
     (paired, problems)
 }

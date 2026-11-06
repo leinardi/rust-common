@@ -196,9 +196,11 @@ impl Repo {
             .collect()
     }
 
-    /// Every file under `directory` (relative to the root, recursively, symlinks not followed)
-    /// whose name ends with one of `suffixes`, as slash-separated paths relative to the root,
-    /// sorted.
+    /// Every file under `directory` (relative to the root, recursively) whose name ends with one
+    /// of `suffixes`, as slash-separated paths relative to the root, sorted. A symlink counts as
+    /// what it points to when that is a file, and as a file when it points nowhere (reading it
+    /// then fails, as it would for a check); a symlinked directory is not entered, so a link back
+    /// up the tree cannot loop the walk.
     ///
     /// # Panics
     ///
@@ -219,7 +221,14 @@ impl Repo {
                     .unwrap_or_else(|error| panic!("inspect {relative}: {error}"));
                 if kind.is_dir() {
                     pending.push(relative);
-                } else if kind.is_file() && suffixes.iter().any(|suffix| name.ends_with(suffix)) {
+                    continue;
+                }
+                let file = kind.is_file()
+                    || (kind.is_symlink()
+                        && fs::metadata(self.path(&relative))
+                            .ok()
+                            .is_none_or(|target| target.is_file()));
+                if file && suffixes.iter().any(|suffix| name.ends_with(suffix)) {
                     found.push(relative);
                 }
             }
@@ -286,6 +295,27 @@ mod tests {
             repo.read_all(&["b.rs".to_owned()]),
             [("b.rs".to_owned(), "b".to_owned())]
         );
+    }
+
+    /// A symlink to a file is walked as the file, and a dangling one as a file; a symlinked
+    /// directory is not entered, so a link back up the tree ends the walk.
+    #[test]
+    fn the_walk_follows_a_symlink_to_a_file() {
+        use std::os::unix::fs::symlink;
+
+        let scratch = tempfile::tempdir().unwrap();
+        let repo = Repo::scratch(scratch.path());
+        write(&repo, "shared/ci.yaml", "on: push\n");
+        write(&repo, "w/real.yaml", "on: push\n");
+        symlink("../shared/ci.yaml", repo.path("w/linked.yaml")).unwrap();
+        symlink("../shared/missing.yaml", repo.path("w/dangling.yaml")).unwrap();
+        symlink("..", repo.path("w/up.yaml")).unwrap();
+        symlink("../shared", repo.path("w/sub")).unwrap();
+        assert_eq!(
+            repo.files_under("w", &[".yaml"]),
+            ["w/dangling.yaml", "w/linked.yaml", "w/real.yaml"]
+        );
+        assert_eq!(repo.read("w/linked.yaml"), "on: push\n");
     }
 
     #[test]

@@ -46,7 +46,7 @@ use regex::Regex;
 use toml::Table;
 
 use crate::dockerfile::{self, Stage};
-use crate::{Problem, Repo, pattern, regex};
+use crate::{Problem, Repo, case_arm, regex};
 
 /// Whether a file name is a Dockerfile: `Dockerfile`, `<name>.Dockerfile` or `Dockerfile.<name>`,
 /// but not the `Dockerfile.<name>.dockerignore` `BuildKit` reads beside one.
@@ -426,17 +426,16 @@ fn download_problems(
             download.platform_arg
         )));
     }
-    let arm = pattern(&format!(
-        r"(?:^|[\s;])([A-Za-z0-9_*]+)\)\s*{}=([^;\s]+);\s*{}=([^;\s]+)",
-        regex::escape(download.asset_var),
-        regex::escape(download.sha_var)
-    ));
-    let found: BTreeSet<(String, String, String)> = arm
-        .captures_iter(run)
-        .map(|arm| (arm[1].to_owned(), arm[2].to_owned(), arm[3].to_owned()))
-        .collect();
+    let case = case_arm::arms(run, download.asset_var, download.sha_var);
+    let found = case.labelled();
     let want: BTreeSet<(String, String, String)> = download.arms.iter().cloned().collect();
-    if found != want {
+    if found == want {
+        problems.extend(
+            case.problems(download.asset_var, download.sha_var, &want)
+                .into_iter()
+                .map(|problem| Problem::new(format!("the RUN that downloads {tool} {problem}"))),
+        );
+    } else {
         problems.push(Problem::new(format!(
             "{tool} is chosen by the arms {found:?}, want exactly {want:?}"
         )));

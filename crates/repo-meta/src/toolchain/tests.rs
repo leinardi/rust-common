@@ -179,6 +179,72 @@ fn image_rust_rules() {
     );
 }
 
+/// A `dhi.io/rust` reference outside the build FROM must be of the FROM's release, wherever it
+/// sits: a `COPY --from=`, a `RUN --mount=from=`, an ARG default, an untagged or a variable tag;
+/// one of the same release, another repository and a comment line pass.
+#[test]
+fn every_rust_image_reference_is_the_release() {
+    let good = "FROM --platform=$BUILDPLATFORM dhi.io/rust:1.98.1-debian13-dev AS build\n\
+                ARG RUST_VERSION=1.98.1\n";
+    let check = |extra: &str, policy| {
+        strings(&image_rust_problems(
+            "Dockerfile",
+            &format!("{good}{extra}\n"),
+            "1.98.1",
+            policy,
+        ))
+    };
+    let other = |reference: &str| {
+        format!(
+            "Dockerfile: references {reference}, another release than the build stage's \
+             dhi.io/rust 1.98.1"
+        )
+    };
+    let untagged = |reference: &str| {
+        format!("Dockerfile: references {reference}, with no exact X.Y.Z release in its tag")
+    };
+    for (extra, want) in [
+        (
+            "COPY --from=dhi.io/rust:1.97.0-debian13-dev /usr/local/bin/cargo /out/",
+            other("dhi.io/rust:1.97.0-debian13-dev"),
+        ),
+        (
+            "RUN --mount=type=bind,from=dhi.io/rust:1.97.0-debian13-dev,target=/r true",
+            other("dhi.io/rust:1.97.0-debian13-dev"),
+        ),
+        (
+            "ARG HELPER=\"dhi.io/rust:1.97.0-debian13-dev\"",
+            other("dhi.io/rust:1.97.0-debian13-dev"),
+        ),
+        (
+            "COPY --from=dhi.io/rust /usr/local/bin/cargo /out/",
+            untagged("dhi.io/rust"),
+        ),
+        (
+            "COPY --from=dhi.io/rust:${HELPER_TAG} /usr/local/bin/cargo /out/",
+            untagged("dhi.io/rust:${HELPER_TAG}"),
+        ),
+    ] {
+        assert_eq!(
+            check(extra, RustVersion::Exact),
+            std::slice::from_ref(&want),
+            "{extra:?}"
+        );
+        assert_eq!(check(extra, RustVersion::Line), [want], "{extra:?}");
+    }
+    for extra in [
+        "COPY --from=dhi.io/rust:1.98.1-debian13-dev /usr/local/bin/cargo /out/",
+        "COPY --from=dhi.io/rust-tools:1.0.0 /x /x",
+        "# formerly dhi.io/rust:1.97.0-debian13-dev",
+    ] {
+        assert_eq!(
+            check(extra, RustVersion::Exact),
+            Vec::<String>::new(),
+            "{extra:?}"
+        );
+    }
+}
+
 /// Another release, a channel, a release without its patch, and no toolchain at all are refused;
 /// another action is not a toolchain step.
 #[test]
@@ -563,6 +629,78 @@ fn release_pin_arm_rules() {
         )),
         ["the release pins name no version and no archive; the check would pass on nothing"]
     );
+}
+
+/// An arm the `case` takes before bitgauge's checked amd64 rust-std arm fails whatever its
+/// pattern's shape, and so does a digest from a build argument; each shape of the real arm passes.
+#[test]
+fn release_pin_arm_shapes() {
+    let real = "\t\tamd64) triple=x86_64-unknown-linux-musl; std_sha256=";
+    let insert = |arm: &str| {
+        assert!(BG_DOCKERFILE.contains(real));
+        release_check(
+            &BG_DOCKERFILE
+                .replacen(
+                    "ARG RUST_VERSION=1.98.1\n",
+                    "ARG RUST_VERSION=1.98.1\nARG STD_SHA\n",
+                    1,
+                )
+                .replacen(real, &format!("\t\t{arm} \\\n{real}"), 1),
+            BG_RELEASE_MK,
+        )
+    };
+    let chosen = |problems: &[String]| {
+        problems
+            .iter()
+            .map(|problem| problem.starts_with("Dockerfile: std_sha256 is chosen by the arms "))
+            .collect::<Vec<_>>()
+    };
+    for arm in [
+        "amd64|x86_64) triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+        "(amd64) triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+        "\"amd64\") triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+    ] {
+        assert_eq!(chosen(&insert(arm)), [true], "{arm:?}");
+    }
+    assert_eq!(
+        insert("am\\d64) triple=x86_64-unknown-linux-gnu; std_sha256=\"${STD_SHA}\" ;;"),
+        [
+            "Dockerfile: sets triple with std_sha256 3 times and std_sha256 3 times, but 2 case \
+             arms are read; a pair outside a plain arm is not checked",
+            "Dockerfile: sets triple=x86_64-unknown-linux-gnu with std_sha256=\"${STD_SHA}\", \
+             which no wanted arm holds",
+        ]
+    );
+    let std_amd64 = "bd9f35880de21dab0e387e84009c00001ae7836a4ba565cb16823f13f75f325f";
+    assert_eq!(
+        insert(&format!(
+            "amd64) triple=x86_64-unknown-linux-musl; std_sha256={std_amd64} ;;"
+        )),
+        ["Dockerfile: labels 2 arms that set std_sha256 \"amd64\"; the case takes the first"],
+        "a repeated label"
+    );
+    assert_eq!(
+        chosen(&release_check(
+            &BG_DOCKERFILE.replacen(
+                &format!("std_sha256={std_amd64}"),
+                "std_sha256=${STD_SHA}",
+                1
+            ),
+            BG_RELEASE_MK
+        )),
+        [true],
+        "a digest from a build argument"
+    );
+    for label in ["(amd64)", "\"amd64\")", "'amd64')", "( amd64 )"] {
+        assert_eq!(
+            release_check(
+                &BG_DOCKERFILE.replacen(real, &real.replacen("amd64)", label, 1), 1),
+                BG_RELEASE_MK
+            ),
+            Vec::<String>::new(),
+            "{label}"
+        );
+    }
 }
 
 /// Another release, a missing, short, doubled or extra digest, and a platform list that leaves a

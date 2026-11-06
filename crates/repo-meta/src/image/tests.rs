@@ -589,6 +589,117 @@ fn bitgauge_build_mutations_fail() {
     }
 }
 
+/// The real amd64 rust-std arm of bitgauge's Dockerfile, which the arm tests rewrite.
+const BG_STD_AMD64: &str = "\t\tamd64) triple=x86_64-unknown-linux-musl; std_sha256=";
+
+/// bitgauge's Dockerfile with `arm` inserted before its amd64 rust-std arm, and `ARG STD_SHA`.
+fn with_arm_before_amd64(arm: &str) -> String {
+    assert!(BG_DOCKERFILE.contains(BG_STD_AMD64));
+    BG_DOCKERFILE
+        .replacen(
+            "ARG RUST_VERSION=1.98.1\n",
+            "ARG RUST_VERSION=1.98.1\nARG STD_SHA\n",
+            1,
+        )
+        .replacen(BG_STD_AMD64, &format!("\t\t{arm} \\\n{BG_STD_AMD64}"), 1)
+}
+
+/// An arm the `case` takes before the checked one fails whatever its pattern's shape: a list of
+/// alternatives, a leading `(`, a quoted word, a pattern this reader does not take, a pair set
+/// without `;`, a repeated label; and so does a sha256 taken from a build argument.
+#[test]
+fn every_arm_shape_is_checked() {
+    let std_arms = |found: &str| {
+        let want = "(\"amd64\", \"x86_64-unknown-linux-musl\", \
+                    \"bd9f35880de21dab0e387e84009c00001ae7836a4ba565cb16823f13f75f325f\"), \
+                    (\"arm64\", \"aarch64-unknown-linux-musl\", \
+                    \"7e0ad2e67817f224b7a6331e48d6397303fc050edaccf81784ed786ffddc884a\")";
+        // The set sorts the planted amd64 arm first and an x86_64 alternative last.
+        let found = match found.split_once(" | ") {
+            Some((amd64, x86_64)) => format!("{amd64}, {want}, {x86_64}"),
+            None => format!("{found}, {want}"),
+        };
+        format!("the musl rust-std is chosen by the arms {{{found}}}, want exactly {{{want}}}")
+    };
+    let gnu =
+        |label: &str| format!("(\"{label}\", \"x86_64-unknown-linux-gnu\", \"${{STD_SHA}}\")");
+    let both = format!("{} | {}", gnu("amd64"), gnu("x86_64"));
+    let unread = "the RUN that downloads the musl rust-std sets triple with std_sha256 3 times and \
+                  std_sha256 3 times, but 2 case arms are read; a pair outside a plain arm is not \
+                  checked";
+    let unwanted = "the RUN that downloads the musl rust-std sets \
+                    triple=x86_64-unknown-linux-gnu with std_sha256=${STD_SHA}, which no wanted \
+                    arm holds";
+    for (arm, want) in [
+        (
+            "amd64|x86_64) triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+            vec![std_arms(&both)],
+        ),
+        (
+            "x86_64 | \"amd64\") triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+            vec![std_arms(&both)],
+        ),
+        (
+            "(amd64) triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+            vec![std_arms(&gnu("amd64"))],
+        ),
+        (
+            "\"amd64\") triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+            vec![std_arms(&gnu("amd64"))],
+        ),
+        (
+            "'amd64') triple=x86_64-unknown-linux-gnu; std_sha256=$STD_SHA ;;",
+            vec![std_arms(
+                "(\"amd64\", \"x86_64-unknown-linux-gnu\", \"$STD_SHA\")",
+            )],
+        ),
+        (
+            "am\\d64) triple=x86_64-unknown-linux-gnu; std_sha256=${STD_SHA} ;;",
+            vec![unread.to_owned(), unwanted.to_owned()],
+        ),
+        (
+            "amd64) triple=x86_64-unknown-linux-gnu std_sha256=${STD_SHA} ;;",
+            vec![
+                "the RUN that downloads the musl rust-std sets triple with std_sha256 2 times \
+                 and std_sha256 3 times, but 2 case arms are read; a pair outside a plain arm \
+                 is not checked"
+                    .to_owned(),
+            ],
+        ),
+        (
+            "amd64) triple=x86_64-unknown-linux-musl; \
+             std_sha256=bd9f35880de21dab0e387e84009c00001ae7836a4ba565cb16823f13f75f325f ;;",
+            vec![
+                "the RUN that downloads the musl rust-std labels 2 arms that set std_sha256 \
+                 \"amd64\"; the case takes the first"
+                    .to_owned(),
+            ],
+        ),
+    ] {
+        assert_eq!(
+            bg_build_problems(&with_arm_before_amd64(arm)),
+            want,
+            "{arm:?}"
+        );
+    }
+    let from_arg = BG_DOCKERFILE.replacen(
+        "std_sha256=bd9f35880de21dab0e387e84009c00001ae7836a4ba565cb16823f13f75f325f",
+        "std_sha256=${STD_SHA}",
+        1,
+    );
+    assert_eq!(bg_build_problems(&from_arg).len(), 1, "a sha256 from ARG");
+}
+
+/// The amd64 arm written in each shape a `case` pattern takes still passes.
+#[test]
+fn every_accepted_arm_shape_passes() {
+    for label in ["amd64)", "(amd64)", "\"amd64\")", "'amd64')", "( amd64 )"] {
+        let sample =
+            BG_DOCKERFILE.replacen(BG_STD_AMD64, &BG_STD_AMD64.replacen("amd64)", label, 1), 1);
+        assert_eq!(bg_build_problems(&sample), Vec::<String>::new(), "{label}");
+    }
+}
+
 /// bitgauge's mutations of the Dockerfile side of its stamps, each refused.
 #[test]
 fn bitgauge_stamp_mutations_fail() {
