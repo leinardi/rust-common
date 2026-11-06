@@ -194,7 +194,19 @@ fn a_handle_outliving_its_subscriber_reports_an_error() {
         Options::new(),
     );
     drop(dispatch);
-    let error = handle.set_level(Level::DEBUG).unwrap_err();
+    // tracing's callsite registry upgrades its weak dispatcher references for a moment while
+    // another test thread registers a callsite, so the subscriber can outlive the drop briefly:
+    // the handle must report the error once that last reference is gone.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let error = loop {
+        match handle.set_level(Level::DEBUG) {
+            Err(error) => break error,
+            Ok(()) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(()) => panic!("the handle still reached its subscriber 5s after the drop"),
+        }
+    };
     assert!(error.to_string().contains("could not be reconfigured"));
 }
 
