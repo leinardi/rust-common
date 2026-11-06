@@ -37,8 +37,8 @@ with a scope: `<type>(<scope>)[!]: <description>`. The scope is the crate or the
 checks it again on every pull request.
 
 ```text
-fix(go-prom): snapshot the collector descriptors outside the lock
-feat(docker-engine): add the attach feature
+fix(service-kit): snapshot the collector descriptors outside the lock
+feat(docker-client): add the attach feature
 docs(readme): fix a link
 ```
 
@@ -46,9 +46,9 @@ The release version is derived from these types, since the last release:
 
 | Release | Commit | Example |
 | --- | --- | --- |
-| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer | `feat(go-slog)!: take the level parser as a parameter` |
-| minor | `feat` | `feat(docker-engine): add the attach feature` |
-| patch | `fix` | `fix(go-http): enforce an earlier deadline at once` |
+| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer | `feat(tracing-setup)!: take the writer as a parameter` |
+| minor | `feat` | `feat(docker-client): add the attach feature` |
+| patch | `fix` | `fix(service-kit): enforce an earlier deadline at once` |
 | none | everything else: `build`, `chore`, `ci`, `docs`, `perf`, `refactor`, `style`, `test`, `revert` | `docs(readme): fix a link` |
 
 Pick the type by whether the change should ship in a release, not by what kind of change it is: a

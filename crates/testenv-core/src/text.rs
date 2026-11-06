@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! The harness's own small text helpers, in place of a dependency on go-compat: quoting for
+//! The harness's own small text helpers: quoting for
 //! messages and the suite's duration variables (`90s`, `1h30m`, `1.5h`).
 
 use std::time::Duration;

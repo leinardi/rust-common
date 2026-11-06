@@ -4,13 +4,7 @@
 # change that brings them in.
 members = [
     "crates/docker-client",
-    "crates/docker-engine",
     "crates/clock",
-    "crates/go-compat",
-    "crates/go-prom",
-    "crates/go-slog",
-    "crates/go-http",
-    "crates/http-framing",
     "crates/repo-meta",
     "crates/service-kit",
     "crates/testenv-core",

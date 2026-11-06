@@ -12,7 +12,7 @@
  */
 
 //! The Prometheus Go client's process collector for [prometheus-client], read from `/proc` on
-//! Linux: the nine `process_*` families, with the names, types, units and help texts of go-prom's
+//! Linux: the nine `process_*` families, with the names, types, units and help texts of the earlier go-prom's
 //! `process::ProcessCollector` (the Go client v1.24.1 over procfs v0.21.1). Elsewhere the
 //! collector encodes nothing.
 //!
@@ -38,7 +38,7 @@
 //! cannot be read or parsed drops the families it feeds from that scrape (`stat` the CPU, memory
 //! and start time; `/proc/stat` the start time only; `fd`, `limits` and `net/netstat` theirs).
 //!
-//! The parsers are simplified from go-prom's, which also reproduce `fmt.Fscan` and procfs's
+//! The parsers are simplified from the earlier go-prom's, which also reproduce `fmt.Fscan` and procfs's
 //! all-or-nothing reads: a malformed field that these parsers do not read no longer fails the
 //! whole file.
 //!

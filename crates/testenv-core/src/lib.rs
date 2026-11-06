@@ -41,8 +41,6 @@
 //!   takes libtest's flags.
 //! - `redact`: `redact`, the harness's log with secrets redacted, on plain strings: `Secret`,
 //!   `redact_env`, `Log` and `Logger`.
-//! - `redact-go-slog` (temporary, implied by nothing): the earlier go-slog `RedactingLogger`, which
-//!   implements `Log` too; removed once the suites log through `Logger`.
 //! - `bollard` (implies `async` and `redact`): `host`, the host daemon's sweep, listing and
 //!   cleanup of runs on bollard, and the PID liveness check.
 

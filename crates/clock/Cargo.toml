@@ -16,7 +16,7 @@ name = "clock"
 workspace = true
 
 [dependencies]
-# Timestamps, as in go-compat: no tzdb or system feature, only arithmetic on instants.
+# Timestamps, no tzdb or system feature, only arithmetic on instants.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # TokioClock reads tokio's clock (tokio::time::Instant), which a paused runtime controls. Only
 # `time`: no runtime, no I/O.

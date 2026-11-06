@@ -21,9 +21,7 @@
 //! today; the rule stays so that a later one (a registry credential, say) cannot reach the log by
 //! accident.
 //!
-//! The sweep logs through the [`Log`] trait, which [`Logger`] implements. The earlier go-slog
-//! `RedactingLogger` (Go's text handler byte for byte) is kept, unchanged, behind the temporary
-//! `redact-go-slog` feature, and implements [`Log`] too.
+//! The sweep logs through the [`Log`] trait, which [`Logger`] implements.
 //!
 //! Extracted from swarm-device-access/testenv/src/redact.rs at 8b4ab3a3e417 and
 //! swarm-scheduler-exporter/testenv/src/redact.rs at c9e79afa8810.
@@ -32,11 +30,6 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::sync::Arc;
-
-#[cfg(feature = "redact-go-slog")]
-mod go_slog_impl;
-#[cfg(feature = "redact-go-slog")]
-pub use go_slog_impl::RedactingLogger;
 
 /// What a redacted value is written as.
 pub const REDACTED: &str = "[redacted]";

@@ -16,10 +16,9 @@
 # `{}` is the default features. Any other key, an empty array, or a crate whose manifest is
 # missing fails the run. Example:
 #
-#   docker-engine = [
+#   docker-client = [
 #       { no-default-features = true },
-#       { features = ["tcp", "tls"] },      # swarm-scheduler-exporter
-#       { features = ["write", "attach"] }, # swarm-device-access
+#       { features = ["attach", "test-util"] }, # swarm-rootless-docker
 #       { all-features = true },
 #   ]
 #
@@ -27,67 +26,9 @@
 # with a --no-default-features set and an --all-features set, and every feature it declares is
 # named in at least one set. Add the exact set each consumer uses.
 
-# docker-engine: swarm-scheduler-exporter builds it with `tcp` and `tls` (DOCKER_HOST, TCP, TLS,
-# gzip; its own User-Agent and a 30s response-header timeout by parameter), adding `test-util` for
-# its tests; swarm-device-access with `write` and `attach` (its launcher's writes, the hijacked
-# attach, stdcopy and the wait answer; moby's User-Agent, no header timeout), adding `test-util`
-# likewise. Every feature is also built alone; with none it speaks to a unix socket only.
-docker-engine = [
-    { no-default-features = true },
-    { features = ["tcp"] },
-    { features = ["tls"] },
-    { features = ["write"] },
-    { features = ["attach"] },
-    { features = ["test-util"] },
-    { features = ["tcp", "tls"] },                 # swarm-scheduler-exporter
-    { features = ["tcp", "tls", "test-util"] },    # swarm-scheduler-exporter's tests
-    { features = ["write", "attach"] },            # swarm-device-access
-    { features = ["write", "attach", "test-util"] }, # swarm-device-access's tests
-    { all-features = true },
-]
-
-# go-compat has no features: both sets build the same crate, and are listed because every crate has
-# them.
-go-compat = [
-    { no-default-features = true },
-    { all-features = true },
-]
-
 # clock has no features; swarm-scheduler-exporter, swarm-device-access and awtrix-controller use
 # it as it is.
 clock = [
-    { no-default-features = true },
-    { all-features = true },
-]
-
-# go-prom: swarm-scheduler-exporter and swarm-device-access build it with no features (the default
-# enables nothing) and pick their expfmt negotiation by parameter (ExpfmtVersion::V0_71_0 and
-# V0_70_1); swarm-scheduler-exporter's collector tests add `testing` (gather_series, series_id).
-go-prom = [
-    { no-default-features = true },
-    { features = ["testing"] },
-    { all-features = true },
-]
-
-# go-slog has no features: swarm-scheduler-exporter (the global logger, PlainStyle::Quoted, the
-# strict parsers) and swarm-device-access (LogHandle, PlainStyle::Raw, the fallback parsers) choose
-# by parameter, so both build it as it is.
-go-slog = [
-    { no-default-features = true },
-    { all-features = true },
-]
-
-# go-http: swarm-scheduler-exporter and swarm-device-access build it with no features (each passes
-# its own Timeouts and ListenError prefix) and add `testing` for their Go wire-capture tests.
-go-http = [
-    { no-default-features = true },
-    { features = ["testing"] },
-    { all-features = true },
-]
-
-# http-framing has no features; swarm-scheduler-exporter and swarm-device-access use it through
-# go-http, and bitgauge directly.
-http-framing = [
     { no-default-features = true },
     { all-features = true },
 ]
@@ -112,14 +53,13 @@ service-kit = [
 # resources); bitgauge with `sync` (its runner, beside the run filter, the tool gate, gitenv, envid
 # and the identity rule of the default build); awtrix-controller, swarm-rootless-docker and
 # repo-meta with the default features, which enable nothing (toolgate::Gate, gitenv). Every feature
-# is also built alone. `redact-go-slog` is temporary, implied by nothing.
+# is also built alone.
 testenv-core = [
     { no-default-features = true },
     { features = ["async"] },
     { features = ["sync"] },
     { features = ["bollard"] },
     { features = ["redact"] },
-    { features = ["redact-go-slog"] }, # temporary, until the suites log through redact::Logger
     { features = ["async", "bollard", "redact"] }, # swarm-scheduler-exporter, swarm-device-access
     { all-features = true },
 ]
