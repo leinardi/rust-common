@@ -18,7 +18,7 @@ workspace = true
 [features]
 # `buildinfo!` needs nothing and is always there. `runtime` adds the multi-thread runtime builder,
 # its shutdown bounded by a deadline (`Exit`), and the SIGINT/SIGTERM/SIGHUP helpers, all on tokio.
-runtime = ["dep:tokio"]
+runtime = ["dep:tokio", "tokio/rt-multi-thread", "tokio/signal", "tokio/sync"]
 # `http` adds the minimal HTTP/1 server (`http::serve`) on hyper and tokio: header-read and
 # write-stall timeouts, bounded header sizes, a tracked graceful drain with a force-close deadline.
 http = [
@@ -30,20 +30,20 @@ http = [
     "dep:tokio-util",
     "dep:tower-service",
     "tokio/net",
+    "tokio/rt",
+    "tokio/time",
 ]
 # `process-metrics` adds `ProcessCollector`, the `process_*` families of the Prometheus client
 # libraries for prometheus-client, read from /proc on Linux.
 process-metrics = ["dep:prometheus-client"]
 
 [dependencies]
-# rt-multi-thread for the runtime builder; signal for the handlers (and the I/O driver they run
-# on); sync for the SIGHUP channel; time for the deadline; macros for select!.
+# Only what both features use; each feature adds its own: `runtime` the multi-thread builder,
+# signal (and the I/O driver it runs on) and sync for the SIGHUP channel, `http` net, rt and time.
+# `http` alone must not pull in the signal handlers: bitgauge's strace policy forbids them.
 tokio = { version = "1.54.1", default-features = false, optional = true, features = [
     "macros",
     "rt",
-    "rt-multi-thread",
-    "signal",
-    "sync",
     "time",
 ] }
 
