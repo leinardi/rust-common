@@ -262,6 +262,7 @@ dependencies = [
  "hyper-util",
  "serde_json",
  "serde_urlencoded",
+ "socket2",
  "thiserror",
  "tokio",
  "tokio-util",

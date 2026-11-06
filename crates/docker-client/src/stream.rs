@@ -145,13 +145,7 @@ pub(crate) async fn establish(
                 send(TokioIo::new(UnixStream::connect(path).await?), request).await?
             }
             #[cfg(feature = "tcp")]
-            Target::Tcp(addr) => {
-                send(
-                    TokioIo::new(tokio::net::TcpStream::connect(addr).await?),
-                    request,
-                )
-                .await?
-            }
+            Target::Tcp(addr) => send(TokioIo::new(connect_tcp(addr).await?), request).await?,
         };
         let status = response.status();
         if status.is_success() {
@@ -164,6 +158,21 @@ pub(crate) async fn establish(
         Ok(result) => result.map_err(|error: BollardError| Error::from(error)),
         Err(_elapsed) => Err(Error::timeout(timeout)),
     }
+}
+
+/// A TCP connection to `addr` with keepalive on (15 seconds idle and apart, nine probes where the
+/// platform counts them, as docker's own client), so a remote engine that vanishes ends a pending
+/// wait or event stream instead of leaving it hanging forever.
+#[cfg(feature = "tcp")]
+pub(crate) async fn connect_tcp(addr: &str) -> std::io::Result<tokio::net::TcpStream> {
+    let stream = tokio::net::TcpStream::connect(addr).await?;
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(15))
+        .with_interval(Duration::from_secs(15));
+    #[cfg(target_os = "linux")]
+    let keepalive = keepalive.with_retries(9);
+    socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive)?;
+    Ok(stream)
 }
 
 async fn send<I>(

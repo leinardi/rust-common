@@ -17,7 +17,7 @@ workspace = true
 
 [features]
 # `tcp://` and `http://` daemons, and DOCKER_HOST read for them.
-tcp = ["bollard/http"]
+tcp = ["bollard/http", "dep:socket2"]
 # `https://` daemons and DOCKER_TLS_VERIFY with DOCKER_CERT_PATH: rustls on ring, the system roots
 # plus ca.pem, as bollard does it.
 tls = ["tcp", "bollard/ssl"]
@@ -52,6 +52,8 @@ hyper = { version = "1.12.0", default-features = false, features = ["client", "h
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 serde_json = "1.0.154"
 serde_urlencoded = "0.7.1"
+# TCP keepalive on the streaming calls' connection (tcp feature).
+socket2 = { version = "0.6.3", features = ["all"], optional = true }
 # CancellationToken, Go's context cancellation.
 tokio-util = { version = "0.7.20", default-features = false }
 

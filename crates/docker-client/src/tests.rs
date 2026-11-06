@@ -998,3 +998,23 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
     };
     assert_eq!(error.kind(), ErrorKind::NotFound);
 }
+
+#[cfg(all(feature = "tcp", target_os = "linux"))]
+#[tokio::test]
+async fn the_streaming_tcp_connection_has_keepalive_on() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let stream = crate::stream::connect_tcp(&listener.local_addr().unwrap().to_string())
+        .await
+        .unwrap();
+    let socket = socket2::SockRef::from(&stream);
+    assert!(socket.keepalive().unwrap());
+    assert_eq!(
+        socket.tcp_keepalive_time().unwrap(),
+        Duration::from_secs(15)
+    );
+    assert_eq!(
+        socket.tcp_keepalive_interval().unwrap(),
+        Duration::from_secs(15)
+    );
+    assert_eq!(socket.tcp_keepalive_retries().unwrap(), 9);
+}
