@@ -88,8 +88,9 @@ impl Config {
     /// A `tcp://` host is spoken to over TLS when `DOCKER_TLS_VERIFY` is set to anything
     /// non-empty, `0` included, as moby does; TLS then reads its `key.pem`, `cert.pem` and
     /// `ca.pem` from `DOCKER_CERT_PATH`, or `$HOME/.docker` when that is unset, as moby does. A
-    /// unix host ignores both. An `http://` host with `DOCKER_TLS_VERIFY` set is refused, the two
-    /// contradicting each other; `https://` is always TLS. An empty variable counts as unset.
+    /// unix host ignores both. Without `DOCKER_TLS_VERIFY`, a `tcp://` host is plain TCP and
+    /// `DOCKER_CERT_PATH` is ignored, as moby does. An `http://` host with `DOCKER_TLS_VERIFY`
+    /// set is refused, the two contradicting each other; `https://` is always TLS. An empty variable counts as unset.
     /// `DOCKER_TLS` (TLS without verification) is not supported and is refused rather than
     /// ignored.
     ///
@@ -164,7 +165,8 @@ impl Config {
     }
 
     /// bollard's timeout for the response headers, in whole seconds (at least one): the body is
-    /// outside it, which is what [`bounded`](crate::bounded) is for. 120 seconds when unset, as bollard's.
+    /// outside it, which is what [`bounded`](crate::bounded) is for. 120 seconds when unset, as
+    /// bollard's.
     #[must_use]
     pub fn response_header_timeout(mut self, timeout: Duration) -> Self {
         self.header_timeout = Some(timeout);
@@ -192,8 +194,10 @@ pub fn connect(config: Config) -> Result<Docker, ConnectError> {
     let seconds = config
         .header_timeout
         .map_or(DEFAULT_HEADER_SECS, |timeout| timeout.as_secs().max(1));
-    let fixed = config.api_version;
-    let version = fixed.as_ref().unwrap_or(API_DEFAULT_VERSION);
+    // The modifier follows `sent_version`, so a client built from a negotiated config keeps
+    // sending the negotiated version, as its streaming calls do.
+    let fixed = sent_version(&config);
+    let version = config.api_version.as_ref().unwrap_or(API_DEFAULT_VERSION);
     let docker = match config.endpoint {
         Endpoint::Unix(path) => Docker::connect_with_unix(&path, seconds, version)?,
         #[cfg(feature = "tcp")]

@@ -815,8 +815,14 @@ async fn requests_carry_the_negotiated_version_and_negotiation_itself_is_unversi
         .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
         .await
         .unwrap();
-    let (docker, _) = negotiate(docker, &config).await.unwrap();
+    let (docker, negotiated) = negotiate(docker, &config).await.unwrap();
     docker
+        .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
+        .await
+        .unwrap();
+    // A client rebuilt from the negotiated config (a reconnect) keeps the negotiated version.
+    connect(negotiated)
+        .unwrap()
         .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
         .await
         .unwrap();
@@ -828,7 +834,12 @@ async fn requests_carry_the_negotiated_version_and_negotiation_itself_is_unversi
         .collect();
     assert_eq!(
         targets,
-        ["/containers/json", "/version", "/v1.41/containers/json"]
+        [
+            "/containers/json",
+            "/version",
+            "/v1.41/containers/json",
+            "/v1.41/containers/json"
+        ]
     );
     // The other modifier duty survives.
     assert_eq!(engine.requests()[2].header("user-agent"), Some("tool/1.2"));
