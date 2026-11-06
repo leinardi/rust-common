@@ -516,6 +516,10 @@ fn last_recipe<'text>(text: &'text str, target: &str) -> Option<&'text str> {
     lines.get(index + 1).copied()
 }
 
+/// The `rust.mk` targets whose recipe must stamp: the binaries a developer runs, `rust-dist`'s
+/// (the one `make build` embeds the web app in) and `rust-run`'s.
+const STAMPED_TARGETS: [&str; 2] = ["rust-dist", "rust-run"];
+
 /// The lines of make's last `<variable> =` assignment block in `text`, up to the first blank
 /// line, without its comment lines.
 fn assignment_block<'text>(text: &'text str, variable: &str) -> Vec<&'text str> {
@@ -578,9 +582,10 @@ impl Stamps<'_> {
     /// declares each field's argument and sets each variable from it inside the one RUN that runs
     /// the build command; the Makefile's last `RUST_STAMP_PREFIX` assignment is exactly
     /// `RUST_STAMP_PREFIX := <prefix>` (make keeps a trailing space in the value); `rust.mk`'s
-    /// `RUST_VERSION_ENV` stamps each field from its make variable and the recipe of its last
-    /// `rust-build` rule starts with `$(RUST_VERSION_ENV)`; and the release recipe, if any,
-    /// carries it. Comments never count, nor does a read quoted in a string literal. A path that
+    /// `RUST_VERSION_ENV` stamps each field from its make variable and the recipes of its last
+    /// `rust-dist` and `rust-run` rules start with `$(RUST_VERSION_ENV)` (`rust-build` may build
+    /// unstamped, as the tests do, so the two share their units: make-common's `RUST_BUILD_ENV`);
+    /// and the release recipe, if any, carries it. Comments never count, nor does a read quoted in a string literal. A path that
     /// stamped nothing would ship a binary reporting its unstamped default.
     #[must_use]
     pub fn problems(&self, sources: &StampSources<'_>) -> Vec<Problem> {
@@ -591,12 +596,14 @@ impl Stamps<'_> {
             ));
         }
         problems.extend(self.prefix_problem(sources.makefile));
-        let stamped_build = last_recipe(sources.rust_mk, "rust-build")
-            .is_some_and(|recipe| recipe.starts_with("\t$(RUST_VERSION_ENV) "));
-        if !stamped_build {
-            problems.push(Problem::new(
-                "the rust-build recipe does not start with $(RUST_VERSION_ENV)",
-            ));
+        for target in STAMPED_TARGETS {
+            let stamped = last_recipe(sources.rust_mk, target)
+                .is_some_and(|recipe| recipe.starts_with("\t$(RUST_VERSION_ENV) "));
+            if !stamped {
+                problems.push(Problem::new(format!(
+                    "the {target} recipe does not start with $(RUST_VERSION_ENV)"
+                )));
+            }
         }
         let version_env = VERSION_ENV
             .captures_iter(sources.rust_mk)

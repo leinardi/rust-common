@@ -805,7 +805,8 @@ fn bitgauge_prefix_mutations_fail() {
 }
 
 /// bitgauge's mutations of the make side of its stamps, each refused: the Makefile's prefix,
-/// rust.mk's assignments and recipe, and the release recipe, a stamp left only in a comment too.
+/// rust.mk's assignments and the rust-dist and rust-run recipes, and the release recipe, a stamp
+/// left only in a comment too; an unstamped rust-build is accepted.
 #[test]
 fn bitgauge_make_stamp_mutations_fail() {
     let make = |makefile: &str, rust_mk: &str, release_mk: &str| {
@@ -819,9 +820,14 @@ fn bitgauge_make_stamp_mutations_fail() {
         ),
         ("no stamps at all", "RUST_VERSION_ENV =", "RUST_ENV ="),
         (
-            "an unstamped build",
-            "\t$(RUST_VERSION_ENV) $(CARGO) build --workspace",
-            "\t$(CARGO) build --workspace",
+            "an unstamped dist build",
+            "\t$(RUST_VERSION_ENV) $(CARGO) build $(RUST_DIST_PROFILE_ARG)",
+            "\t$(CARGO) build $(RUST_DIST_PROFILE_ARG)",
+        ),
+        (
+            "an unstamped run",
+            "\t$(RUST_VERSION_ENV) $(CARGO) run",
+            "\t$(CARGO) run",
         ),
     ] {
         assert!(BG_RUST_MK.contains(from), "{name}");
@@ -835,10 +841,10 @@ fn bitgauge_make_stamp_mutations_fail() {
         );
     }
     let commented = format!(
-        "{}\n# rust-build:\n#\t$(RUST_VERSION_ENV) $(CARGO) build\n",
+        "{}\n# rust-dist:\n#\t$(RUST_VERSION_ENV) $(CARGO) build\n",
         BG_RUST_MK.replace(
-            "\t$(RUST_VERSION_ENV) $(CARGO) build --workspace",
-            "\t$(CARGO) build --workspace"
+            "\t$(RUST_VERSION_ENV) $(CARGO) build $(RUST_DIST_PROFILE_ARG)",
+            "\t$(CARGO) build $(RUST_DIST_PROFILE_ARG)"
         )
     );
     assert!(
@@ -848,10 +854,30 @@ fn bitgauge_make_stamp_mutations_fail() {
     assert!(
         make(
             BG_MAKEFILE,
-            &format!("{BG_RUST_MK}\nrust-build:\n\t$(CARGO) build\n"),
+            &format!("{BG_RUST_MK}\nrust-dist:\n\t$(CARGO) build --release\n"),
             BG_RELEASE_MK
         ) > 0,
-        "a later rust-build rule wins"
+        "a later rust-dist rule wins"
+    );
+    // make-common's opt-in: rust-build unstamped (the Makefile's `RUST_BUILD_ENV :=`), or its
+    // recipe without the variable, leaves the stamps to rust-dist and rust-run and passes.
+    assert_eq!(
+        make(
+            &format!("{BG_MAKEFILE}RUST_BUILD_ENV :=\n"),
+            BG_RUST_MK,
+            BG_RELEASE_MK
+        ),
+        0,
+        "an unstamped rust-build through RUST_BUILD_ENV"
+    );
+    assert_eq!(
+        make(
+            BG_MAKEFILE,
+            &BG_RUST_MK.replace("\t$(RUST_BUILD_ENV) $(CARGO) build", "\t$(CARGO) build"),
+            BG_RELEASE_MK
+        ),
+        0,
+        "a rust-build recipe without the stamps"
     );
     let from = "rust_static_build = RUSTFLAGS=\"$(RUST_RELEASE_RUSTFLAGS)\" $(RUST_VERSION_ENV) \\";
     assert!(BG_RELEASE_MK.contains(from));
@@ -866,8 +892,9 @@ fn bitgauge_make_stamp_mutations_fail() {
     );
 }
 
-/// A stamp dropped from each place, another prefix, a stamp from another variable and a build
-/// recipe that does not stamp are each a problem, on the sample.
+/// A stamp dropped from each place, another prefix, a stamp from another variable and a rust-dist
+/// or rust-run recipe that does not stamp (or is missing) are each a problem, on the sample; an
+/// unstamped rust-build is not.
 #[test]
 fn stamp_rules() {
     let stamps = Stamps {
@@ -887,7 +914,13 @@ fn stamp_rules() {
                     \x20 $(RUST_STAMP_PREFIX)_DATE=\x22$(BUILD_DATE)\x22)\n\
                     \n\
                     rust-build: ## Build\n\
-                    \t$(RUST_VERSION_ENV) $(CARGO) build --workspace\n";
+                    \t$(RUST_BUILD_ENV) $(CARGO) build --workspace\n\
+                    \n\
+                    rust-dist: ## Dist\n\
+                    \t$(RUST_VERSION_ENV) $(CARGO) build --release --bin x\n\
+                    \n\
+                    rust-run: ## Run\n\
+                    \t$(RUST_VERSION_ENV) $(CARGO) run\n";
     let check = |version_rs: &str, build: &Stage, makefile: &str, fragment: &str| {
         stamps.problems(&StampSources {
             version_rs,
@@ -898,6 +931,20 @@ fn stamp_rules() {
         })
     };
     assert_eq!(check(version_rs, &build, makefile, fragment), []);
+    // rust-build unstamped, its stamps left to rust-dist and rust-run, passes either way.
+    for unstamped_build in [
+        fragment.replace("$(RUST_BUILD_ENV) $(CARGO) build", "$(CARGO) build"),
+        fragment.replace(
+            "$(RUST_BUILD_ENV) $(CARGO) build",
+            "$(RUST_VERSION_ENV) $(CARGO) build",
+        ),
+    ] {
+        assert_eq!(
+            check(version_rs, &build, makefile, &unstamped_build),
+            [],
+            "{unstamped_build:?}"
+        );
+    }
     let problems = check(
         &version_rs.replace("APP_DATE", "APP_WHEN"),
         &stage(&sample().replace("${COMMIT}", "none"), "build"),
@@ -918,7 +965,10 @@ fn stamp_rules() {
         );
     }
     for broken in [
-        fragment.replace("\t$(RUST_VERSION_ENV) $(CARGO)", "\t$(CARGO)"),
+        fragment.replace("\t$(RUST_VERSION_ENV) $(CARGO) build", "\t$(CARGO) build"),
+        fragment.replace("\t$(RUST_VERSION_ENV) $(CARGO) run", "\t$(CARGO) run"),
+        format!("{fragment}\nrust-run:\n\t$(CARGO) run\n"),
+        fragment.replace("rust-dist: ## Dist", "rust-dist-local: ## Dist"),
         fragment.replace("$(GIT_COMMIT)", "$(OTHER)"),
     ] {
         assert_eq!(
@@ -964,7 +1014,13 @@ fn stamp_rules_accept_service_kits_buildinfo() {
                     \x20 $(RUST_STAMP_PREFIX)_DATE=\x22$(BUILD_DATE)\x22)\n\
                     \n\
                     rust-build: ## Build\n\
-                    \t$(RUST_VERSION_ENV) $(CARGO) build --workspace\n";
+                    \t$(RUST_BUILD_ENV) $(CARGO) build --workspace\n\
+                    \n\
+                    rust-dist: ## Dist\n\
+                    \t$(RUST_VERSION_ENV) $(CARGO) build --release --bin x\n\
+                    \n\
+                    rust-run: ## Run\n\
+                    \t$(RUST_VERSION_ENV) $(CARGO) run\n";
     let check = |stamps: &Stamps<'_>, version_rs: &str| {
         strings(&stamps.problems(&StampSources {
             version_rs,
