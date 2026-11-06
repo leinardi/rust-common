@@ -263,14 +263,14 @@ async fn a_fixed_version_is_kept_and_otherwise_negotiated() {
     let socket = engine.socket().to_str().unwrap();
 
     let fixed = Config::unix(socket).api_version("1.44").unwrap();
-    let docker = negotiate(connect(fixed.clone()).unwrap(), &fixed)
+    let (docker, _) = negotiate(connect(fixed.clone()).unwrap(), &fixed)
         .await
         .unwrap();
     assert_eq!(docker.client_version().to_string(), "1.44");
     assert!(engine.requests().is_empty());
 
     let open = Config::unix(socket);
-    let docker = negotiate(connect(open.clone()).unwrap(), &open)
+    let (docker, _) = negotiate(connect(open.clone()).unwrap(), &open)
         .await
         .unwrap();
     assert_eq!(docker.client_version().to_string(), "1.41");
@@ -442,11 +442,6 @@ mod attach_tests {
 
     const SECS: Duration = Duration::from_secs(5);
 
-    fn pair(engine: &FakeEngine) -> (Docker, Config) {
-        let config = Config::unix(engine.socket().to_str().unwrap());
-        (connect(config.clone()).unwrap(), config)
-    }
-
     fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
         let mut bytes = vec![kind, 0, 0, 0];
         bytes.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
@@ -508,10 +503,9 @@ mod attach_tests {
             ),
         ])
         .unwrap();
-        let (docker, config) = pair(&engine);
+        let config = config_of(&engine);
         for (id, code) in [("ok", 0), ("bad", 3), ("err", 137)] {
             let answer = wait(
-                &docker,
                 &config,
                 id,
                 WaitCondition::NotRunning,
@@ -528,25 +522,18 @@ mod attach_tests {
     async fn wait_sends_the_condition_asked_for() {
         let engine =
             FakeEngine::start(&[("/containers/c/wait", Reply::ok(r#"{"StatusCode":0}"#))]).unwrap();
-        let (docker, config) = pair(&engine);
+        let config = config_of(&engine);
         for (condition, query) in [
             (WaitCondition::NotRunning, "condition=not-running"),
             (WaitCondition::NextExit, "condition=next-exit"),
             (WaitCondition::Removed, "condition=removed"),
         ] {
-            wait(
-                &docker,
-                &config,
-                "c",
-                condition,
-                SECS,
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap()
-            .await
-            .unwrap()
-            .unwrap();
+            wait(&config, "c", condition, SECS, CancellationToken::new())
+                .await
+                .unwrap()
+                .await
+                .unwrap()
+                .unwrap();
             let requests = engine.requests();
             assert_eq!(requests.last().unwrap().query(), query);
             assert_eq!(requests.last().unwrap().method, "POST");
@@ -558,9 +545,8 @@ mod attach_tests {
     #[tokio::test]
     async fn wait_removed_on_a_missing_container_delivers_not_found() {
         let engine = FakeEngine::start(&[("/containers/gone/wait", Reply::not_found())]).unwrap();
-        let (docker, config) = pair(&engine);
+        let config = config_of(&engine);
         let error = wait(
-            &docker,
             &config,
             "gone",
             WaitCondition::Removed,
@@ -577,18 +563,11 @@ mod attach_tests {
     #[tokio::test]
     async fn wait_ends_when_cancelled() {
         let engine = FakeEngine::start(&[("/containers/c/wait", Reply::Stalled)]).unwrap();
-        let (docker, config) = pair(&engine);
+        let config = config_of(&engine);
         let cancel = CancellationToken::new();
-        let receiver = wait(
-            &docker,
-            &config,
-            "c",
-            WaitCondition::NextExit,
-            SECS,
-            cancel.clone(),
-        )
-        .await
-        .unwrap();
+        let receiver = wait(&config, "c", WaitCondition::NextExit, SECS, cancel.clone())
+            .await
+            .unwrap();
         cancel.cancel();
         assert!(receiver.await.is_err());
     }
@@ -619,7 +598,6 @@ mod attach_tests {
         let docker = connect(config.clone()).unwrap();
         let begun = Instant::now();
         let receiver = wait(
-            &docker,
             &config,
             "slow",
             WaitCondition::NextExit,
@@ -658,11 +636,18 @@ mod attach_tests {
         assert_eq!(requests[0].header("user-agent"), Some("tool/1.2"));
     }
 
-    /// bollard's calls and the header-awaiting ones carry the same prefix after `negotiate`,
-    /// whether the engine lowered the version or is newer than bollard's default.
+    /// bollard's calls and the header-awaiting ones carry the same prefix after `negotiate`:
+    /// the engine's version when it is lower, and bollard's default when the engine answers
+    /// exactly that or something newer. Before any negotiation neither carries one.
     #[tokio::test]
     async fn streaming_calls_carry_the_prefix_bollard_calls_do_after_negotiating() {
-        for (api, prefix) in [("99.0", ""), ("1.41", "/v1.41")] {
+        let default = bollard::API_DEFAULT_VERSION.to_string();
+        let default_prefix = format!("/v{default}");
+        for (api, prefix) in [
+            (default.as_str(), default_prefix.as_str()),
+            ("99.0", default_prefix.as_str()),
+            ("1.41", "/v1.41"),
+        ] {
             let engine = FakeEngine::start(&[
                 (
                     "/version",
@@ -673,14 +658,15 @@ mod attach_tests {
                 ("/events", Reply::events(&[])),
             ])
             .unwrap();
-            let (docker, config) = pair(&engine);
-            let docker = negotiate(docker, &config).await.unwrap();
+            let config = config_of(&engine);
+            let (docker, config) = negotiate(connect(config.clone()).unwrap(), &config)
+                .await
+                .unwrap();
             docker
                 .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
                 .await
                 .unwrap();
             wait(
-                &docker,
                 &config,
                 "c",
                 WaitCondition::NextExit,
@@ -689,9 +675,7 @@ mod attach_tests {
             )
             .await
             .unwrap();
-            let _events = events_established(&docker, &config, None, SECS)
-                .await
-                .unwrap();
+            let _events = events_established(&config, None, SECS).await.unwrap();
             let paths: Vec<String> = engine
                 .requests()
                 .iter()
@@ -716,9 +700,7 @@ mod attach_tests {
         let engine =
             FakeEngine::start(&[("/containers/c/wait", Reply::ok(r#"{"StatusCode":4}"#))]).unwrap();
         let config = Config::unix(format!("unix://{}", engine.socket().to_str().unwrap()));
-        let docker = connect(config.clone()).unwrap();
         let receiver = wait(
-            &docker,
             &config,
             "c",
             WaitCondition::NextExit,
@@ -733,10 +715,9 @@ mod attach_tests {
     #[tokio::test]
     async fn wait_times_out_when_the_headers_never_come() {
         let engine = FakeEngine::start(&[("/containers/c/wait", Reply::Silent)]).unwrap();
-        let (docker, config) = pair(&engine);
+        let config = config_of(&engine);
         let begun = Instant::now();
         let error = wait(
-            &docker,
             &config,
             "c",
             WaitCondition::NextExit,
@@ -759,7 +740,7 @@ async fn requests_carry_the_fixed_api_version() {
         ("DOCKER_API_VERSION", "1.43"),
     ]))
     .unwrap();
-    let docker = negotiate(connect(config.clone()).unwrap(), &config)
+    let (docker, _) = negotiate(connect(config.clone()).unwrap(), &config)
         .await
         .unwrap();
     docker
@@ -788,7 +769,7 @@ async fn requests_carry_the_negotiated_version_and_negotiation_itself_is_unversi
         .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
         .await
         .unwrap();
-    let docker = negotiate(docker, &config).await.unwrap();
+    let (docker, _) = negotiate(docker, &config).await.unwrap();
     docker
         .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
         .await
@@ -867,7 +848,7 @@ async fn clients_from_clones_of_one_config_keep_their_own_version() {
     let old = connect(old_config).unwrap();
     let new = connect(new_config).unwrap();
     // A client negotiated from the shared base must not move the pinned ones.
-    let open = negotiate(connect(base.clone()).unwrap(), &base)
+    let (open, _) = negotiate(connect(base.clone()).unwrap(), &base)
         .await
         .unwrap();
     for docker in [&old, &new, &open] {
@@ -902,7 +883,7 @@ async fn a_clone_of_the_config_shares_no_negotiated_version() {
     let config = Config::unix(engine.socket().to_str().unwrap());
     let first = connect(config.clone()).unwrap();
     let second = connect(config.clone()).unwrap();
-    let _negotiated = negotiate(first, &config).await.unwrap();
+    let (_negotiated, _) = negotiate(first, &config).await.unwrap();
     second
         .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
         .await
@@ -913,9 +894,8 @@ async fn a_clone_of_the_config_shares_no_negotiated_version() {
 
 const EVENT_A: &str = r#"{"Type":"container","Action":"start","Actor":{"ID":"a","Attributes":{}}}"#;
 
-fn pair(engine: &FakeEngine) -> (Docker, Config) {
-    let config = Config::unix(engine.socket().to_str().unwrap());
-    (connect(config.clone()).unwrap(), config)
+fn config_of(engine: &FakeEngine) -> Config {
+    Config::unix(engine.socket().to_str().unwrap())
 }
 
 #[tokio::test]
@@ -924,8 +904,8 @@ async fn events_established_streams_lines_and_survives_an_undecodable_one() {
 
     let engine =
         FakeEngine::start(&[("/events", Reply::events(&[EVENT_A, "not json", EVENT_A]))]).unwrap();
-    let (docker, config) = pair(&engine);
-    let mut events = events_established(&docker, &config, None, Duration::from_secs(5))
+    let config = config_of(&engine);
+    let mut events = events_established(&config, None, Duration::from_secs(5))
         .await
         .unwrap();
     let first = events.next().await.unwrap().unwrap();
@@ -944,12 +924,11 @@ async fn events_established_sends_the_options_the_agent_and_the_version() {
         .api_version("1.43")
         .unwrap()
         .user_agent("tool/1.2");
-    let docker = connect(config.clone()).unwrap();
     let options = EventsOptionsBuilder::new()
         .since("100")
         .filters(&HashMap::from([("type", vec!["container"])]))
         .build();
-    let _events = events_established(&docker, &config, Some(options), Duration::from_secs(5))
+    let _events = events_established(&config, Some(options), Duration::from_secs(5))
         .await
         .unwrap();
     let requests = engine.requests();
@@ -970,20 +949,18 @@ async fn events_established_sends_the_options_the_agent_and_the_version() {
 #[tokio::test]
 async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_refusal() {
     let engine = FakeEngine::start(&[("/events", Reply::Silent)]).unwrap();
-    let (docker, config) = pair(&engine);
+    let config = config_of(&engine);
     let begun = Instant::now();
-    let Err(error) = events_established(&docker, &config, None, Duration::from_millis(200)).await
-    else {
+    let Err(error) = events_established(&config, None, Duration::from_millis(200)).await else {
         panic!("a subscription nobody answered was established");
     };
     assert_eq!(error.kind(), ErrorKind::Timeout);
     assert!(begun.elapsed() < Duration::from_secs(2));
 
     let engine = FakeEngine::start(&[("/events", Reply::error(400, "bad filter"))]).unwrap();
-    let (docker, config) = pair(&engine);
+    let config = config_of(&engine);
     let begun = Instant::now();
-    let Err(error) = events_established(&docker, &config, None, Duration::from_secs(30)).await
-    else {
+    let Err(error) = events_established(&config, None, Duration::from_secs(30)).await else {
         panic!("a refused subscription was established");
     };
     assert_eq!(error.kind(), ErrorKind::Other);
@@ -991,9 +968,8 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
     assert!(begun.elapsed() < Duration::from_secs(2));
 
     let engine = FakeEngine::start(&[("/events", Reply::not_found())]).unwrap();
-    let (docker, config) = pair(&engine);
-    let Err(error) = events_established(&docker, &config, None, Duration::from_secs(30)).await
-    else {
+    let config = config_of(&engine);
+    let Err(error) = events_established(&config, None, Duration::from_secs(30)).await else {
         panic!("a refused subscription was established");
     };
     assert_eq!(error.kind(), ErrorKind::NotFound);
@@ -1109,8 +1085,7 @@ mod tls_tests {
     async fn events_established_speaks_tls_with_the_client_certificate() {
         let port = engine(false).await;
         let config = config(port, &certs());
-        let docker = connect(config.clone()).unwrap();
-        let mut events = events_established(&docker, &config, None, Duration::from_secs(10))
+        let mut events = events_established(&config, None, Duration::from_secs(10))
             .await
             .unwrap();
         let event = events.next().await.unwrap().unwrap();
@@ -1121,10 +1096,7 @@ mod tls_tests {
     async fn a_tls_engine_that_never_answers_times_out_instead_of_looking_established() {
         let port = engine(true).await;
         let config = config(port, &certs());
-        let docker = connect(config.clone()).unwrap();
-        let Err(error) =
-            events_established(&docker, &config, None, Duration::from_millis(300)).await
-        else {
+        let Err(error) = events_established(&config, None, Duration::from_millis(300)).await else {
             panic!("a silent TLS engine was reported established");
         };
         assert_eq!(error.kind(), ErrorKind::Timeout);
@@ -1134,11 +1106,8 @@ mod tls_tests {
     async fn unreadable_certificates_are_an_error_naming_the_file() {
         let port = engine(false).await;
         let nowhere = PathBuf::from("/nonexistent/certs");
-        // The client is built from good certificates; only the streaming path sees the bad ones.
-        let docker = connect(config(port, &certs())).unwrap();
         let config = config(port, &nowhere);
-        let Err(error) = events_established(&docker, &config, None, Duration::from_secs(5)).await
-        else {
+        let Err(error) = events_established(&config, None, Duration::from_secs(5)).await else {
             panic!("established without certificates");
         };
         assert!(error.to_string().contains("ca.pem"), "{error}");

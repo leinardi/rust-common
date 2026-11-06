@@ -65,6 +65,8 @@ pub(crate) enum Endpoint {
 pub struct Config {
     pub(crate) endpoint: Endpoint,
     pub(crate) api_version: Option<ClientVersion>,
+    /// The version [`negotiate`] settled on, in the `Config` it returns for that client.
+    pub(crate) negotiated: Option<ClientVersion>,
     pub(crate) user_agent: Option<String>,
     header_timeout: Option<Duration>,
 }
@@ -87,8 +89,9 @@ impl Config {
     /// non-empty, `0` included, as moby does; TLS then reads its `key.pem`, `cert.pem` and
     /// `ca.pem` from `DOCKER_CERT_PATH`, or `$HOME/.docker` when that is unset, as moby does. A
     /// unix host ignores both. An `http://` host with `DOCKER_TLS_VERIFY` set is refused, the two
-    /// contradicting each other; `https://` is always TLS. An empty variable counts as unset. `DOCKER_TLS` (TLS without
-    /// verification) is not supported and is refused rather than ignored.
+    /// contradicting each other; `https://` is always TLS. An empty variable counts as unset.
+    /// `DOCKER_TLS` (TLS without verification) is not supported and is refused rather than
+    /// ignored.
     ///
     /// `getenv` is the caller's lookup, `|name| std::env::var(name).ok()` for the process.
     ///
@@ -172,6 +175,7 @@ impl Config {
         Self {
             endpoint,
             api_version: None,
+            negotiated: None,
             user_agent: None,
             header_timeout: None,
         }
@@ -209,13 +213,11 @@ pub fn connect(config: Config) -> Result<Docker, ConnectError> {
 }
 
 /// The API version the requests of a client carry, the one rule for bollard's calls (the request
-/// modifier) and for the header-awaiting streaming calls: the version `config` fixes; else, for a
-/// client [`negotiate`] lowered below bollard's default, the version it settled on; else none, the
-/// engine's newest API. `client` is the client's own [`Docker::client_version`].
-pub(crate) fn sent_version(config: &Config, client: ClientVersion) -> Option<ClientVersion> {
-    config
-        .api_version
-        .or_else(|| (client != *API_DEFAULT_VERSION).then_some(client))
+/// modifier) and for the header-awaiting streaming calls: the version `config` fixes; else the
+/// version [`negotiate`] settled on, even when it is bollard's default; else none (before any
+/// negotiation), the engine's newest API.
+pub(crate) fn sent_version(config: &Config) -> Option<ClientVersion> {
+    config.api_version.or(config.negotiated)
 }
 
 /// Installs the request modifier on `docker`, replacing any earlier one (bollard keeps a single
@@ -273,22 +275,32 @@ fn has_version_prefix(path: &str) -> bool {
 
 /// Settles the API version: left as it is when `config` fixed one, else lowered to the engine's
 /// (bollard's `negotiate_version`, one `GET /version`, sent unversioned) and sent on every request
-/// of the returned client after it when it is below bollard's default (a newer engine is spoken to at its newest, as before negotiating; the version belongs to that client, not to `config`). `config` must be the one `docker` was connected from (or a clone of it).
+/// of the returned client after it, whether or not the engine had to lower it (a newer engine is
+/// then spoken to at bollard's default, not at its own newest). `config` must be the one `docker`
+/// was connected from (or a clone).
+///
+/// Returns the client and the [`Config`] that goes with it: that one records the negotiated
+/// version, so the streaming calls ([`wait`](crate::attach::wait),
+/// [`events_established`](crate::events_established)) send the prefix the client's own calls do.
+/// Pass it to them, not the one given here; the version belongs to that pair, so other clients and
+/// clones of the original `Config` are not affected.
 ///
 /// # Errors
 ///
 /// The `GET /version` failure, sorted into its kind; the call is not bounded, wrap it in
-/// [`bounded`](crate::bounded) for a whole-call timeout (`negotiate_version` takes `docker` by value, so it cannot
-/// be wrapped here without losing the client on a timeout).
-pub async fn negotiate(docker: Docker, config: &Config) -> Result<Docker, Error> {
+/// [`bounded`](crate::bounded) for a whole-call timeout (`negotiate_version` takes `docker` by
+/// value, so it cannot be wrapped here without losing the client on a timeout).
+pub async fn negotiate(docker: Docker, config: &Config) -> Result<(Docker, Config), Error> {
     if config.api_version.is_some() {
-        return Ok(docker);
+        return Ok((docker, config.clone()));
     }
     let docker = docker.negotiate_version().await.map_err(Error::from)?;
     // `connect` accepted this user agent already, so it parses again.
     let user_agent = parse_user_agent(config.user_agent.as_deref()).unwrap_or(None);
-    let version = sent_version(config, docker.client_version());
-    Ok(with_modifier(docker, user_agent, version))
+    let version = docker.client_version();
+    let mut config = config.clone();
+    config.negotiated = Some(version);
+    Ok((with_modifier(docker, user_agent, Some(version)), config))
 }
 
 fn parse_user_agent(text: Option<&str>) -> Result<Option<HeaderValue>, ConnectError> {

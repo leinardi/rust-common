@@ -51,18 +51,27 @@ its calls: those stay the program's, made on the `Docker` that `connect` returns
 
 | Item | What it is |
 | --- | --- |
-| `Config`, `Config::unix` | the engine's socket; `user_agent` (through bollard's request modifier, which has no setter; a value no header may carry is refused by `connect`), `response_header_timeout` (whole seconds, at least one; bollard's is 120) and `api_version` (a fixed `<major>.<minor>`, which every request then carries as `/v<major>.<minor>/...`) are the caller's |
-| `Config::from_env` | `DOCKER_HOST` from the caller's lookup (`unix://`; with `tcp` also `tcp://` and `http://`; with `tls` also `https://`), `/var/run/docker.sock` when unset, and `DOCKER_API_VERSION`, which bollard does not read; any non-empty `DOCKER_TLS_VERIFY` (`0` too, as moby) turns a `tcp://` host into TLS, reading `DOCKER_CERT_PATH` or `$HOME/.docker`; `DOCKER_TLS` is refused as unsupported; an empty variable is unset, a unix host ignores the TLS ones |
-| `connect`, `negotiate`, `ConnectError` | the client from a `Config`; a fixed version is kept, else `negotiate_version` lowers it to the engine's. bollard drops its version prefix from every request path (`Uri::parse` joins an absolute path onto it), so `connect` installs a request modifier that puts `/v<major>.<minor>` back: the fixed version from the start, the negotiated one after `negotiate`, and unversioned (the engine's newest API) before it, which keeps `GET /version` answerable by an engine older than bollard's default. `negotiate` needs the `Config` the client was connected from (or a clone) |
+| `Config`, `Config::unix` | the engine's socket (a leading `unix://` is dropped, as bollard does); `user_agent` (through bollard's request modifier, which has no setter; a value no header may carry is refused by `connect`), `response_header_timeout` (whole seconds, at least one; bollard's is 120) and `api_version` (a fixed `<major>.<minor>`, which every request then carries as `/v<major>.<minor>/...`) are the caller's |
+| `Config::from_env` | `DOCKER_HOST` from the caller's lookup (`unix://`; with `tcp` also `tcp://` and `http://`; with `tls` also `https://`), `/var/run/docker.sock` when unset, and `DOCKER_API_VERSION`, which bollard does not read; any non-empty `DOCKER_TLS_VERIFY` (`0` too, as moby) turns a `tcp://` host into TLS, and an `http://` host with it set is refused as contradictory (`ConnectError::Invalid`); TLS reads `DOCKER_CERT_PATH` or `$HOME/.docker`; `DOCKER_TLS` is refused as unsupported; an empty variable is unset, a unix host ignores the TLS ones |
+| `connect`, `negotiate`, `ConnectError` | the client from a `Config`; a fixed version is kept, else `negotiate_version` lowers it to the engine's. bollard drops its version prefix from every request path (`Uri::parse` joins an absolute path onto it), so `connect` installs a request modifier that puts `/v<major>.<minor>` back. One rule decides the prefix for bollard's calls and for `wait` and `events_established`: the version the `Config` fixes; else the one `negotiate` lowered the client to; else none (the engine's newest API, which also keeps `GET /version` answerable by an engine older than bollard's default, and an engine newer than the default is spoken to at its newest). The version belongs to the client, not to the `Config` or its clones. `negotiate` needs the `Config` the client was connected from (or a clone) |
 | `bounded` | a timeout around a whole call, body included; bollard's own covers only the response headers |
 | `Error`, `ErrorKind` | `NotFound` (404), `Conflict` (409), `Timeout` (`bounded`'s, or bollard's header timeout), `Unavailable` (I/O, hyper and missing-socket errors) and `Other`; bollard's error stays reachable (`engine()`) and its cause is the `source` |
 | `pump_stream` | a bollard stream (events, logs) as a channel, fed by a task that ends when the receiver is dropped, the `CancellationToken` fires or the stream ends |
-| `attach::attach`, `attach::wait` (`attach`) | a container's stdout and stderr as `Output` pieces through the pump, and its exit code under a `WaitCondition` (`NotRunning`, `NextExit`, `Removed`) as a `oneshot`; `wait` sends its request at once from a task, but bollard does not show when the engine registered it, so a wait that arrives after an auto-remove container is gone delivers `NotFound` (for `Removed`: already removed, exit code unknown) (a non-zero exit, which bollard reports as an error, is the code) |
-| `test_util` (`test-util`) | a fake engine on a unix socket: scripted `Reply`s per path (JSON, 404, 409, an event stream that closes, an attach upgrade, a body that stalls after the headers), and the requests it recorded |
+| `events_established`, `EventStream` | `GET /events` returned only once the engine answered 2xx, so a subscription that is stalled or refused is an error (`Timeout`, `NotFound`, ...) within the caller's timeout instead of a stream that looks live; items are `EventMessage`s, and a line that does not decode is an `Err` item that does not end the stream |
+| `attach::attach`, `attach::wait` (`attach`) | a container's stdout and stderr as `Output` pieces through the pump, and its exit code under a `WaitCondition` (`NotRunning`, `NextExit`, `Removed`); `wait(docker, config, id, condition, timeout, cancel)` is async and returns only after the engine answered the response headers (it holds the waiter then, so a `start` cannot overtake it), then yields the code through a `oneshot` (a non-zero exit, which bollard reports as an error, is the code) |
+| `test_util` (`test-util`) | a fake engine on a unix socket: scripted `Reply`s per path (JSON, 404, 409, an event stream that closes, an attach upgrade, a body that stalls after the headers, a delayed or silent answer, headers now and body later), and the requests it recorded; its connection tasks end with it |
+
+`wait` and `events_established` send their request themselves, over hyper on the `Config`'s endpoint
+(unix; `tcp` adds plain TCP with keepalive on, 15 seconds idle and apart and nine probes on Linux;
+`tls` adds rustls with `ca.pem`, `cert.pem` and `key.pem` and the system roots), because bollard
+hides when a streaming call's headers arrive. They send the config's `User-Agent`.
 
 It depends on `bollard` (pinned `=0.21.1`, only `pipe`; `tcp` adds `http`, `tls` adds `ssl`, which
-is rustls on ring), `http`, `futures-util`, `thiserror`, `tokio` (`rt`, `time`, `sync`, `macros`;
-`net` and `io-util` with `test-util`) and `tokio-util`.
+is rustls on ring), `http`, `hyper` (`client`, `http1`), `hyper-util`, `http-body-util`, `bytes`,
+`serde_json`, `serde_urlencoded`, `futures-util`, `thiserror`, `tokio` (`rt`, `time`, `sync`,
+`macros`, `net`; `io-util` with `test-util`) and `tokio-util`; `tcp` adds `socket2`, and `tls`
+adds `rustls`, `tokio-rustls`, `rustls-native-certs` and `rustls-pki-types`, all of which bollard's
+`ssl` already brings.
 
 ### testenv-core
 

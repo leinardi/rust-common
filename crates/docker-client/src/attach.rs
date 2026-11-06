@@ -107,8 +107,9 @@ impl WaitCondition {
 /// code, and ends when the receiver is dropped or `cancel` fires (the receiver then reports a
 /// closed channel). Must be called inside a tokio runtime.
 ///
-/// `docker` and `config` must be a client and the [`Config`] it was connected from; the request
-/// carries the config's `User-Agent` and the client's API version, as the client's own.
+/// `config` is the client's: the one it was connected from, or the one
+/// [`negotiate`](crate::negotiate) returned with it. The request carries its `User-Agent` and API
+/// version, as the client's own.
 ///
 /// A non-zero exit is the exit code here, not a failure. The code is the answer's `StatusCode`.
 ///
@@ -118,7 +119,6 @@ impl WaitCondition {
 /// engine's refusal sorted into its kind (404 for a container that is not there), `Unavailable`
 /// when it cannot be reached.
 pub async fn wait(
-    docker: &Docker,
     config: &Config,
     id: &str,
     condition: WaitCondition,
@@ -128,7 +128,6 @@ pub async fn wait(
     let (mut sender, receiver) = oneshot::channel();
     let target = Target::of(config);
     let body = establish(
-        docker,
         config,
         &target,
         Method::POST,

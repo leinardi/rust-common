@@ -26,7 +26,6 @@
 
 use std::time::Duration;
 
-use bollard::Docker;
 use bollard::errors::Error as BollardError;
 use bollard::models::EventMessage;
 use bollard::query_parameters::EventsOptions;
@@ -82,8 +81,8 @@ impl Target {
 
 /// The path the client sends `path` under, with the version prefix its own calls carry
 /// ([`sent_version`]).
-fn versioned_path(docker: &Docker, config: &Config, path: &str) -> String {
-    sent_version(config, docker.client_version()).map_or_else(
+fn versioned_path(config: &Config, path: &str) -> String {
+    sent_version(config).map_or_else(
         || path.to_owned(),
         |version| {
             format!(
@@ -104,7 +103,6 @@ fn versioned_path(docker: &Docker, config: &Config, path: &str) -> String {
 /// status as bollard maps it (404 is `NotFound`, 409 `Conflict`) for a non-2xx answer; the
 /// connection's failure as `Unavailable`.
 pub(crate) async fn establish(
-    docker: &Docker,
     config: &Config,
     target: &Target,
     method: Method,
@@ -112,7 +110,7 @@ pub(crate) async fn establish(
     query: &str,
     timeout: Duration,
 ) -> Result<Incoming, Error> {
-    let mut uri = versioned_path(docker, config, path);
+    let mut uri = versioned_path(config, path);
     if !query.is_empty() {
         uri.push('?');
         uri.push_str(query);
@@ -251,8 +249,9 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// `GET /events` with `options`, returned once the engine has answered 2xx: the subscription is
 /// accepted, not just sent. `timeout` bounds the connection and the headers, not the stream.
 ///
-/// `docker` and `config` must be a client and the [`Config`] it was connected from; the request
-/// carries the config's `User-Agent` and the client's API version.
+/// `config` is the client's: the one it was connected from, or the one
+/// [`negotiate`](crate::negotiate) returned with it. The request carries its `User-Agent` and API
+/// version, as the client's own.
 ///
 /// Each line of the stream is decoded as an [`EventMessage`]; one that does not decode is an `Err`
 /// item and the stream goes on. A transport failure is an `Err` item that ends it.
@@ -263,7 +262,6 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// the engine's refusal sorted into its kind (404, 409, other), `Unavailable` when it cannot be
 /// reached.
 pub async fn events_established(
-    docker: &Docker,
     config: &Config,
     options: Option<EventsOptions>,
     timeout: Duration,
@@ -274,16 +272,7 @@ pub async fn events_established(
         .transpose()
         .map_err(|error| Error::from(BollardError::from(error)))?
         .unwrap_or_default();
-    let body = establish(
-        docker,
-        config,
-        &target,
-        Method::GET,
-        "/events",
-        &query,
-        timeout,
-    )
-    .await?;
+    let body = establish(config, &target, Method::GET, "/events", &query, timeout).await?;
     Ok(Box::pin(lines(body)))
 }
 
