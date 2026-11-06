@@ -54,14 +54,21 @@ pub struct IntegrationGate<'gate> {
 }
 
 impl IntegrationGate<'_> {
-    /// The modules `lib` (the harness's `lib.rs`) declares behind the feature gate.
+    /// The modules `lib` (the harness's `lib.rs`) declares only behind the feature gate: a module
+    /// with any declaration lacking the gate (say a stub `#[cfg(not(feature = "integration"))] mod dind;`) is built
+    /// without the feature, so it is not gated.
     #[must_use]
     pub fn gated_modules(&self, lib: &str) -> BTreeSet<String> {
         let gate = format!("#[cfg(feature = \x22{}\x22)]", self.feature);
-        MODULE
+        let (gated, ungated): (Vec<_>, Vec<_>) = MODULE
             .captures_iter(lib)
-            .filter(|captures| captures[1].contains(&gate))
-            .map(|captures| captures[2].to_owned())
+            .map(|captures| (captures[1].contains(&gate), captures[2].to_owned()))
+            .partition(|(behind_gate, _)| *behind_gate);
+        let ungated: BTreeSet<String> = ungated.into_iter().map(|(_, module)| module).collect();
+        gated
+            .into_iter()
+            .map(|(_, module)| module)
+            .filter(|module| !ungated.contains(module))
             .collect()
     }
 
@@ -248,6 +255,22 @@ mod tests {
                 "testenv/src/redact/tests.rs"
             ]
         );
+    }
+
+    /// Negative control: a module declared both behind the gate and without it is built in the
+    /// plain test, so it is not gated and its files are scanned.
+    #[test]
+    fn a_module_declared_also_without_the_gate_is_not_gated() {
+        let lib = "#[cfg(feature = \x22integration\x22)]\nmod dind;\n#[cfg(not(feature = \x22integration\x22))]\nmod dind;\n\
+                   #[cfg(feature = \x22integration\x22)]\nmod context;\n";
+        assert_eq!(
+            GATE.gated_modules(lib),
+            BTreeSet::from(["context".to_owned()])
+        );
+        let paths: Vec<String> = ["testenv/src/dind.rs", "testenv/src/context.rs"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(GATE.ungated_sources(lib, &paths), ["testenv/src/dind.rs"]);
     }
 
     #[test]
