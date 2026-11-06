@@ -20,9 +20,9 @@
 //! same endpoint the [`Config`] describes, with the same `User-Agent` and API version prefix, and
 //! returns once the headers are in.
 //!
-//! A TLS endpoint is not served here (the handshake would repeat bollard's rustls setup): callers
-//! fall back to bollard's lazy stream for it, and the call then returns before the engine has
-//! answered anything.
+//! A TLS endpoint (`tls` feature) is spoken to with rustls on the same material bollard's ssl path
+//! loads: `ca.pem`, `cert.pem` and `key.pem` from the config's certificate directory, and the
+//! system roots.
 
 use std::time::Duration;
 
@@ -31,7 +31,7 @@ use bollard::errors::Error as BollardError;
 use bollard::models::EventMessage;
 use bollard::query_parameters::EventsOptions;
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt as _};
+use futures_util::Stream;
 use http::header::{HOST, USER_AGENT};
 use http::{Method, Request, StatusCode};
 use http_body_util::{BodyExt as _, Empty};
@@ -47,31 +47,25 @@ pub(crate) enum Target {
     Unix(String),
     #[cfg(feature = "tcp")]
     Tcp(String),
-    /// An endpoint this module does not serve (TLS): the caller uses bollard's lazy stream.
     #[cfg(feature = "tls")]
-    Lazy,
+    Tls {
+        addr: String,
+        certs: std::path::PathBuf,
+    },
 }
 
 impl Target {
-    /// The target of `config`, [`Target::Lazy`] for a TLS endpoint.
+    /// The target of `config`.
     pub(crate) fn of(config: &Config) -> Self {
         match &config.endpoint {
             Endpoint::Unix(path) => Self::Unix(path.clone()),
             #[cfg(feature = "tcp")]
             Endpoint::Tcp(addr) => Self::Tcp(addr.trim_start_matches("tcp://").to_owned()),
             #[cfg(feature = "tls")]
-            Endpoint::Tls { .. } => Self::Lazy,
-        }
-    }
-
-    /// Whether the caller must use bollard's lazy stream.
-    pub(crate) fn is_lazy(&self) -> bool {
-        match self {
-            Self::Unix(_) => false,
-            #[cfg(feature = "tcp")]
-            Self::Tcp(_) => false,
-            #[cfg(feature = "tls")]
-            Self::Lazy => true,
+            Endpoint::Tls { addr, certs } => Self::Tls {
+                addr: addr.trim_start_matches("tcp://").to_owned(),
+                certs: certs.clone(),
+            },
         }
     }
 
@@ -79,7 +73,7 @@ impl Target {
         match self {
             Self::Unix(_) => "docker",
             #[cfg(feature = "tls")]
-            Self::Lazy => "docker",
+            Self::Tls { addr, .. } => addr,
             #[cfg(feature = "tcp")]
             Self::Tcp(addr) => addr,
         }
@@ -136,10 +130,15 @@ pub(crate) async fn establish(
     let answered = async {
         let response = match target {
             #[cfg(feature = "tls")]
-            Target::Lazy => {
-                return Err(BollardError::DockerStreamError {
-                    error: "this endpoint has no header-awaiting path".to_owned(),
-                });
+            Target::Tls { addr, certs } => {
+                let certs = certs.clone();
+                let connector = tokio::task::spawn_blocking(move || tls_connector(&certs))
+                    .await
+                    .map_err(|error| failure(error.to_string()))??;
+                let name = rustls_pki_types::ServerName::try_from(host_of(addr).to_owned())
+                    .map_err(|error| failure(format!("TLS server name {addr:?}: {error}")))?;
+                let tls = connector.connect(name, connect_tcp(addr).await?).await?;
+                send(TokioIo::new(tls), request).await?
             }
             Target::Unix(path) => {
                 send(TokioIo::new(UnixStream::connect(path).await?), request).await?
@@ -158,6 +157,51 @@ pub(crate) async fn establish(
         Ok(result) => result.map_err(|error: BollardError| Error::from(error)),
         Err(_elapsed) => Err(Error::timeout(timeout)),
     }
+}
+
+#[cfg(feature = "tls")]
+fn failure(message: String) -> BollardError {
+    BollardError::DockerStreamError { error: message }
+}
+
+/// The host of a `host:port` address, without the brackets of an IPv6 literal.
+#[cfg(feature = "tls")]
+fn host_of(addr: &str) -> &str {
+    let host = addr.rsplit_once(':').map_or(addr, |(host, _port)| host);
+    host.trim_start_matches('[').trim_end_matches(']')
+}
+
+/// The TLS client for `certs`: the system roots plus `ca.pem` to verify the engine, `cert.pem` and
+/// `key.pem` to present to it, as bollard's ssl path.
+#[cfg(feature = "tls")]
+fn tls_connector(certs: &std::path::Path) -> Result<tokio_rustls::TlsConnector, BollardError> {
+    use rustls_pki_types::pem::PemObject as _;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+
+    let chain = |name: &str| -> Result<Vec<CertificateDer<'static>>, BollardError> {
+        let path = certs.join(name);
+        CertificateDer::pem_file_iter(&path)
+            .and_then(Iterator::collect)
+            .map_err(|error| failure(format!("{}: {error}", path.display())))
+    };
+    let mut roots = rustls::RootCertStore::empty();
+    // A system root that fails to load is skipped: `ca.pem` is what the engine is checked against.
+    roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+    roots.add_parsable_certificates(chain("ca.pem")?);
+    let key_path = certs.join("key.pem");
+    let key = PrivateKeyDer::from_pem_file(&key_path)
+        .map_err(|error| failure(format!("{}: {error}", key_path.display())))?;
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| failure(error.to_string()))?
+    .with_root_certificates(roots)
+    .with_client_auth_cert(chain("cert.pem")?, key)
+    .map_err(|error| failure(error.to_string()))?;
+    Ok(tokio_rustls::TlsConnector::from(std::sync::Arc::new(
+        config,
+    )))
 }
 
 /// A TCP connection to `addr` with keepalive on (15 seconds idle and apart, nine probes where the
@@ -213,9 +257,6 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// Each line of the stream is decoded as an [`EventMessage`]; one that does not decode is an `Err`
 /// item and the stream goes on. A transport failure is an `Err` item that ends it.
 ///
-/// A TLS endpoint is served by bollard's lazy stream instead: the call returns at once, and
-/// nothing says the subscription was accepted.
-///
 /// # Errors
 ///
 /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when the headers do not come in `timeout`,
@@ -228,11 +269,6 @@ pub async fn events_established(
     timeout: Duration,
 ) -> Result<EventStream, Error> {
     let target = Target::of(config);
-    if target.is_lazy() {
-        return Ok(Box::pin(
-            docker.events(options).map(|item| item.map_err(Error::from)),
-        ));
-    }
     let query = options
         .map(|options| serde_urlencoded::to_string(&options))
         .transpose()

@@ -22,7 +22,7 @@ use bollard::Docker;
 use bollard::container::LogOutput;
 use bollard::errors::Error as BollardError;
 use bollard::models::ContainerWaitResponse;
-use bollard::query_parameters::{AttachContainerOptionsBuilder, WaitContainerOptionsBuilder};
+use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bytes::Bytes;
 use futures_util::StreamExt as _;
 use http::Method;
@@ -112,11 +112,6 @@ impl WaitCondition {
 ///
 /// A non-zero exit is the exit code here, not a failure. The code is the answer's `StatusCode`.
 ///
-/// **A TLS endpoint** is served by bollard's lazy stream, which hides the headers: the call then
-/// returns at once and registration is not observable, so a `start` may reach the engine first. A
-/// wait that arrives after an auto-remove container is gone is answered with a 404, delivered as
-/// an [`Error`] of kind `NotFound`.
-///
 /// # Errors
 ///
 /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when the headers do not come in `timeout`, the
@@ -132,9 +127,6 @@ pub async fn wait(
 ) -> Result<oneshot::Receiver<Result<i64, Error>>, Error> {
     let (mut sender, receiver) = oneshot::channel();
     let target = Target::of(config);
-    if target.is_lazy() {
-        return Ok(wait_lazily(docker, id, condition, cancel));
-    }
     let body = establish(
         docker,
         config,
@@ -164,39 +156,4 @@ fn decode_exit(collected: Result<Collected<Bytes>, hyper::Error>) -> Result<i64,
     serde_json::from_slice::<ContainerWaitResponse>(&bytes)
         .map(|response| response.status_code)
         .map_err(|error| Error::from(BollardError::from(error)))
-}
-
-/// bollard's wait, sent by a spawned task at once, for the endpoints [`establish`] does not serve.
-fn wait_lazily(
-    docker: &Docker,
-    id: &str,
-    condition: WaitCondition,
-    cancel: CancellationToken,
-) -> oneshot::Receiver<Result<i64, Error>> {
-    let options = WaitContainerOptionsBuilder::new()
-        .condition(condition.as_str())
-        .build();
-    let mut stream = Box::pin(docker.wait_container(id, Some(options)));
-    let (mut sender, receiver) = oneshot::channel();
-    tokio::spawn(async move {
-        let result = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return,
-            () = sender.closed() => return,
-            next = stream.next() => exit_code(next),
-        };
-        let _ = sender.send(result);
-    });
-    receiver
-}
-
-fn exit_code(next: Option<Result<ContainerWaitResponse, BollardError>>) -> Result<i64, Error> {
-    match next {
-        Some(Ok(response)) => Ok(response.status_code),
-        Some(Err(BollardError::DockerContainerWaitError { code, .. })) => Ok(code),
-        Some(Err(error)) => Err(Error::from(error)),
-        None => Err(Error::from(BollardError::DockerStreamError {
-            error: "the wait stream ended empty".to_owned(),
-        })),
-    }
 }

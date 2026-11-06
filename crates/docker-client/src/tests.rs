@@ -1018,3 +1018,129 @@ async fn the_streaming_tcp_connection_has_keepalive_on() {
     );
     assert_eq!(socket.tcp_keepalive_retries().unwrap(), 9);
 }
+
+#[cfg(feature = "tls")]
+mod tls_tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use futures_util::StreamExt as _;
+    use rustls::pki_types::pem::PemObject as _;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    use super::*;
+
+    fn certs() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/tls")
+    }
+
+    fn config(port: u16, certs: &std::path::Path) -> Config {
+        Config::from_env(env(&[
+            ("DOCKER_HOST", &format!("tcp://127.0.0.1:{port}")),
+            ("DOCKER_TLS_VERIFY", "1"),
+            ("DOCKER_CERT_PATH", certs.to_str().unwrap()),
+        ]))
+        .unwrap()
+    }
+
+    /// A TLS engine that requires a client certificate signed by the test CA and answers `/events`
+    /// with one event, or accepts TCP and says nothing when `silent`.
+    async fn engine(silent: bool) -> u16 {
+        let dir = certs();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add_parsable_certificates(
+            CertificateDer::pem_file_iter(dir.join("ca.pem"))
+                .unwrap()
+                .map(Result::unwrap),
+        );
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::clone(&provider),
+        )
+        .build()
+        .unwrap();
+        let server = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(
+                CertificateDer::pem_file_iter(dir.join("server.pem"))
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect(),
+                PrivateKeyDer::from_pem_file(dir.join("server-key.pem")).unwrap(),
+            )
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    if silent {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        drop(tcp);
+                        return;
+                    }
+                    let Ok(mut tls) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    let mut seen = Vec::new();
+                    while !seen.ends_with(b"\r\n\r\n") {
+                        let mut chunk = [0_u8; 512];
+                        match tls.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => seen.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n";
+                    let _ = tls.write_all(format!("{head}{EVENT_A}\n").as_bytes()).await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn events_established_speaks_tls_with_the_client_certificate() {
+        let port = engine(false).await;
+        let config = config(port, &certs());
+        let docker = connect(config.clone()).unwrap();
+        let mut events = events_established(&docker, &config, None, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let event = events.next().await.unwrap().unwrap();
+        assert_eq!(event.action.as_deref(), Some("start"));
+    }
+
+    #[tokio::test]
+    async fn a_tls_engine_that_never_answers_times_out_instead_of_looking_established() {
+        let port = engine(true).await;
+        let config = config(port, &certs());
+        let docker = connect(config.clone()).unwrap();
+        let Err(error) =
+            events_established(&docker, &config, None, Duration::from_millis(300)).await
+        else {
+            panic!("a silent TLS engine was reported established");
+        };
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+    }
+
+    #[tokio::test]
+    async fn unreadable_certificates_are_an_error_naming_the_file() {
+        let port = engine(false).await;
+        let nowhere = PathBuf::from("/nonexistent/certs");
+        // The client is built from good certificates; only the streaming path sees the bad ones.
+        let docker = connect(config(port, &certs())).unwrap();
+        let config = config(port, &nowhere);
+        let Err(error) = events_established(&docker, &config, None, Duration::from_secs(5)).await
+        else {
+            panic!("established without certificates");
+        };
+        assert!(error.to_string().contains("ca.pem"), "{error}");
+    }
+}

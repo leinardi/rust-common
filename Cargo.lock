@@ -260,11 +260,15 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "serde_json",
  "serde_urlencoded",
  "socket2",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
 ]
 
