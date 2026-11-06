@@ -440,6 +440,13 @@ mod attach_tests {
     use super::*;
     use crate::attach::{Output, WaitCondition, attach, wait};
 
+    const SECS: Duration = Duration::from_secs(5);
+
+    fn pair(engine: &FakeEngine) -> (Docker, Config) {
+        let config = Config::unix(engine.socket().to_str().unwrap());
+        (connect(config.clone()).unwrap(), config)
+    }
+
     fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
         let mut bytes = vec![kind, 0, 0, 0];
         bytes.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
@@ -501,14 +508,18 @@ mod attach_tests {
             ),
         ])
         .unwrap();
-        let docker = client(&engine);
+        let (docker, config) = pair(&engine);
         for (id, code) in [("ok", 0), ("bad", 3), ("err", 137)] {
             let answer = wait(
                 &docker,
+                &config,
                 id,
                 WaitCondition::NotRunning,
+                SECS,
                 CancellationToken::new(),
-            );
+            )
+            .await
+            .unwrap();
             assert_eq!(answer.await.unwrap().unwrap(), code, "{id}");
         }
     }
@@ -517,57 +528,153 @@ mod attach_tests {
     async fn wait_sends_the_condition_asked_for() {
         let engine =
             FakeEngine::start(&[("/containers/c/wait", Reply::ok(r#"{"StatusCode":0}"#))]).unwrap();
-        let docker = client(&engine);
+        let (docker, config) = pair(&engine);
         for (condition, query) in [
             (WaitCondition::NotRunning, "condition=not-running"),
             (WaitCondition::NextExit, "condition=next-exit"),
             (WaitCondition::Removed, "condition=removed"),
         ] {
-            wait(&docker, "c", condition, CancellationToken::new())
-                .await
-                .unwrap()
-                .unwrap();
+            wait(
+                &docker,
+                &config,
+                "c",
+                condition,
+                SECS,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
             let requests = engine.requests();
             assert_eq!(requests.last().unwrap().query(), query);
             assert_eq!(requests.last().unwrap().method, "POST");
         }
     }
 
-    /// A wait that reaches the engine after the container is gone is a 404: delivered through the
-    /// receiver as `NotFound`, which a `Removed` caller reads as "already removed".
+    /// A wait that reaches the engine after the container is gone is a 404: the call itself fails
+    /// as `NotFound`, which a `Removed` caller reads as "already removed".
     #[tokio::test]
     async fn wait_removed_on_a_missing_container_delivers_not_found() {
         let engine = FakeEngine::start(&[("/containers/gone/wait", Reply::not_found())]).unwrap();
-        let docker = client(&engine);
+        let (docker, config) = pair(&engine);
         let error = wait(
             &docker,
+            &config,
             "gone",
             WaitCondition::Removed,
+            SECS,
             CancellationToken::new(),
         )
         .await
-        .unwrap()
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::NotFound);
         assert_eq!(engine.requests()[0].query(), "condition=removed");
     }
 
-    /// The request is sent without anyone awaiting the receiver, and cancelling ends the task.
+    /// Cancelling ends the task that reads the exit code.
     #[tokio::test]
-    async fn wait_sends_eagerly_and_ends_when_cancelled() {
+    async fn wait_ends_when_cancelled() {
         let engine = FakeEngine::start(&[("/containers/c/wait", Reply::Stalled)]).unwrap();
-        let docker = client(&engine);
+        let (docker, config) = pair(&engine);
         let cancel = CancellationToken::new();
-        let receiver = wait(&docker, "c", WaitCondition::NextExit, cancel.clone());
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while engine.requests().is_empty() {
-                tokio::task::yield_now().await;
-            }
-        })
+        let receiver = wait(
+            &docker,
+            &config,
+            "c",
+            WaitCondition::NextExit,
+            SECS,
+            cancel.clone(),
+        )
         .await
         .unwrap();
         cancel.cancel();
         assert!(receiver.await.is_err());
+    }
+
+    /// The call returns once the engine answered the headers, and not before: the engine has the
+    /// request by then, so a start made next cannot overtake it. The exit code, sent later, still
+    /// arrives; the User-Agent and the version prefix are the client's.
+    #[tokio::test]
+    async fn wait_returns_after_the_headers_and_before_the_exit() {
+        let engine = FakeEngine::start(&[
+            (
+                "/containers/slow/wait",
+                Reply::Delayed {
+                    delay: Duration::from_millis(300),
+                    reply: Box::new(Reply::HeadersThenBody {
+                        body_delay: Duration::from_millis(300),
+                        body: r#"{"StatusCode":7}"#.to_owned(),
+                    }),
+                },
+            ),
+            ("/containers/slow/start", Reply::status(204)),
+        ])
+        .unwrap();
+        let config = Config::unix(engine.socket().to_str().unwrap())
+            .api_version("1.41")
+            .unwrap()
+            .user_agent("tool/1.2");
+        let docker = connect(config.clone()).unwrap();
+        let begun = Instant::now();
+        let receiver = wait(
+            &docker,
+            &config,
+            "slow",
+            WaitCondition::NextExit,
+            SECS,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let headers_after = begun.elapsed();
+        assert!(
+            headers_after >= Duration::from_millis(250),
+            "{headers_after:?}"
+        );
+        assert!(
+            headers_after < Duration::from_millis(550),
+            "{headers_after:?}"
+        );
+        docker
+            .start_container(
+                "slow",
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await
+            .unwrap();
+        assert_eq!(receiver.await.unwrap().unwrap(), 7);
+        let requests = engine.requests();
+        let order: Vec<&str> = requests
+            .iter()
+            .map(crate::test_util::Request::path)
+            .collect();
+        assert_eq!(order, ["/containers/slow/wait", "/containers/slow/start"]);
+        assert_eq!(
+            requests[0].raw_path(),
+            "/v1.41/containers/slow/wait?condition=next-exit"
+        );
+        assert_eq!(requests[0].header("user-agent"), Some("tool/1.2"));
+    }
+
+    #[tokio::test]
+    async fn wait_times_out_when_the_headers_never_come() {
+        let engine = FakeEngine::start(&[("/containers/c/wait", Reply::Silent)]).unwrap();
+        let (docker, config) = pair(&engine);
+        let begun = Instant::now();
+        let error = wait(
+            &docker,
+            &config,
+            "c",
+            WaitCondition::NextExit,
+            Duration::from_millis(200),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert!(begun.elapsed() < Duration::from_secs(2));
     }
 }
 
@@ -730,4 +837,92 @@ async fn a_clone_of_the_config_shares_no_negotiated_version() {
         .unwrap();
     let requests = engine.requests();
     assert_eq!(requests[1].raw_path(), "/containers/json");
+}
+
+const EVENT_A: &str = r#"{"Type":"container","Action":"start","Actor":{"ID":"a","Attributes":{}}}"#;
+
+fn pair(engine: &FakeEngine) -> (Docker, Config) {
+    let config = Config::unix(engine.socket().to_str().unwrap());
+    (connect(config.clone()).unwrap(), config)
+}
+
+#[tokio::test]
+async fn events_established_streams_lines_and_survives_an_undecodable_one() {
+    use futures_util::StreamExt as _;
+
+    let engine =
+        FakeEngine::start(&[("/events", Reply::events(&[EVENT_A, "not json", EVENT_A]))]).unwrap();
+    let (docker, config) = pair(&engine);
+    let mut events = events_established(&docker, &config, None, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let first = events.next().await.unwrap().unwrap();
+    assert_eq!(first.action.as_deref(), Some("start"));
+    assert!(events.next().await.unwrap().is_err());
+    assert!(events.next().await.unwrap().is_ok());
+    assert!(events.next().await.is_none());
+}
+
+#[tokio::test]
+async fn events_established_sends_the_options_the_agent_and_the_version() {
+    use bollard::query_parameters::EventsOptionsBuilder;
+
+    let engine = FakeEngine::start(&[("/events", Reply::events(&[]))]).unwrap();
+    let config = Config::unix(engine.socket().to_str().unwrap())
+        .api_version("1.43")
+        .unwrap()
+        .user_agent("tool/1.2");
+    let docker = connect(config.clone()).unwrap();
+    let options = EventsOptionsBuilder::new()
+        .since("100")
+        .filters(&HashMap::from([("type", vec!["container"])]))
+        .build();
+    let _events = events_established(&docker, &config, Some(options), Duration::from_secs(5))
+        .await
+        .unwrap();
+    let requests = engine.requests();
+    assert!(requests[0].raw_path().starts_with("/v1.43/events?"));
+    assert!(
+        requests[0].query().contains("since=100"),
+        "{}",
+        requests[0].query()
+    );
+    assert!(
+        requests[0].query().contains("filters="),
+        "{}",
+        requests[0].query()
+    );
+    assert_eq!(requests[0].header("user-agent"), Some("tool/1.2"));
+}
+
+#[tokio::test]
+async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_refusal() {
+    let engine = FakeEngine::start(&[("/events", Reply::Silent)]).unwrap();
+    let (docker, config) = pair(&engine);
+    let begun = Instant::now();
+    let Err(error) = events_established(&docker, &config, None, Duration::from_millis(200)).await
+    else {
+        panic!("a subscription nobody answered was established");
+    };
+    assert_eq!(error.kind(), ErrorKind::Timeout);
+    assert!(begun.elapsed() < Duration::from_secs(2));
+
+    let engine = FakeEngine::start(&[("/events", Reply::error(400, "bad filter"))]).unwrap();
+    let (docker, config) = pair(&engine);
+    let begun = Instant::now();
+    let Err(error) = events_established(&docker, &config, None, Duration::from_secs(30)).await
+    else {
+        panic!("a refused subscription was established");
+    };
+    assert_eq!(error.kind(), ErrorKind::Other);
+    assert!(error.to_string().contains("bad filter"), "{error}");
+    assert!(begun.elapsed() < Duration::from_secs(2));
+
+    let engine = FakeEngine::start(&[("/events", Reply::not_found())]).unwrap();
+    let (docker, config) = pair(&engine);
+    let Err(error) = events_established(&docker, &config, None, Duration::from_secs(30)).await
+    else {
+        panic!("a refused subscription was established");
+    };
+    assert_eq!(error.kind(), ErrorKind::NotFound);
 }

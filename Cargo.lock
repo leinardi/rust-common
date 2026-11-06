@@ -254,8 +254,14 @@ name = "docker-client"
 version = "0.3.0"
 dependencies = [
  "bollard",
+ "bytes",
  "futures-util",
  "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde_json",
+ "serde_urlencoded",
  "thiserror",
  "tokio",
  "tokio-util",

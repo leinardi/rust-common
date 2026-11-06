@@ -23,12 +23,17 @@ use bollard::container::LogOutput;
 use bollard::errors::Error as BollardError;
 use bollard::models::ContainerWaitResponse;
 use bollard::query_parameters::{AttachContainerOptionsBuilder, WaitContainerOptionsBuilder};
+use bytes::Bytes;
 use futures_util::StreamExt as _;
+use http::Method;
+use http_body_util::{BodyExt as _, Collected};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use crate::config::Config;
 use crate::error::{Error, bounded};
 use crate::pump::pump_stream;
+use crate::stream::{Target, establish};
 
 /// A piece of a container's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,21 +99,75 @@ impl WaitCondition {
     }
 }
 
-/// Asks for the container `id`'s exit code under `condition`. Nothing is awaited here: a spawned
-/// task sends the request at once, and ends when the receiver is dropped or `cancel` fires (the
-/// receiver then reports a closed channel). Must be called inside a tokio runtime.
+/// Asks for the container `id`'s exit code under `condition`, and returns once the engine has
+/// answered the response headers: that is when it holds the waiter, so a `start` made after this
+/// returns cannot overtake the wait, and an auto-removed container that exits at once still
+/// delivers its code (moby's Go client returned from `ContainerWait` at the same point). `timeout`
+/// bounds the connection and the headers, not the wait itself. A spawned task then reads the exit
+/// code, and ends when the receiver is dropped or `cancel` fires (the receiver then reports a
+/// closed channel). Must be called inside a tokio runtime.
 ///
-/// **Registration is not observable through bollard**, which hides the response headers, so this
-/// cannot say when the engine has the waiter, and a `start` made right after the call may reach
-/// the engine first. A wait that arrives after an auto-remove container is gone is answered with a
-/// 404, which the receiver delivers as an [`Error`] of kind `NotFound`: a caller waiting for
-/// [`WaitCondition::Removed`] must read that as "already removed, exit code unknown", not as a
-/// failure.
+/// `docker` and `config` must be a client and the [`Config`] it was connected from; the request
+/// carries the config's `User-Agent` and the client's API version, as the client's own.
 ///
-/// bollard reports a non-zero exit as an error carrying the code; it is the exit code here, not a
-/// failure.
-#[must_use]
-pub fn wait(
+/// A non-zero exit is the exit code here, not a failure. The code is the answer's `StatusCode`.
+///
+/// **A TLS endpoint** is served by bollard's lazy stream, which hides the headers: the call then
+/// returns at once and registration is not observable, so a `start` may reach the engine first. A
+/// wait that arrives after an auto-remove container is gone is answered with a 404, delivered as
+/// an [`Error`] of kind `NotFound`.
+///
+/// # Errors
+///
+/// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when the headers do not come in `timeout`, the
+/// engine's refusal sorted into its kind (404 for a container that is not there), `Unavailable`
+/// when it cannot be reached.
+pub async fn wait(
+    docker: &Docker,
+    config: &Config,
+    id: &str,
+    condition: WaitCondition,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> Result<oneshot::Receiver<Result<i64, Error>>, Error> {
+    let (mut sender, receiver) = oneshot::channel();
+    let target = Target::of(config);
+    if target.is_lazy() {
+        return Ok(wait_lazily(docker, id, condition, cancel));
+    }
+    let body = establish(
+        docker,
+        config,
+        &target,
+        Method::POST,
+        &format!("/containers/{id}/wait"),
+        &format!("condition={}", condition.as_str()),
+        timeout,
+    )
+    .await?;
+    tokio::spawn(async move {
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            () = sender.closed() => return,
+            collected = body.collect() => decode_exit(collected),
+        };
+        let _ = sender.send(result);
+    });
+    Ok(receiver)
+}
+
+fn decode_exit(collected: Result<Collected<Bytes>, hyper::Error>) -> Result<i64, Error> {
+    let bytes = collected
+        .map_err(|error| Error::from(BollardError::from(error)))?
+        .to_bytes();
+    serde_json::from_slice::<ContainerWaitResponse>(&bytes)
+        .map(|response| response.status_code)
+        .map_err(|error| Error::from(BollardError::from(error)))
+}
+
+/// bollard's wait, sent by a spawned task at once, for the endpoints [`establish`] does not serve.
+fn wait_lazily(
     docker: &Docker,
     id: &str,
     condition: WaitCondition,

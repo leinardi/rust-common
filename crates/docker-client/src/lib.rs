@@ -23,7 +23,8 @@
 //!   unavailable), with bollard's error kept as the cause.
 //! * [`pump_stream`]: a bollard stream (the events, a log) as a channel, fed by a task that stops
 //!   with its receiver or its [`CancellationToken`].
-//! * `attach` (feature): a container's output pump and its exit code.
+//! * [`events_established`]: the events stream, returned once the engine accepted the subscription.
+//! * `attach` (feature): a container's output pump and its exit code (`wait` returns once the engine holds the waiter).
 //! * `test_util` (feature `test-util`): a fake engine on a unix socket.
 //!
 //! Extracted from swarm-rootless-docker/src/docker/mod.rs at e0961f77655f (the call bound, the
@@ -36,6 +37,7 @@ pub mod attach;
 mod config;
 mod error;
 mod pump;
+mod stream;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;
 #[cfg(test)]
@@ -45,4 +47,5 @@ pub use bollard;
 pub use config::{Config, ConnectError, connect, negotiate};
 pub use error::{Error, ErrorKind, bounded};
 pub use pump::pump_stream;
+pub use stream::{EventStream, events_established};
 pub use tokio_util::sync::CancellationToken;

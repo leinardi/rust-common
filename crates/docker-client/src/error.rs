@@ -71,7 +71,7 @@ impl Error {
         }
     }
 
-    fn timeout(after: Duration) -> Self {
+    pub(crate) fn timeout(after: Duration) -> Self {
         Self {
             kind: ErrorKind::Timeout,
             repr: Repr::Timeout(after),

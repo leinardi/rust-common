@@ -47,6 +47,24 @@ pub enum Reply {
     Stalled,
     /// These bytes as they are, then the connection closes.
     Raw(Vec<u8>),
+    /// The request is logged at once, `reply` is sent only after `delay`: an engine that is slow
+    /// to answer the headers.
+    Delayed {
+        /// How long to wait before answering.
+        delay: Duration,
+        /// The answer.
+        reply: Box<Reply>,
+    },
+    /// The request is logged and never answered, the connection held open.
+    Silent,
+    /// A `200` with the headers sent at once and `body` only after `body_delay`: a wait the engine
+    /// has registered but whose container has not exited yet.
+    HeadersThenBody {
+        /// How long the body is held back.
+        body_delay: Duration,
+        /// The body, sent whole with its length.
+        body: String,
+    },
 }
 
 impl Reply {
@@ -260,6 +278,11 @@ async fn answer(
     log.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(request);
+    let mut reply = reply;
+    while let Reply::Delayed { delay, reply: next } = reply {
+        tokio::time::sleep(delay).await;
+        reply = *next;
+    }
     match reply {
         Reply::Json { status, body } => {
             let head = format!(
@@ -276,6 +299,18 @@ async fn answer(
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
         Reply::Raw(bytes) => stream.write_all(&bytes).await?,
+        Reply::Silent => tokio::time::sleep(Duration::from_secs(3600)).await,
+        Reply::HeadersThenBody { body_delay, body } => {
+            let head = format!(
+                "HTTP/1.1 200 OK\r\n{JSON_HEAD}Content-Length: {}\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).await?;
+            stream.flush().await?;
+            tokio::time::sleep(body_delay).await;
+            stream.write_all(body.as_bytes()).await?;
+        }
+        Reply::Delayed { .. } => unreachable!("flattened above"),
     }
     stream.shutdown().await
 }

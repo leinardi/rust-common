@@ -65,7 +65,7 @@ pub(crate) enum Endpoint {
 pub struct Config {
     pub(crate) endpoint: Endpoint,
     pub(crate) api_version: Option<ClientVersion>,
-    user_agent: Option<String>,
+    pub(crate) user_agent: Option<String>,
     header_timeout: Option<Duration>,
 }
 

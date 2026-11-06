@@ -41,7 +41,17 @@ tokio = { version = "1.54.1", default-features = false, features = [
     "time",
     "sync",
     "macros",
+    "net",
 ] }
+# The header-awaiting streaming calls: hyper's one-connection client over the unix or TCP socket,
+# the body as a stream, the query string and the JSON they answer with. All are in bollard's own
+# graph already.
+bytes = "1.12.1"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+serde_json = "1.0.154"
+serde_urlencoded = "0.7.1"
 # CancellationToken, Go's context cancellation.
 tokio-util = { version = "0.7.20", default-features = false }
 
