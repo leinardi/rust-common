@@ -204,6 +204,16 @@ pub fn connect(config: Config) -> Result<Docker, ConnectError> {
     Ok(with_modifier(docker, user_agent, fixed))
 }
 
+/// The API version the requests of a client carry, the one rule for bollard's calls (the request
+/// modifier) and for the header-awaiting streaming calls: the version `config` fixes; else, for a
+/// client [`negotiate`] lowered below bollard's default, the version it settled on; else none, the
+/// engine's newest API. `client` is the client's own [`Docker::client_version`].
+pub(crate) fn sent_version(config: &Config, client: ClientVersion) -> Option<ClientVersion> {
+    config
+        .api_version
+        .or_else(|| (client != *API_DEFAULT_VERSION).then_some(client))
+}
+
 /// Installs the request modifier on `docker`, replacing any earlier one (bollard keeps a single
 /// modifier per client), so the version and user agent it carries belong to that client alone.
 ///
@@ -259,7 +269,7 @@ fn has_version_prefix(path: &str) -> bool {
 
 /// Settles the API version: left as it is when `config` fixed one, else lowered to the engine's
 /// (bollard's `negotiate_version`, one `GET /version`, sent unversioned) and sent on every request
-/// of the returned client after it (the version belongs to that client, not to `config`). `config` must be the one `docker` was connected from (or a clone of it).
+/// of the returned client after it when it is below bollard's default (a newer engine is spoken to at its newest, as before negotiating; the version belongs to that client, not to `config`). `config` must be the one `docker` was connected from (or a clone of it).
 ///
 /// # Errors
 ///
@@ -273,8 +283,8 @@ pub async fn negotiate(docker: Docker, config: &Config) -> Result<Docker, Error>
     let docker = docker.negotiate_version().await.map_err(Error::from)?;
     // `connect` accepted this user agent already, so it parses again.
     let user_agent = parse_user_agent(config.user_agent.as_deref()).unwrap_or(None);
-    let version = docker.client_version();
-    Ok(with_modifier(docker, user_agent, Some(version)))
+    let version = sent_version(config, docker.client_version());
+    Ok(with_modifier(docker, user_agent, version))
 }
 
 fn parse_user_agent(text: Option<&str>) -> Result<Option<HeaderValue>, ConnectError> {

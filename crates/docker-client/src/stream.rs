@@ -26,10 +26,10 @@
 
 use std::time::Duration;
 
+use bollard::Docker;
 use bollard::errors::Error as BollardError;
 use bollard::models::EventMessage;
 use bollard::query_parameters::EventsOptions;
-use bollard::{API_DEFAULT_VERSION, Docker};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt as _};
 use http::header::{HOST, USER_AGENT};
@@ -39,7 +39,7 @@ use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use tokio::net::UnixStream;
 
-use crate::config::{Config, Endpoint};
+use crate::config::{Config, Endpoint, sent_version};
 use crate::error::Error;
 
 /// Where the engine listens, for the endpoints this module serves.
@@ -86,16 +86,10 @@ impl Target {
     }
 }
 
-/// The path the client sends `path` under: with `/v<major>.<minor>` when `config` fixes a version
-/// or `docker` negotiated one below bollard's default, bare otherwise (the engine's newest), as
-/// the request modifier [`connect`](crate::connect) and [`negotiate`](crate::negotiate) install
-/// does.
+/// The path the client sends `path` under, with the version prefix its own calls carry
+/// ([`sent_version`]).
 fn versioned_path(docker: &Docker, config: &Config, path: &str) -> String {
-    let version = config.api_version.or_else(|| {
-        let negotiated = docker.client_version();
-        (negotiated != *API_DEFAULT_VERSION).then_some(negotiated)
-    });
-    version.map_or_else(
+    sent_version(config, docker.client_version()).map_or_else(
         || path.to_owned(),
         |version| {
             format!(

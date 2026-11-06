@@ -658,6 +658,58 @@ mod attach_tests {
         assert_eq!(requests[0].header("user-agent"), Some("tool/1.2"));
     }
 
+    /// bollard's calls and the header-awaiting ones carry the same prefix after `negotiate`,
+    /// whether the engine lowered the version or is newer than bollard's default.
+    #[tokio::test]
+    async fn streaming_calls_carry_the_prefix_bollard_calls_do_after_negotiating() {
+        for (api, prefix) in [("99.0", ""), ("1.41", "/v1.41")] {
+            let engine = FakeEngine::start(&[
+                (
+                    "/version",
+                    Reply::ok(&format!(r#"{{"ApiVersion":"{api}"}}"#)),
+                ),
+                ("/containers/json", Reply::ok("[]")),
+                ("/containers/c/wait", Reply::ok(r#"{"StatusCode":0}"#)),
+                ("/events", Reply::events(&[])),
+            ])
+            .unwrap();
+            let (docker, config) = pair(&engine);
+            let docker = negotiate(docker, &config).await.unwrap();
+            docker
+                .list_containers(None::<bollard::query_parameters::ListContainersOptions>)
+                .await
+                .unwrap();
+            wait(
+                &docker,
+                &config,
+                "c",
+                WaitCondition::NextExit,
+                SECS,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            let _events = events_established(&docker, &config, None, SECS)
+                .await
+                .unwrap();
+            let paths: Vec<String> = engine
+                .requests()
+                .iter()
+                .skip(1)
+                .map(|request| request.raw_path().split('?').next().unwrap().to_owned())
+                .collect();
+            assert_eq!(
+                paths,
+                [
+                    format!("{prefix}/containers/json"),
+                    format!("{prefix}/containers/c/wait"),
+                    format!("{prefix}/events"),
+                ],
+                "{api}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn wait_times_out_when_the_headers_never_come() {
         let engine = FakeEngine::start(&[("/containers/c/wait", Reply::Silent)]).unwrap();
