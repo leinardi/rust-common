@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 const JSON_HEAD: &str = "Content-Type: application/json\r\nConnection: close\r\n";
 
@@ -160,7 +160,7 @@ impl Request {
 }
 
 /// The fake engine: its socket lives in a scratch directory that is removed, and the task that
-/// serves it stopped, when it is dropped.
+/// serves it stopped, and with it every connection it is serving, when it is dropped.
 #[derive(Debug)]
 pub struct FakeEngine {
     dir: PathBuf,
@@ -195,8 +195,17 @@ impl FakeEngine {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&requests);
         let task = tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                tokio::spawn(serve(stream, Arc::clone(&routes), Arc::clone(&log)));
+            // The connection tasks live in this set, so aborting this task (the engine's drop)
+            // drops the set and aborts them too, closing their sockets.
+            let mut connections = JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((stream, _)) = accepted else { break };
+                        connections.spawn(serve(stream, Arc::clone(&routes), Arc::clone(&log)));
+                    }
+                    Some(_) = connections.join_next() => {}
+                }
             }
         });
         Ok(Self {

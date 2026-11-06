@@ -647,3 +647,29 @@ fn a_version_prefix_is_added_once_and_the_query_kept() {
         Some(uri("http://h/v1.44/volumes"))
     );
 }
+
+#[tokio::test]
+async fn dropping_the_engine_closes_the_connections_it_is_stalling() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::UnixStream;
+
+    let engine = FakeEngine::start(&[("/containers/json", Reply::Stalled)]).unwrap();
+    let mut stream = UnixStream::connect(engine.socket()).await.unwrap();
+    stream
+        .write_all(b"GET /containers/json HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    while !seen.ends_with(b"[") {
+        let mut chunk = [0_u8; 256];
+        let read = stream.read(&mut chunk).await.unwrap();
+        assert_ne!(read, 0, "closed before the stall");
+        seen.extend_from_slice(&chunk[..read]);
+    }
+    drop(engine);
+    let mut rest = [0_u8; 16];
+    let closed = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut rest))
+        .await
+        .expect("the stalled connection stays open after the engine is dropped");
+    assert!(matches!(closed, Ok(0) | Err(_)), "{closed:?}");
+}
