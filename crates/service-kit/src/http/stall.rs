@@ -18,6 +18,17 @@
 //! byte leaving, not how long a response takes. It sits under hyper, so it covers a body that
 //! streams after the handler returned, and the writes of an upgraded connection too.
 //!
+//! The same wrapper does the lingering close: when hyper shuts the write side (it sends the FIN),
+//! `poll_shutdown` goes on to read and discard what the peer still sends, until its EOF, a byte
+//! cap or a time cap, whichever comes first. Closing a socket with unread bytes in its receive
+//! buffer makes the kernel send an RST, which can destroy a response the client has not read yet:
+//! a handler that answers `413` without reading an upload would otherwise lose it. Go's net/http
+//! does the same. A peer that already closed ends the drain at its first read, so a clean close
+//! is not delayed. The drain runs only when `poll_shutdown` is polled, so `cut` (which drops the
+//! connection) skips it. An upgraded connection's shutdown, called by the handler's task, drains
+//! the same way: the handler asked to close, so only bytes it will never read are discarded, at
+//! the cost of at most the time cap.
+//!
 //! Extracted from bitgauge/src/server/timeouts.rs at d841694700a5 (the write deadline of
 //! `ConnIo`), without its request-phase tracking.
 
@@ -29,6 +40,20 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::time::{Instant, Sleep, sleep_until};
 
+/// How the write side's shutdown is going.
+#[derive(Debug)]
+enum Linger {
+    /// Not shut down yet.
+    Open,
+    /// The FIN is out: discarding what the peer sends, `drained` bytes so far.
+    Draining {
+        until: Pin<Box<Sleep>>,
+        drained: u64,
+    },
+    /// The drain is over.
+    Done,
+}
+
 /// `T`, with an error of kind `TimedOut` for a write that stays pending for `timeout`.
 #[derive(Debug)]
 pub(crate) struct StallIo<T> {
@@ -36,14 +61,26 @@ pub(crate) struct StallIo<T> {
     timeout: Option<Duration>,
     /// The deadline of the write that is pending now, if one is.
     deadline: Option<Pin<Box<Sleep>>>,
+    /// The lingering-close drain: how long and how many bytes it may take.
+    linger: Linger,
+    linger_timeout: Duration,
+    linger_max_bytes: u64,
 }
 
 impl<T> StallIo<T> {
-    pub(crate) fn new(inner: T, timeout: Option<Duration>) -> Self {
+    pub(crate) fn new(
+        inner: T,
+        timeout: Option<Duration>,
+        linger_timeout: Duration,
+        linger_max_bytes: u64,
+    ) -> Self {
         Self {
             inner,
             timeout,
             deadline: None,
+            linger: Linger::Open,
+            linger_timeout,
+            linger_max_bytes,
         }
     }
 
@@ -95,7 +132,7 @@ impl<T: AsyncRead + Unpin> AsyncRead for StallIo<T> {
     }
 }
 
-impl<T: AsyncWrite + Unpin> AsyncWrite for StallIo<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for StallIo<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -124,7 +161,38 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for StallIo<T> {
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let result = Pin::new(&mut self.inner).poll_shutdown(cx);
-        self.settle(cx, result)
+        let this = &mut *self;
+        loop {
+            match &mut this.linger {
+                Linger::Open => {
+                    let result = Pin::new(&mut this.inner).poll_shutdown(cx);
+                    match this.settle(cx, result) {
+                        Poll::Ready(Ok(())) => {
+                            this.linger = Linger::Draining {
+                                until: Box::pin(sleep_until(Instant::now() + this.linger_timeout)),
+                                drained: 0,
+                            };
+                        }
+                        other @ (Poll::Ready(Err(_)) | Poll::Pending) => return other,
+                    }
+                }
+                Linger::Draining { until, drained } => {
+                    if *drained >= this.linger_max_bytes || until.as_mut().poll(cx).is_ready() {
+                        this.linger = Linger::Done;
+                        continue;
+                    }
+                    let mut scratch = [0_u8; 4096];
+                    let mut buf = ReadBuf::new(&mut scratch);
+                    match Pin::new(&mut this.inner).poll_read(cx, &mut buf) {
+                        Poll::Ready(Ok(())) if !buf.filled().is_empty() => {
+                            *drained += buf.filled().len() as u64;
+                        }
+                        Poll::Ready(_) => this.linger = Linger::Done,
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+                Linger::Done => return Poll::Ready(Ok(())),
+            }
+        }
     }
 }

@@ -20,6 +20,10 @@
 //! closes a connection whose peer stopped reading a response for the write-stall timeout, which
 //! also covers a body streamed after the handler returned.
 //!
+//! A closing connection lingers as Go's net/http does: after the FIN it reads and discards the
+//! peer's unread bytes (`linger_timeout`, `linger_max_bytes`), so an early answer such as a `413`
+//! is not lost to an RST (see `stall.rs`).
+//!
 //! Shutdown, when [`Lifecycle::stop`] is called: the listener is dropped, every connection gets
 //! hyper's `graceful_shutdown` (an idle one closes, a request in flight finishes and closes), and
 //! `serve` waits for the tracker until the [`drain`](ServerConfig::drain) deadline. Past it the
@@ -68,6 +72,13 @@ pub const CUT_WAIT: Duration = Duration::from_secs(1);
 const ACCEPT_BACKOFF_FIRST: Duration = Duration::from_millis(5);
 const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
+/// The default of [`ServerConfig::linger_timeout`]: how long a closing connection reads and
+/// discards what its peer still sends.
+pub const LINGER_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// The default of [`ServerConfig::linger_max_bytes`]: how much a closing connection discards.
+pub const LINGER_MAX_BYTES: u64 = 256 * 1024;
+
 /// The TCP peer of a request's connection, stored in each request's extensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Peer(pub SocketAddr);
@@ -93,6 +104,14 @@ pub struct ServerConfig {
     pub max_header_size: Option<usize>,
     /// The connection's buffer size (hyper requires at least 8192).
     pub max_buf_size: Option<usize>,
+    /// The lingering close: after the write side is shut down (the FIN is sent), the connection
+    /// reads and discards what the peer still sends for at most this long, until its EOF or
+    /// `linger_max_bytes`, so that unread request bytes do not turn the close into an RST that
+    /// destroys the response (a `413` sent before the body was read, say). A peer that already
+    /// closed ends it at once. Default [`LINGER_TIMEOUT`]; `cut` skips it.
+    pub linger_timeout: Duration,
+    /// The most bytes the lingering close discards. Default [`LINGER_MAX_BYTES`].
+    pub linger_max_bytes: u64,
     /// Whether a handler may take over a connection (`hyper::upgrade::on`), for a WebSocket.
     pub upgrades: bool,
 }
@@ -112,6 +131,8 @@ impl ServerConfig {
             max_headers: None,
             max_header_size: None,
             max_buf_size: None,
+            linger_timeout: LINGER_TIMEOUT,
+            linger_max_bytes: LINGER_MAX_BYTES,
             upgrades: false,
         }
     }
@@ -135,6 +156,15 @@ impl ServerConfig {
     #[must_use]
     pub fn max_buf_size(mut self, max: usize) -> Self {
         self.max_buf_size = Some(max);
+        self
+    }
+
+    /// Sets how long and how many bytes a closing connection discards (see
+    /// [`linger_timeout`](Self::linger_timeout)); a zero of either turns the drain off.
+    #[must_use]
+    pub fn linger(mut self, timeout: Duration, max_bytes: u64) -> Self {
+        self.linger_timeout = timeout;
+        self.linger_max_bytes = max_bytes;
         self
     }
 
@@ -321,7 +351,12 @@ async fn drive<S, B>(
     // write until the peer's delayed ACK arrives. A socket that refuses the option is served
     // anyway.
     let _ = stream.set_nodelay(true);
-    let io = TokioIo::new(StallIo::new(stream, Some(config.write_stall_timeout)));
+    let io = TokioIo::new(StallIo::new(
+        stream,
+        Some(config.write_stall_timeout),
+        config.linger_timeout,
+        config.linger_max_bytes,
+    ));
     let service = Inject {
         inner: TowerToHyperService::new(service),
         lifecycle: lifecycle.clone(),

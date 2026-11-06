@@ -32,7 +32,7 @@ use axum::body::{Body as AxumBody, Bytes};
 use axum::extract::Request;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use hyper::body::{Body, Frame, SizeHint};
 use hyper_util::rt::TokioIo;
 use service_kit::http::{Lifecycle, Outcome, Peer, ServerConfig, serve};
@@ -102,6 +102,7 @@ async fn start(config: ServerConfig) -> Server {
             get(move || async move { chunks(Some(16_384), big) }),
         )
         .route("/peer", get(peer))
+        .route("/reject", post(reject))
         .route("/upgrade", get(upgrade));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("address");
@@ -123,6 +124,11 @@ fn chunks(remaining: Option<usize>, dropped: Arc<Notify>) -> Response {
 async fn slow() -> &'static str {
     sleep(Duration::from_millis(400)).await;
     "done"
+}
+
+/// Answers `413` at once, without reading the request body.
+async fn reject() -> (StatusCode, &'static str) {
+    (StatusCode::PAYLOAD_TOO_LARGE, "too large")
 }
 
 async fn peer(request: Request) -> String {
@@ -487,3 +493,68 @@ async fn upgrades_are_off_unless_enabled() {
     drop(client);
     assert!(matches!(finish(server).await, Outcome::Drained));
 }
+
+/// A handler that answers `413` without reading a multi-megabyte upload still gets its response
+/// to the client: the close drains the unread request bytes instead of resetting the socket.
+#[tokio::test]
+async fn an_early_413_survives_an_unread_upload() {
+    const BODY: usize = 4 * 1024 * 1024;
+    let server = start(config(5_000, 5_000, 2_000)).await;
+    for round in 0..20 {
+        let mut client = connect(&server).await;
+        let (mut reader, mut writer) = client.split();
+        let upload = async {
+            let head =
+                format!("POST /reject HTTP/1.1\r\nHost: test\r\nContent-Length: {BODY}\r\n\r\n");
+            // The server may close before the body is out; a failed write is not the test's concern.
+            if writer.write_all(head.as_bytes()).await.is_err() {
+                return;
+            }
+            let mut sent = 0;
+            while sent < BODY {
+                if writer.write_all(&CHUNK).await.is_err() {
+                    return;
+                }
+                sent += CHUNK.len();
+            }
+        };
+        let response = async {
+            let mut head = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                let count = reader.read(&mut byte).await.expect("read the head");
+                assert_eq!(count, 1, "round {round}: closed inside the head");
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8(head).expect("utf-8 head");
+            assert!(head.starts_with("HTTP/1.1 413"), "round {round}: {head}");
+            let mut body = [0_u8; 9];
+            reader.read_exact(&mut body).await.expect("read the body");
+            assert_eq!(&body, b"too large", "round {round}");
+        };
+        let ((), ()) = timeout(PATIENCE, async { tokio::join!(upload, response) })
+            .await
+            .expect("the exchange in time");
+    }
+    assert!(matches!(finish(server).await, Outcome::Drained));
+}
+
+/// A client that already closed does not hold the close back for the linger time.
+#[tokio::test]
+async fn a_close_with_nothing_unread_is_not_delayed() {
+    let server = start(config(5_000, 5_000, 2_000).linger(Duration::from_secs(5), 1 << 20)).await;
+    let mut client = connect(&server).await;
+    client
+        .write_all(b"GET /peer HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("write");
+    let started = Instant::now();
+    let all = read_to_close(&mut client).await;
+    assert!(all.starts_with(b"HTTP/1.1 200"));
+    drop(client);
+    assert!(matches!(finish(server).await, Outcome::Drained));
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+// TCP_NODELAY on accepted sockets is not observable from the client side and the handler has no
+// access to the socket, so it has no test here; `drive` sets it before anything else.
