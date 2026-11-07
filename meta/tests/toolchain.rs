@@ -11,165 +11,106 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! One Rust release and one ShellCheck everywhere they are written: `rust-toolchain.toml` pins an
-//! exact release, the workspace's `rust-version` is that release's line, every CI step that sets
-//! up Rust installs exactly that release, and the ShellCheck the shellcheck-py hook wraps is the
-//! one CI's setup-shellcheck action installs. The checks are `repo_meta::toolchain`'s; the
-//! negative controls run them on altered copies.
+//! One Rust release line and one ShellCheck everywhere they are written: `rust-toolchain.toml`
+//! pins an exact release and the workspace's `rust-version` is that release's line, and the
+//! ShellCheck the shellcheck-py hook wraps is the one CI's setup-shellcheck action installs. The
+//! pins are `repo_meta::toolchain::one_value`'s; the negative controls run it on altered copies.
+//!
+//! CI installs the toolchain from `rust-toolchain.toml` itself, so no workflow repeats the
+//! release.
 //!
 //! Extracted from swarm-scheduler-exporter/meta/tests/toolchain.rs at c9e79afa8810 and
 //! swarm-device-access/meta/tests/toolchain.rs at 8b4ab3a3e417, without the image and release
 //! pins, since this repository builds no image.
 
-use repo_meta::toolchain::{
-    RustVersion, ToolchainRef, ci_toolchain_problems, rust_release, rust_version_problems,
-    shellcheck_problems,
-};
-use repo_meta::{Problem, report, strings, yaml};
+use repo_meta::strings;
+use repo_meta::toolchain::{PinSource, one_value};
+use repo_meta::{Problem, report};
 
 const TOOLCHAIN: &str = "rust-toolchain.toml";
+const MANIFEST: &str = "Cargo.toml";
 const HOOKS: &str = ".pre-commit-config.yaml";
 const SHELLCHECK_ACTION: &str = ".github/actions/setup-shellcheck/action.yaml";
 
-/// The release `rust-toolchain.toml` pins.
-fn release() -> String {
-    rust_release(TOOLCHAIN, &meta::repo().read(TOOLCHAIN))
-        .unwrap_or_else(|problem| panic!("{problem}"))
+/// The Rust line in the toolchain file and in the manifest.
+fn rust_line(toolchain: &str, manifest: &str) -> Vec<Problem> {
+    one_value(
+        "the Rust line",
+        &[
+            PinSource::rust_channel_line(TOOLCHAIN, toolchain),
+            PinSource::rust_version_line(MANIFEST, manifest),
+        ],
+        &[],
+    )
 }
 
-/// Every workflow and composite action, parsed.
-fn ci_documents() -> Vec<(String, yaml::Value)> {
-    let repo = meta::repo();
-    let files = repo.files_under(".github", &[".yaml", ".yml"]);
-    assert!(
-        files.iter().any(|file| file == ".github/workflows/ci.yaml"),
-        "the scan saw no CI workflow: {files:?}"
-    );
-    files
-        .into_iter()
-        .map(|file| {
-            let document =
-                yaml::parse(&file, &repo.read(&file)).unwrap_or_else(|problem| panic!("{problem}"));
-            (file, document)
-        })
-        .collect()
-}
-
-fn workflow(file: &str, content: &str) -> (String, yaml::Value) {
-    let document = yaml::parse(file, content).unwrap_or_else(|problem| panic!("{problem}"));
-    (file.to_owned(), document)
+/// The ShellCheck release of the hook (its rev adds a fourth component for the wrapper, so only
+/// the first three count) and of the action that installs it.
+fn shellcheck(hooks: &str, action: &str) -> Vec<Problem> {
+    one_value(
+        "ShellCheck",
+        &[
+            PinSource::new(
+                HOOKS,
+                hooks,
+                r"repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*(v\d+\.\d+\.\d+)",
+            ),
+            PinSource::new(
+                SHELLCHECK_ACTION,
+                action,
+                r#"SHELLCHECK_VERSION:\s*["']?(v[\d.]+)"#,
+            ),
+        ],
+        &[],
+    )
 }
 
 #[test]
 fn rust_version_is_the_toolchain_line() {
-    let problems = rust_version_problems(
-        "Cargo.toml",
-        &meta::repo().read("Cargo.toml"),
-        &release(),
-        RustVersion::Line,
-    );
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
-#[test]
-fn ci_installs_the_toolchain_release() {
-    let problems = ci_toolchain_problems(&ci_documents(), &release(), ToolchainRef::Input);
+    let repo = meta::repo();
+    let problems = rust_line(&repo.read(TOOLCHAIN), &repo.read(MANIFEST));
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 #[test]
 fn shellcheck_is_one_version() {
     let repo = meta::repo();
-    let problems = shellcheck_problems(
-        HOOKS,
-        &repo.read(HOOKS),
-        SHELLCHECK_ACTION,
-        &repo.read(SHELLCHECK_ACTION),
-    );
+    let problems = shellcheck(&repo.read(HOOKS), &repo.read(SHELLCHECK_ACTION));
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
-/// Negative control: a channel or a release without its patch is no pin.
+/// Negative control: a toolchain bumped to another line, a manifest left on the old one, and a
+/// channel that is no release; the line and the exact release as a `rust-version` pass.
 #[test]
-fn a_channel_is_not_a_release() {
+fn a_rust_version_off_the_line_is_refused() {
+    let toolchain = "[toolchain]\nchannel = \"1.98.1\"\n";
+    let manifest = |version: &str| format!("[workspace.package]\nrust-version = \"{version}\"\n");
+    assert_eq!(rust_line(toolchain, &manifest("1.98")), []);
+    assert_eq!(rust_line(toolchain, &manifest("1.98.1")), []);
     assert_eq!(
-        rust_release(TOOLCHAIN, "[toolchain]\nchannel = \"1.98.1\"\n"),
-        Ok("1.98.1".to_owned())
+        strings(&rust_line(toolchain, &manifest("1.97"))),
+        ["the Rust line is not one value: 1.97 in Cargo.toml; 1.98 in rust-toolchain.toml"]
+    );
+    assert_eq!(
+        strings(&rust_line(
+            &toolchain.replace("1.98.1", "1.99.0"),
+            &manifest("1.98")
+        )),
+        ["the Rust line is not one value: 1.98 in Cargo.toml; 1.99 in rust-toolchain.toml"]
     );
     for channel in ["stable", "1.98"] {
         let toolchain = format!("[toolchain]\nchannel = \"{channel}\"\n");
-        assert!(
-            rust_release(TOOLCHAIN, &toolchain).is_err(),
-            "{channel} read as a release"
+        assert_eq!(
+            rust_line(&toolchain, &manifest("1.98")).len(),
+            1,
+            "{channel}"
         );
     }
     assert_eq!(
-        rust_release(TOOLCHAIN, "[toolchain]\n"),
-        Err(Problem::at(TOOLCHAIN, "names no channel"))
+        rust_line(toolchain, "[package]\n").len(),
+        1,
+        "no rust-version"
     );
-}
-
-/// Negative control: another line, no rust-version at all; the line and the exact release pass.
-#[test]
-fn a_rust_version_off_the_line_is_refused() {
-    let check = |manifest: &str| {
-        strings(&rust_version_problems(
-            "Cargo.toml",
-            manifest,
-            "1.98.1",
-            RustVersion::Line,
-        ))
-    };
-    assert_eq!(check("rust-version = \"1.98\"\n"), Vec::<String>::new());
-    assert_eq!(check("rust-version = \"1.98.1\"\n"), Vec::<String>::new());
-    assert_eq!(
-        check("rust-version = \"1.97\"\n"),
-        [
-            r#"Cargo.toml: rust-version is "1.97", not the line 1.98 of rust-toolchain.toml's 1.98.1"#
-        ]
-    );
-    assert_eq!(check("[package]\n"), ["Cargo.toml: sets no rust-version"]);
-}
-
-/// Negative control: a step that installs another toolchain or a channel is refused, a step that
-/// names its toolchain only by `@<release>` names none here, and a workflow set that sets up no
-/// Rust at all is a problem too.
-#[test]
-fn another_ci_toolchain_is_refused() {
-    let step = |toolchain: &str| {
-        format!(
-            "jobs:\n  rust:\n    steps:\n      - uses: \
-             dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8\n        with:\n          \
-             toolchain: {toolchain}\n"
-        )
-    };
-    let file = ".github/workflows/ci.yaml";
-    assert_eq!(
-        ci_toolchain_problems(
-            &[workflow(file, &step("1.98.1"))],
-            "1.98.1",
-            ToolchainRef::Input
-        ),
-        []
-    );
-    for toolchain in ["stable", "1.98", "1.97.0"] {
-        let problems = ci_toolchain_problems(
-            &[workflow(file, &step(toolchain))],
-            "1.98.1",
-            ToolchainRef::Input,
-        );
-        assert_eq!(problems.len(), 1, "{toolchain}: {problems:?}");
-    }
-    let by_ref = workflow(
-        file,
-        "jobs:\n  rust:\n    steps:\n      - uses: dtolnay/rust-toolchain@1.98.1\n",
-    );
-    assert_eq!(
-        ci_toolchain_problems(&[by_ref], "1.98.1", ToolchainRef::Input).len(),
-        1
-    );
-    let none = workflow(file, "jobs:\n  lint:\n    steps:\n      - run: make lint\n");
-    assert!(!ci_toolchain_problems(&[none], "1.98.1", ToolchainRef::Input).is_empty());
 }
 
 /// Negative control: the hook and the action on different ShellCheck releases.
@@ -178,9 +119,12 @@ fn two_shellcheck_versions_are_refused() {
     let hooks =
         "repos:\n  - repo: https://github.com/shellcheck-py/shellcheck-py\n    rev: v0.11.0.1\n";
     let action = |version: &str| format!("      env:\n        SHELLCHECK_VERSION: {version}\n");
+    assert_eq!(shellcheck(hooks, &action("v0.11.0")), []);
     assert_eq!(
-        shellcheck_problems(HOOKS, hooks, SHELLCHECK_ACTION, &action("v0.11.0")),
-        []
+        strings(&shellcheck(hooks, &action("v0.10.0"))),
+        [
+            "ShellCheck is not one value: v0.10.0 in .github/actions/setup-shellcheck/action.yaml; \
+             v0.11.0 in .pre-commit-config.yaml"
+        ]
     );
-    assert!(!shellcheck_problems(HOOKS, hooks, SHELLCHECK_ACTION, &action("v0.10.0")).is_empty());
 }

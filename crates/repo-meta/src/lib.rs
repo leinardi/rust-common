@@ -29,16 +29,15 @@
 //! - [`yaml`]: workflows, actions and the pre-commit configuration.
 //! - [`workspace`]: every member opts into the workspace lints, the levels the root sets, the
 //!   files that could override them, and the member layout.
-//! - [`toolchain`]: one value per pin across files ([`toolchain::one_value`]), the Rust release
-//!   or line, the CI toolchain steps, the image's Rust, the release toolchain pins, and the
-//!   ShellCheck and Trivy pins.
+//! - [`toolchain`]: one value per pin across files ([`toolchain::one_value`]), with presets
+//!   for the Rust release in `rust-toolchain.toml`, Cargo's `rust-version` and a Dockerfile, and
+//!   [`toolchain::make_value`].
 //! - [`ci`]: `ci-result` needs every gate, `pre-commit-all` skips only hooks a needed job runs,
 //!   the rustdoc gate, and the whole-tree hooks that run once.
 //! - [`vacuous`]: no gate carries a flag that makes it pass on nothing.
 //!
 //! The crate needs no network, no Docker and no tool beyond git.
 
-mod case_arm;
 pub mod ci;
 pub mod dockerfile;
 pub mod image;
