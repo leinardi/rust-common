@@ -23,7 +23,7 @@ it. All six are available.
 | `clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind, a stream pump, attach and wait, a fake engine | `tcp`, `tls`, `attach`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
-| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lints and layout, Markdown links, Dockerfiles and images, toolchain pins, CI gates, lint allowlists, vacuous flags, and the licence-header and suppression script harnesses | – (each check's strictness is a parameter) |
+| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals, a minimal HTTP server, the `process_*` metrics collector | `runtime`, `http`, `process-metrics` |
 
@@ -113,7 +113,7 @@ from `testenv_core::repo_root!()`) or the text it checks and returns `Vec<Proble
 the repository passes; a check never panics on what it reads, and input on which it would pass
 having checked nothing (no file, no rule) is itself a problem. The caller asserts with
 `assert!(problems.is_empty(), "{}", report(&problems))`. What differs between the projects (the
-members, the pins, the jobs, the hooks, the exemptions) is a parameter; every check is as strict
+members, the pins, the jobs, the hooks) is a parameter; every check is as strict
 as the strictest project's.
 
 `repo_root!()` is fixed at compile time: a test binary checks the checkout it was built from. A
@@ -125,21 +125,22 @@ single user-rewrite and no-apk rules and its `base.name` label; awtrix-controlle
 swarm-rootless-docker's `label_arguments_are_supplied`; and every check that runs a tool, such as
 droast.
 
+What upstream tools check instead: Markdown links and fragments are lychee's (a pre-commit hook,
+`--offline --include-fragments`), and the licence headers are each repository's own
+`scripts/check-license-headers.sh` and its hook. A pin outside the Rust presets is a `PinSource`
+with the project's own pattern, held by `one_value`.
+
 | Module | What it checks |
 | --- | --- |
 | `Repo`, `Problem`, `report` | the repository under test (`Repo::new`, git with the process's environment, so a commit hook's index) or a scratch one (`Repo::scratch`, git isolated); the tracked files (`tracked`, `tracked_or_new`, `files_under`), reads that become problems (`try_read`); `file:line: message` problems |
-| `workspace` | `lint_opt_in` (the root's `[workspace.lints]`, every member's `[lints] workspace = true`, the expected members), `lint_level_problems`, `override_problems`, `layout_problems` (crates under one directory, nothing else tracked there) |
-| `links` | `check_repository` (every tracked Markdown file, none at all a problem) and `Checker`: every relative link resolves to a file, and every `#anchor` to a heading, as the Go link checker the projects ported reads them |
+| `workspace` | `lint_opt_in` (the root's `[workspace.lints]`, every member's `[lints] workspace = true`, the expected members) |
 | `dockerfile` | the parser (`parse`, `Stage`, `Instruction`, `syntax`; an `escape` directive other than `\` or a heredoc is `Malformed`), `tag_pinned`, `digest_pinned`, `from_dhi`, `base_pinned`, `repository`, `tag`, `labels` |
-| `image` | `dockerfiles` (tracked or new, `Dockerfile.<name>` included), `only_dockerfile_problems`, `syntax_problems` (required or optional), `stage_problems` with a `BasePolicy` (`DhiTagElseDigest`, `DhiOnly`, `TagOnly`), `BuildStage` (a `BuildBase` repository or exact image, each `Download` checked in its RUN: release, platform argument, exact arms, sha256 check; every curl or wget, of a URL or a variable, a rule's and checked in its RUN; no ADD of a URL or a variable), `Stamps` (each read by the version module, with `option_env!` or through service-kit's `buildinfo!`, whose fields are `BUILDINFO_FIELDS`; in the building RUN, the Makefile's winning prefix, `rust.mk`'s `RUST_VERSION_ENV`, `rust-dist` and `rust-run` (`rust-build` may build unstamped), the release recipe), `RuntimeStage`, `label_problems`, `platform_problems` (in the named workflow), `label_policy_problems` |
-| `toolchain` | `one_value` (one pin read from several files), `RustVersion::{Exact, Line}`, `image_rust_problems` (the FROM tag equal to `ARG RUST_VERSION`), `ci_toolchain_problems` with a `ToolchainRef` (`Input`, or `InputOrRef` for dtolnay's `@<release>`), `rust_std_problems`, `make_value` (make's value of a variable, `export`, `override`, `?=` and `+=` read as make reads them), `ReleasePins` and `release_pin_problems` (exact `(platform, name, digest)` arms, no stray `sha256`), `zigbuild_action_problems`, `shellcheck_problems`, `trivy_problems` |
-| `ci` | `CiGates` (the result job needs every gate job; the pre-commit job skips something, and every hook it skips exists and is run by a job the result job needs), `RustdocGate`, `always_run_problems` |
-| `allowlist` | `LintAllowlist`: a lint (`unsafe_code`, a clippy ban) lifted only where an exemption names the file or item, at most once there, every exemption used unless marked `reserved`, and a group that contains the lint never named |
-| `vacuous` | `VacuousFlags` (`core`, `with_rust`, `with_javascript`): what turns a failing gate into a pass (an `or true`, `continue-on-error`, `if: false`, make's `-` prefix, `--cap-lints`, cargo's `--skip`, `--passWithNoTests`, …) and a clippy run without `-D warnings`, with `AllowedFragment` exceptions that must each be used |
-| `integration` | `IntegrationGate` (integration modules behind a feature, the suite's manifest entry), `cargo_test_commands`, `docker_drivers` |
-| `tools` | `tool_lookup_problems`: no meta-test looks a tool up on `PATH` or reads a switch that turns a missing tool into a skip, for a project whose meta-tests fail without their tools (one on `toolgate::Gate` does not run it) |
+| `image` | `dockerfiles` (tracked or new, `Dockerfile.<name>` included), `syntax_problems` (required or optional), `stage_problems` with a `BasePolicy` (`DhiTagElseDigest`, `DhiOnly`, `TagOnly`) |
+| `toolchain` | `one_value` (one pin read from several files, over `PinSource`s and `PinValue`s), the `PinSource` presets for the Rust release (`rust_channel`, `rust_channel_line`, `rust_version`, `rust_version_line`, `rust_image_tag`, `rust_version_arg`), `rust_release` and `toolchain_targets` (from `rust-toolchain.toml`), `make_value` (make's value of a variable, `export`, `override`, `?=` and `+=` read as make reads them) |
+| `ci` | `CiGates` (the result job needs every gate job; the pre-commit job skips something, and every hook it skips exists and is run by a job the result job needs) |
+| `vacuous` | `VacuousFlags` (`core`, `with_rust`): what turns a failing gate into a pass (an `or true`, `continue-on-error`, `if: false`, make's `-` prefix, `--cap-lints`, cargo's `--skip`, `--passWithNoTests`, …) and a clippy run without `-D warnings`, with `AllowedFragment` exceptions that must each be used |
 | `yaml` | workflows and the pre-commit configuration as `serde_json::Value`: `action_steps`, `jobs`, `pre_commit_hooks` |
-| `scratch` | `ScratchRepo` (a git-isolated temporary repository, `repo()` a `Repo::scratch`), `HeaderHarness` and `HeaderCase` (`scripts/check-license-headers.sh` on the repository and on scratch cases, at least one accepted and one rejected), `SuppressionHarness` and `RatchetCase` (`scripts/check-suppressions.sh` and its baseline) |
+| `scratch` | `ScratchRepo` (a git-isolated temporary repository, `repo()` a `Repo::scratch`), `ScratchRepo::run` (a script run in it) |
 
 It depends on `testenv-core` (default
 features: git isolation), `regex`, `serde-saphyr` and `serde_json` (the YAML), `toml` and `tempfile`.
@@ -168,7 +169,7 @@ What a service's `main` repeats. Every message, exit code and default stays the 
 
 | Item | What it is |
 | --- | --- |
-| `buildinfo!(PREFIX, Defaults)` | the `<PREFIX>_VERSION`, `_COMMIT` and `_DATE` stamps, read with `option_env!` in the calling crate, as a constant `BuildInfo`; `Defaults` gives the value of each unstamped field and whether an empty stamp is kept (`EmptyStamp::Kept`) or counts as unstamped (`EmptyStamp::Unstamped`); repo-meta's `Stamps` counts a call as reading the three |
+| `buildinfo!(PREFIX, Defaults)` | the `<PREFIX>_VERSION`, `_COMMIT` and `_DATE` stamps, read with `option_env!` in the calling crate, as a constant `BuildInfo`; `Defaults` gives the value of each unstamped field and whether an empty stamp is kept (`EmptyStamp::Kept`) or counts as unstamped (`EmptyStamp::Unstamped`) |
 | `runtime::build_runtime` (`runtime`) | the multi-thread runtime, every driver on, with the caller's worker count or tokio's default |
 | `runtime::run_until_exit`, `runtime::Exit` (`runtime`) | runs the program on that runtime, then bounds the runtime's shutdown by what is left of the `Exit`'s deadline; the exit code is the program's own type |
 | `signal::shutdown_signal`, `signal::lazy_shutdown_signal` (`runtime`, Unix) | SIGINT or SIGTERM, with the handlers installed when called, or when first polled |

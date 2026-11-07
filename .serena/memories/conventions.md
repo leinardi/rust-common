@@ -12,10 +12,8 @@ repeatedly bite:
 - No `disallowed_methods` yet: `clippy.toml` holds no application bans; adding one means adding the
   lint deny too.
 
-Suppressions: only `#[expect(lint, reason = "...")]`, ratcheted per lint against
-`.suppressions-baseline`; a commit adding, moving or removing one runs
-`scripts/check-suppressions.sh --update` and commits the baseline. The reason says why the fix
-does not apply, not which lint fired.
+Suppressions: only `#[expect(lint, reason = "...")]`. The reason says why the fix does not apply,
+not which lint fired.
 
 Extraction: copy the best consumer copy, merge the other copies' fixes, keep its tests and
 fixtures, replace its licence header with the MIT OR Apache-2.0 one, add the `Extracted from`

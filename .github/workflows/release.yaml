@@ -136,9 +136,10 @@ jobs:
 
       - name: Set up Rust
         if: ${{ !inputs.dry_run }}
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: 1.98.1
+        run: rustup toolchain install --no-self-update
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_TERM_COLOR: always
 
       # Only the version line of [workspace.package] changes; every crate inherits it with
       # `version.workspace = true`. A plain resolve (cargo metadata, without --locked) then

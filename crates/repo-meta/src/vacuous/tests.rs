@@ -16,8 +16,7 @@
 //! own fragment in its own file; and an unused exception is reported.
 //!
 //! Extracted from swarm-device-access/meta/tests/vacuous_flags.rs at 8b4ab3a3e417
-//! (`vacuous_flags_are_recognized`, `vacuous_hit_numbering`) and
-//! `bitgauge/meta/tests/vacuous_flags.rs` at 600fc3905200 (the JavaScript samples).
+//! (`vacuous_flags_are_recognized`, `vacuous_hit_numbering`).
 
 use super::{AllowedFragment, Hit, VacuousFlags};
 use crate::strings;
@@ -70,19 +69,10 @@ const RUST_SAMPLES: [&str; 10] = [
     "        entry: cargo clippy --workspace --all-targets --locked",
 ];
 
-const JAVASCRIPT_SAMPLES: [&str; 2] = [
-    r#""test": "vitest run --passWithNoTests""#,
-    r#""lint": "eslint src --no-error-on-unmatched-pattern""#,
-];
-
 #[test]
 fn each_set_finds_its_flags() {
-    let all = VacuousFlags::core().with_rust().with_javascript();
-    for sample in CORE_SAMPLES
-        .iter()
-        .chain(&RUST_SAMPLES)
-        .chain(&JAVASCRIPT_SAMPLES)
-    {
+    let all = VacuousFlags::core().with_rust();
+    for sample in CORE_SAMPLES.iter().chain(&RUST_SAMPLES) {
         assert!(
             !sample_hits(&all, sample).is_empty(),
             "no vacuous flag found in {sample:?}"
@@ -92,8 +82,8 @@ fn each_set_finds_its_flags() {
     for sample in CORE_SAMPLES {
         assert!(!sample_hits(&core, sample).is_empty(), "{sample:?}");
     }
-    // The core set alone does not hold a project to the Rust or JavaScript rules.
-    for sample in RUST_SAMPLES.iter().chain(&JAVASCRIPT_SAMPLES) {
+    // The core set alone does not hold a project to the Rust rules.
+    for sample in RUST_SAMPLES {
         assert!(sample_hits(&core, sample).is_empty(), "{sample:?}");
     }
     assert_eq!(VacuousFlags::core().with_rust().flags().len(), 11);

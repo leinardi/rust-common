@@ -16,18 +16,16 @@
 //! where it chooses to) carry none of the flags that turn a gate with nothing to check, or a
 //! failing one, into a pass.
 //!
-//! The flags come in sets: the core set every project uses (`|| true`, make's `-` prefix and
-//! `.IGNORE` and `--ignore-errors`, `continue-on-error`, `if: false`); the Rust set (a test run
+//! The flags come in two sets: the core set every project uses (`|| true`, make's `-` prefix and
+//! `.IGNORE` and `--ignore-errors`, `continue-on-error`, `if: false`) and the Rust set (a test run
 //! that only compiles, capped or allowed lints, tests skipped by name, a member excluded from a
-//! workspace-wide command, and a clippy run without `-D warnings`); and the JavaScript set
-//! (`--passWithNoTests`, `--no-error-on-unmatched-pattern`). A reviewed exception is an exact
+//! workspace-wide command, and a clippy run without `-D warnings`). A reviewed exception is an exact
 //! fragment in one file, removed from the line before the flags are matched, so a second
 //! `|| true` on an allowed line is still caught; an exception that matches nothing is a problem,
 //! so it cannot outlive the code it excuses.
 //!
 //! Extracted from swarm-device-access/meta/tests/vacuous_flags.rs at 8b4ab3a3e417 (the core and
-//! Rust sets, the clippy rule, the fragment exceptions and the line numbers) and
-//! `bitgauge/meta/tests/vacuous_flags.rs` at 600fc3905200 (the JavaScript set).
+//! Rust sets, the clippy rule, the fragment exceptions and the line numbers).
 
 use std::sync::LazyLock;
 
@@ -85,16 +83,6 @@ static RUST: LazyLock<Vec<Flag>> = LazyLock::new(|| {
     ])
 });
 
-static JAVASCRIPT: LazyLock<Vec<Flag>> = LazyLock::new(|| {
-    flags(&[
-        ("--passWithNoTests", r"--pass-?[Ww]ith-?[Nn]o-?[Tt]ests"),
-        (
-            "--no-error-on-unmatched-pattern",
-            r"--no-error-on-unmatched-pattern",
-        ),
-    ])
-});
-
 /// A clippy run in a gate, which must turn warnings into errors.
 static CLIPPY_CALL: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?i)\bcargo\)?\s+(\+\S+\s+)?clippy\b"));
@@ -126,13 +114,6 @@ impl VacuousFlags {
     pub fn with_rust(mut self) -> Self {
         self.flags.extend(RUST.iter().cloned());
         self.clippy_denies_warnings = true;
-        self
-    }
-
-    /// The set plus the JavaScript flags.
-    #[must_use]
-    pub fn with_javascript(mut self) -> Self {
-        self.flags.extend(JAVASCRIPT.iter().cloned());
         self
     }
 

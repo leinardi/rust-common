@@ -23,7 +23,18 @@ use std::fs;
 use std::path::Path;
 
 use meta::feature_sets::{coverage_problems, parse, plan, run};
-use repo_meta::workspace;
+use repo_meta::Repo;
+
+/// The crates under `crates/` with a tracked manifest.
+fn tracked_crates(repo: &Repo) -> Vec<String> {
+    repo.tracked(&["crates/*/Cargo.toml"])
+        .iter()
+        .filter_map(|path| {
+            let name = path.strip_prefix("crates/")?.strip_suffix("/Cargo.toml")?;
+            (!name.is_empty() && !name.contains('/')).then(|| name.to_owned())
+        })
+        .collect()
+}
 
 fn write(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
@@ -52,7 +63,7 @@ always = "1"
 #[test]
 fn feature_sets_cover_every_crate_feature() {
     let repo = meta::repo();
-    let problems = coverage_problems(repo.root(), &workspace::tracked_crates(&repo, "crates"));
+    let problems = coverage_problems(repo.root(), &tracked_crates(&repo));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 

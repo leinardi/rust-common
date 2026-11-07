@@ -14,10 +14,12 @@
 //! git commands that cannot reach the repository being committed (Go's `test/internal/gitenv`).
 //!
 //! Meta-tests also run inside a pre-commit hook, and git exports its own location to hooks:
-//! `GIT_INDEX_FILE` always, `GIT_DIR` and others in some setups, absolute in a linked worktree. A
-//! git command run in a scratch repository with that environment acts on the real one instead --
-//! a `git add` there writes into the index of the commit being made. [`isolate`] strips those
-//! variables and the user's own configuration, so a scratch repository is only ever itself.
+//! `GIT_INDEX_FILE` always, `GIT_DIR` and others in some setups. The index is absolute (`commit -a`,
+//! `commit <path>`, a linked worktree) except in a plain `git commit` in a main checkout, which
+//! exports the relative `.git/index`. A git command run in a scratch repository with that
+//! environment acts on the real one instead -- a `git add` there writes into the index of the
+//! commit being made. [`isolate`] strips those variables and the user's own configuration, so a
+//! scratch repository is only ever itself.
 //!
 //! Extracted from swarm-scheduler-exporter/meta/src/gitenv.rs at c9e79afa8810 (the same as
 //! awtrix-controller/meta/src/gitenv.rs at afcd9ca26324 and
