@@ -84,8 +84,7 @@ impl Repo {
     /// under a commit hook, git exports the index being committed (`GIT_INDEX_FILE`, and `GIT_DIR`
     /// in a worktree), and the listings read that index. The index is absolute except in a plain
     /// `git commit` in a main checkout, which exports `.git/index`; git resolves that against the
-    /// top level of the checkout it finds, so it is dropped for a root whose `.git` is a file (see
-    /// [`drop_unusable_relative_index`]).
+    /// top level of the checkout it finds, so it is dropped for a root whose `.git` is a file.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
