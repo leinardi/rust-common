@@ -84,11 +84,11 @@ user-facing contract a change must keep true.
 ### Meta-tests must not pass on nothing
 
 `meta/tests/` guards claims nothing else checks: the workspace lints (`workspace_lints.rs`), the
-Markdown links (`docs.rs`), the feature-set coverage (`feature_sets.rs`). Make the guarded thing
-go wrong and see whether the test still notices. A test that passes because its walk found no
-file, its pattern matched nothing or its input was empty is a false pass; every rule needs a
-negative control over a scratch tree. A change that loosens one (a wider allowlist, a narrower
-walk, a dropped negative control) is a finding unless it says why.
+feature-set coverage (`feature_sets.rs`). Make the guarded thing go wrong and see whether the test
+still notices. A test that passes because its walk found no file, its pattern matched nothing or its
+input was empty is a false pass; every rule needs a negative control over a scratch tree. A change
+that loosens one (a wider allowlist, a narrower walk, a dropped negative control) is a finding
+unless it says why.
 
 ### Workflows
 

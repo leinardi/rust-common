@@ -32,7 +32,7 @@ make help                 # lists every target
 
 `rust-run` and `rust-dist` come with make-common's `rust.mk` but do not apply: there is no binary.
 
-Single test: `cargo test -p <crate> <name>`, or `cargo test -p meta --test docs`.
+Single test: `cargo test -p <crate> <name>`, or `cargo test -p meta --test feature_sets`.
 
 The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on first run,
 `rust.mk` (the `rust-*` targets and `verify-rust`) among them. To refresh:
@@ -55,21 +55,20 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | `scripts/` | the licence-header check, the suppression ratchet, the make-common bootstrap and the Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`) |
 | `.agents/skills/` | project skills; `.claude/skills` is a symlink to it |
 
-The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git. They run the
-`repo-meta` crate's checks on this repository, with its parameters: every workspace member opts into
-the workspace lints, the lints the rules depend on are set at their level and nothing outside the
+The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git. They run the `repo-meta`
+crate's checks on this repository, with its parameters: every workspace member opts into the
+workspace lints, the lints the rules depend on are set at their level and nothing outside the
 manifest lowers them (`workspace_lints.rs`); every member is `meta` or `crates/<name>` and every
-tracked crate is a member (`workspace_layout.rs`); every relative Markdown link resolves
-(`docs.rs`); the licence-header checker and the suppression ratchet accept and refuse what they
-should (`license_headers.rs`, `suppressions.rs`); one Rust release and one ShellCheck are pinned
-everywhere (`toolchain.rs`); no gate passes on nothing (`vacuous_flags.rs`); `ci-result` needs every
-gate, every skipped hook is run elsewhere, the whole-tree hooks always run and the rustdoc gate
-fails on warnings (`ci_gates.rs`); repo-meta's `BUILDINFO_FIELDS` are the fields service-kit's
-`buildinfo!` reads (`buildinfo_fields.rs`); and `feature-sets.toml` covers every crate and every
-feature it declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on
-`meta/src`).
-Each test file also runs its checks on a scratch tree or an altered copy with a planted violation,
-so none is trusted on the strength of having found nothing to check.
+tracked crate is a member (`workspace_layout.rs`); the licence-header checker and the suppression
+ratchet accept and refuse what they should (`license_headers.rs`, `suppressions.rs`); one Rust
+release and one ShellCheck are pinned everywhere (`toolchain.rs`); no gate passes on nothing
+(`vacuous_flags.rs`); `ci-result` needs every gate, every skipped hook is run elsewhere, the
+whole-tree hooks always run and the rustdoc gate fails on warnings (`ci_gates.rs`); repo-meta's
+`BUILDINFO_FIELDS` are the fields service-kit's `buildinfo!` reads (`buildinfo_fields.rs`); and
+`feature-sets.toml` covers every crate and every feature it declares, while the matrix fails a set
+that leaves a warning (`feature_sets.rs`, on `meta/src`). Each test file also runs its checks on a
+scratch tree or an altered copy with a planted violation, so none is trusted on the strength of
+having found nothing to check.
 
 ### Generated or vendored: never hand-edit
 
@@ -185,7 +184,7 @@ Run before considering an edit done. `make check` applies to every row.
 | `scripts/check-license-headers.sh` | run it, and see a file without the header fail it |
 | `scripts/check-suppressions.sh`, `.suppressions-baseline` | run it, and see an added `#[expect]` without a baseline change fail it |
 | `meta/**` | `cargo test -p meta` |
-| `**/*.md`, `.agents/skills/**` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
+| `**/*.md`, `.agents/skills/**` | `pre-commit run lychee --all-files` (offline links and fragments); prose wraps at 100 columns |
 
 ## Project skills
 

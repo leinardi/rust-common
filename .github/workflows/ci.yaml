@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # For the cargo-fmt, cargo-clippy and cargo-machete hooks and the language: system hooks that
-      # run cargo (docs links). The Rust cache is saved only on a pull request, so a push to main
+      # run cargo. The Rust cache is saved only on a pull request, so a push to main
       # does not write a cache scope every pull request would then restore.
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master

@@ -29,7 +29,6 @@
 //! - [`dockerfile`]: the Dockerfile reader and the base-pin rules; [`image`]: the image checks
 //!   (only the shipped Dockerfile, the frontend and base pins, the build stage, the version
 //!   stamps, the platforms, the labels against `droast.toml`).
-//! - [`links`]: the offline Markdown link and fragment check.
 //! - [`yaml`]: workflows, actions and the pre-commit configuration.
 //! - [`workspace`]: every member opts into the workspace lints, the levels the root sets, the
 //!   files that could override them, and the member layout.
@@ -53,7 +52,6 @@ pub mod ci;
 pub mod dockerfile;
 pub mod image;
 pub mod integration;
-pub mod links;
 mod problem;
 mod repo;
 pub mod scratch;

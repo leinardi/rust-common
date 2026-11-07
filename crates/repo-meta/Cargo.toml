@@ -1,6 +1,6 @@
 [package]
 name = "repo-meta"
-description = "Parameterised repository checks for the meta-tests: links, Dockerfiles, toolchain pins, CI gates, lint opt-in and allowlists, vacuous flags, and the licence-header and suppression script harnesses"
+description = "Parameterised repository checks for the meta-tests: Dockerfiles, toolchain pins, CI gates, lint opt-in and allowlists, vacuous flags, and the licence-header and suppression script harnesses"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,9 +16,7 @@ name = "repo_meta"
 workspace = true
 
 [dependencies]
-# Go's strconv.Quote for a link target in a problem, path.Clean for a resolved link and
-# strings.ToLower for a heading slug, as the Go link checker the consumers ported.
-# The scan patterns: links, Dockerfile references, pins, flags and lint attributes.
+# The scan patterns: Dockerfile references, pins, flags and lint attributes.
 regex = "1.13.1"
 # The workflows, composite actions and the pre-commit configuration, read into serde_json's
 # Value as bitgauge reads them. Only the deserializer.
