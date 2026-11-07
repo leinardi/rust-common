@@ -52,22 +52,21 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | `.github/workflows/ci.yaml` | `pre-commit-all`, `rust`, `feature-matrix`, `conventional-commits` and the `ci-result` aggregator; the reviewdog jobs on pull requests |
 | `.github/workflows/release.yaml`, `auto-tag-release.yaml` | the **Release** workflow writes the crates' version on a `release/vX.Y.Z` branch and opens its pull request; on its merge, **Auto Tag Release** tags `vX.Y.Z` through gh-reusable-workflows' `simple-tag-and-release` |
 | `.github/workflows/pre-commit-warmup.yaml` | refreshes the pre-commit cache on `main` (hook config change, weekly) and prunes the older entries |
-| `scripts/` | the licence-header check, the suppression ratchet, the make-common bootstrap and the Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`) |
+| `scripts/` | the licence-header check, the make-common bootstrap and the Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`) |
 | `.agents/skills/` | project skills; `.claude/skills` is a symlink to it |
 
 The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git. They run the `repo-meta`
 crate's checks on this repository, with its parameters: every workspace member opts into the
 workspace lints, the lints the rules depend on are set at their level and nothing outside the
 manifest lowers them (`workspace_lints.rs`); every member is `meta` or `crates/<name>` and every
-tracked crate is a member (`workspace_layout.rs`); the suppression ratchet accepts and refuses what
-it should (`suppressions.rs`); one Rust release and one ShellCheck are pinned everywhere
-(`toolchain.rs`); no gate passes on nothing (`vacuous_flags.rs`); `ci-result` needs every gate,
-every skipped hook is run elsewhere, the whole-tree hooks always run and the rustdoc gate fails on
-warnings (`ci_gates.rs`); repo-meta's `BUILDINFO_FIELDS` are the fields service-kit's `buildinfo!`
-reads (`buildinfo_fields.rs`); and `feature-sets.toml` covers every crate and every feature it
-declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on `meta/src`).
-Each test file also runs its checks on a scratch tree or an altered copy with a planted violation,
-so none is trusted on the strength of having found nothing to check.
+tracked crate is a member (`workspace_layout.rs`); one Rust release and one ShellCheck are pinned
+everywhere (`toolchain.rs`); no gate passes on nothing (`vacuous_flags.rs`); `ci-result` needs every
+gate, every skipped hook is run elsewhere, the whole-tree hooks always run and the rustdoc gate
+fails on warnings (`ci_gates.rs`); repo-meta's `BUILDINFO_FIELDS` are the fields service-kit's
+`buildinfo!` reads (`buildinfo_fields.rs`); and `feature-sets.toml` covers every crate and every
+feature it declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on
+`meta/src`). Each test file also runs its checks on a scratch tree or an altered copy with a planted
+violation, so none is trusted on the strength of having found nothing to check.
 
 ### Generated or vendored: never hand-edit
 
@@ -104,7 +103,7 @@ so none is trusted on the strength of having found nothing to check.
   of them, and `[workspace.package] version` is the version being tagged; a consumer pins the tag
   and requires its `<major>.<minor>` as `version`.
 
-## Licence headers and suppressions
+## Licence headers
 
 Every Rust and shell source, the Makefile and every repo-local `.mk` snippet carries the
 MIT OR Apache-2.0 header, with the year of the file's first commit
@@ -113,12 +112,6 @@ file of the same kind; `.idea/copyright/` holds the same text for IntelliJ. A fi
 consumer gets this header in place of its original one, whatever that was (MIT, Apache-2.0 or
 GPL-3.0): the author relicenses it here. The make-common files are exempt: they carry make-common's
 own header.
-
-Every in-file suppression is counted per rule against `.suppressions-baseline` by the
-`check-suppressions` hook (`scripts/check-suppressions.sh`), in three families: each lint of an
-`#[expect(...)]` or `#[allow(...)]`, and `# shellcheck disable=`. A commit that adds one, swaps one
-or moves one must change the baseline too, and so must one whose count fell below it: run
-`scripts/check-suppressions.sh --update` and commit the baseline with the change.
 
 ## Conventions
 
@@ -181,7 +174,6 @@ Run before considering an edit done. `make check` applies to every row.
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/*.mk` in `MK_LOCAL_FILES` | `make check`, `make help` |
 | `scripts/bootstrap-mk-common.sh`, the make-common `.mk` files | never by hand: port the change to make-common, then `make mk-common-update` and `make help` |
 | `scripts/check-license-headers.sh` | run it, and see a file without the header fail it |
-| `scripts/check-suppressions.sh`, `.suppressions-baseline` | run it, and see an added `#[expect]` without a baseline change fail it |
 | `meta/**` | `cargo test -p meta` |
 | `**/*.md`, `.agents/skills/**` | `pre-commit run lychee --all-files` (offline links and fragments); prose wraps at 100 columns |
 

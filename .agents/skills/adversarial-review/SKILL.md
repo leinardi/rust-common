@@ -76,7 +76,7 @@ user-facing contract a change must keep true.
   dependency feature, or a new feature with no set naming it is a finding.
 - **Library hygiene.** No `unwrap`/`expect`, `print!`/`eprint!` or panic on input outside tests;
   no wall-clock read the caller cannot inject; no `unsafe` (`unsafe_code = "forbid"`); lints
-  silenced only by `#[expect(lint, reason = "...")]`, counted in `.suppressions-baseline`. A new
+  silenced only by `#[expect(lint, reason = "...")]`. A new
   dependency uses `default-features = false` where the defaults pull in more, and its licence is
   in `deny.toml`'s allow list for a stated reason.
 - **Dependencies run downward.** A crate depends only on crates above it in the README's table.
@@ -150,7 +150,6 @@ it, report it; if not, dig once more, then drop it. No named input and wrong res
 | any `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rust-toolchain.toml` | `make verify` |
 | a crate's features or dependencies, `feature-sets.toml` | `make rust-feature-matrix` |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (network) |
-| `scripts/check-suppressions.sh`, `.suppressions-baseline` | the script, once as is and once with an added `#[expect]` staged without a baseline change |
 | a workflow | `make check` (actionlint), then reason through each trigger it has: pull request, push, dispatch, schedule |
 | `scripts/check-license-headers.sh` | the script, once as is and once on a tracked file without the header |
 

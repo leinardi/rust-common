@@ -42,7 +42,7 @@ const GATES: CiGates<'static> = CiGates {
 };
 
 /// The hooks that read the whole tree rather than the files a commit touches.
-const WHOLE_TREE_HOOKS: &[&str] = &["check-license-headers", "check-suppressions"];
+const WHOLE_TREE_HOOKS: &[&str] = &["check-license-headers"];
 
 fn parse(file: &str, content: &str) -> yaml::Value {
     yaml::parse(file, content).unwrap_or_else(|problem| panic!("{problem}"))

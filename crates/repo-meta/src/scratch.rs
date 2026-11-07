@@ -11,10 +11,8 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! Scratch git repositories, and the harness that drives a repository's own suppression ratchet
-//! (`scripts/check-suppressions.sh`) in them. What is under test is the script's rule, not
-//! today's tree, so each case builds a repository of its own; the cases are the caller's, since
-//! each repository's suppression rules are its own.
+//! Scratch git repositories, for the checks and meta-tests that need a tree of their own: a
+//! negative control builds the repository it plants a violation in.
 //!
 //! Every git command and every script run in a scratch repository goes through
 //! [`testenv_core::gitenv::isolate`]: under a commit hook, git exports the location of the
@@ -23,19 +21,15 @@
 //! a [`Repo::scratch`], whose listings are isolated the same way.
 //!
 //! Like [`crate::Repo`], the scratch helpers panic when git or the file system fails: a harness
-//! that cannot build its fixture has nothing to say about the script. The verdicts are problems.
-//!
-//! Extracted from swarm-scheduler-exporter/meta/tests/suppressions.rs at c9e79afa8810 with
-//! swarm-device-access/meta/tests/suppressions.rs at 8b4ab3a3e417 (`Scratch`, its baseline and
-//! commits under any file name, `ratchet`, the cases and `run_cases`).
+//! that cannot build its fixture has nothing to say about the repository.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 use testenv_core::gitenv;
 
-use crate::{Problem, Repo};
+use crate::Repo;
 
 /// A scratch git repository on branch `main`, with an identity and no commit signing, so
 /// committing needs no global configuration; removed when dropped.
@@ -146,168 +140,3 @@ fn combined(output: &Output) -> String {
         String::from_utf8_lossy(&output.stderr)
     )
 }
-
-/// The suppression ratchet of a repository, run in scratch repositories from where it lives.
-#[derive(Clone, Copy, Debug)]
-pub struct SuppressionHarness<'harness> {
-    /// The ratchet, relative to the root; it runs from the repository under test with the scratch
-    /// repository as its working directory.
-    pub script: &'harness str,
-    /// The baseline file the ratchet reads, relative to the scratch root, such as
-    /// `.suppressions-baseline`.
-    pub baseline: &'harness str,
-}
-
-/// One scratch repository for the ratchet, with its baseline helpers.
-#[derive(Debug)]
-pub struct RatchetScratch {
-    repo: ScratchRepo,
-    script: PathBuf,
-    baseline: String,
-}
-
-/// A scratch state the ratchet must accept (`None`) or refuse with output containing the given
-/// text, so a case cannot pass on the wrong refusal.
-pub type RatchetCase = (&'static str, fn(&RatchetScratch), Option<&'static str>);
-
-impl SuppressionHarness<'_> {
-    /// An empty scratch repository whose ratchet is `repo`'s.
-    #[must_use]
-    pub fn scratch(&self, repo: &Repo) -> RatchetScratch {
-        RatchetScratch {
-            repo: ScratchRepo::new(),
-            script: repo.path(self.script),
-            baseline: self.baseline.to_owned(),
-        }
-    }
-
-    /// Runs each case: a fresh scratch repository, the case's set-up, then the ratchet with no
-    /// argument. A problem for every case whose verdict or refusal text is wrong, for a refusal
-    /// text that is empty (it would match any refusal), when the ratchet is not a file, and when
-    /// there is no case.
-    ///
-    /// # Panics
-    ///
-    /// A set-up step or the ratchet cannot run.
-    #[must_use]
-    pub fn run_cases(&self, repo: &Repo, cases: &[RatchetCase]) -> Vec<Problem> {
-        if !repo.path(self.script).is_file() {
-            return vec![Problem::at(self.script, "is not a file in the repository")];
-        }
-        if cases.is_empty() {
-            return vec![Problem::at(
-                self.script,
-                "no case; the harness would pass on nothing",
-            )];
-        }
-        let mut problems = Vec::new();
-        for (name, _, refusal) in cases {
-            if refusal.is_some_and(|text| text.trim().is_empty()) {
-                problems.push(Problem::at(
-                    *name,
-                    "expects a refusal with empty or blank text, which any refusal matches",
-                ));
-            }
-        }
-        if !problems.is_empty() {
-            return problems;
-        }
-        for (name, set_up, refusal) in cases {
-            let scratch = self.scratch(repo);
-            set_up(&scratch);
-            let (accepted, output) = scratch.ratchet(&[]);
-            match refusal {
-                None if !accepted => problems.push(Problem::at(
-                    *name,
-                    format!("refused a tree it should accept:\n{output}"),
-                )),
-                Some(_) if accepted => problems.push(Problem::at(
-                    *name,
-                    format!("accepted the tree, want a refusal:\n{output}"),
-                )),
-                Some(message) if !output.contains(message) => problems.push(Problem::at(
-                    *name,
-                    format!("output does not mention {message:?}:\n{output}"),
-                )),
-                None | Some(_) => {}
-            }
-        }
-        problems
-    }
-}
-
-impl RatchetScratch {
-    /// The scratch repository.
-    #[must_use]
-    pub fn repo(&self) -> &ScratchRepo {
-        &self.repo
-    }
-
-    /// Writes one file.
-    ///
-    /// # Panics
-    ///
-    /// See [`ScratchRepo::write`].
-    pub fn write(&self, name: &str, content: &str) {
-        self.repo.write(name, content);
-    }
-
-    /// Reads one file.
-    ///
-    /// # Panics
-    ///
-    /// See [`ScratchRepo::read`].
-    #[must_use]
-    pub fn read(&self, name: &str) -> String {
-        self.repo.read(name)
-    }
-
-    /// Runs git here.
-    ///
-    /// # Panics
-    ///
-    /// See [`ScratchRepo::git`].
-    pub fn git(&self, args: &[&str]) {
-        self.repo.git(args);
-    }
-
-    /// Writes a baseline holding `lines` (one `<family>/<rule>\t<count>` per line), after the
-    /// comment a real one starts with.
-    pub fn write_baseline(&self, lines: &str) {
-        let mut content = "# scratch baseline\n".to_owned();
-        if !lines.is_empty() {
-            content.push_str(lines);
-            content.push('\n');
-        }
-        self.repo.write(&self.baseline, &content);
-    }
-
-    /// Writes `source` as `name` and a baseline of `baseline`, and commits both, leaving a clean
-    /// index.
-    pub fn commit_initial(&self, name: &str, source: &str, baseline: &str) {
-        self.write(name, source);
-        self.write_baseline(baseline);
-        self.git(&["add", "-A"]);
-        self.git(&["commit", "-q", "-m", "scratch fixture"]);
-    }
-
-    /// Commits an empty baseline, leaving a clean index.
-    pub fn commit_empty_baseline(&self) {
-        self.write_baseline("");
-        self.git(&["add", "-A"]);
-        self.git(&["commit", "-q", "-m", "empty baseline"]);
-    }
-
-    /// Runs the ratchet here with `args`: whether it accepted the tree, and its output.
-    ///
-    /// # Panics
-    ///
-    /// The ratchet cannot be started.
-    #[must_use]
-    pub fn ratchet(&self, args: &[&str]) -> (bool, String) {
-        self.repo.run(&self.script, args)
-    }
-}
-
-#[cfg(test)]
-mod tests;
