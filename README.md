@@ -113,7 +113,7 @@ from `testenv_core::repo_root!()`) or the text it checks and returns `Vec<Proble
 the repository passes; a check never panics on what it reads, and input on which it would pass
 having checked nothing (no file, no rule) is itself a problem. The caller asserts with
 `assert!(problems.is_empty(), "{}", report(&problems))`. What differs between the projects (the
-members, the pins, the jobs, the hooks, the exemptions) is a parameter; every check is as strict
+members, the pins, the jobs, the hooks) is a parameter; every check is as strict
 as the strictest project's.
 
 `repo_root!()` is fixed at compile time: a test binary checks the checkout it was built from. A
@@ -124,6 +124,11 @@ What stays in a consumer's own meta-tests: swarm-rootless-docker's exact dind im
 single user-rewrite and no-apk rules and its `base.name` label; awtrix-controller's and
 swarm-rootless-docker's `label_arguments_are_supplied`; and every check that runs a tool, such as
 droast.
+
+What upstream tools check instead: Markdown links and fragments are lychee's (a pre-commit hook,
+`--offline --include-fragments`), and the licence headers are each repository's own
+`scripts/check-license-headers.sh` and its hook. A pin outside the Rust presets is a `PinSource`
+with the project's own pattern, held by `one_value`.
 
 | Module | What it checks |
 | --- | --- |
