@@ -113,12 +113,12 @@ repos:
         pass_filenames: false
         require_serial: true
         files: '(\.rs$|(^|/)Cargo\.(toml|lock)$|^clippy\.toml$|^rust-toolchain\.toml$)'
-      # The rust job's documentation check, run before the commit rather than found in CI: make
-      # rust-doc builds the docs of every crate and feature with warnings as errors (a broken or
-      # private intra-doc link fails it). Incremental, so a warm run takes seconds.
-      - id: rust-doc
-        name: rust doc
-        entry: make rust-doc
+      # The rust job's documentation check (make rust-doc), run before the commit rather than found
+      # in CI: the docs of every crate and feature, warnings as errors, as the make target (a broken
+      # or private intra-doc link fails it). Incremental, so a warm run takes seconds.
+      - id: cargo-doc
+        name: cargo doc
+        entry: env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps --locked
         language: system
         pass_filenames: false
         require_serial: true
