@@ -24,9 +24,8 @@
 //!
 //! - [`Repo`]: the root, `read`, `tracked`, `tracked_or_new` and `files_under`.
 //! - [`scratch`]: scratch git repositories, for the negative controls that plant a violation.
-//! - [`dockerfile`]: the Dockerfile reader and the base-pin rules; [`image`]: the image checks
-//!   (only the shipped Dockerfile, the frontend and base pins, the build stage, the version
-//!   stamps, the platforms, the labels against `droast.toml`).
+//! - [`dockerfile`]: the Dockerfile reader and the base-pin rules; [`image`]: the image pins
+//!   (the Dockerfiles a repository holds, the frontend and the base pins).
 //! - [`yaml`]: workflows, actions and the pre-commit configuration.
 //! - [`workspace`]: every member opts into the workspace lints, the levels the root sets, the
 //!   files that could override them, and the member layout.
