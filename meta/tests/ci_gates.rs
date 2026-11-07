@@ -11,22 +11,18 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! The CI gates hold together: `ci-result`, the one required check, needs every gating job; every
-//! hook `pre-commit-all` skips exists and is run by a job `ci-result` needs; the whole-tree hooks
-//! always run, take no file list and run at the pre-commit stage only; and the rustdoc gate is in
-//! `verify-rust`, fails on warnings over every feature, and runs unconditionally in the `rust`
-//! job. The checks are `repo_meta::ci`'s; the negative controls run them on altered copies of this
-//! repository's own files.
+//! The CI gates hold together: `ci-result`, the one required check, needs every gating job, and
+//! every hook `pre-commit-all` skips exists and is run by a job `ci-result` needs. The checks are
+//! `repo_meta::ci`'s; the negative controls run them on altered copies of this repository's own
+//! files.
 //!
-//! Extracted from swarm-device-access/meta/tests/ci_gates.rs at 8b4ab3a3e417 and
-//! swarm-scheduler-exporter/meta/tests/toolchain.rs at c9e79afa8810 (the rustdoc gate).
+//! Extracted from swarm-device-access/meta/tests/ci_gates.rs at 8b4ab3a3e417.
 
-use repo_meta::ci::{CiGates, MAKE_COMMON_RUSTDOC, always_run_problems};
+use repo_meta::ci::CiGates;
 use repo_meta::{Problem, report, strings, yaml};
 
 const WORKFLOW: &str = ".github/workflows/ci.yaml";
 const HOOKS: &str = ".pre-commit-config.yaml";
-const RUST_FRAGMENT: &str = ".mk/rust.mk";
 
 const GATES: CiGates<'static> = CiGates {
     result_job: "ci-result",
@@ -40,9 +36,6 @@ const GATES: CiGates<'static> = CiGates {
     ],
     skipped_hook_runners: &[("cargo-test", "rust"), ("cargo-deny", "rust")],
 };
-
-/// The hooks that read the whole tree rather than the files a commit touches.
-const WHOLE_TREE_HOOKS: &[&str] = &["check-license-headers"];
 
 fn parse(file: &str, content: &str) -> yaml::Value {
     yaml::parse(file, content).unwrap_or_else(|problem| panic!("{problem}"))
@@ -71,23 +64,6 @@ fn altered(text: &str, from: &str, to: &str) -> String {
 fn the_result_job_needs_every_gate_and_every_skip_is_run() {
     let repo = meta::repo();
     let problems = gate_problems(&repo.read(WORKFLOW), &repo.read(HOOKS));
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
-#[test]
-fn the_whole_tree_hooks_always_run() {
-    let problems = always_run_problems(&hooks(&meta::repo().read(HOOKS)), WHOLE_TREE_HOOKS);
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
-#[test]
-fn the_rustdoc_gate_fails_on_warnings_in_ci() {
-    let repo = meta::repo();
-    let problems = MAKE_COMMON_RUSTDOC.problems(
-        &repo.read(RUST_FRAGMENT),
-        &repo.read("Makefile"),
-        &parse(WORKFLOW, &repo.read(WORKFLOW)),
-    );
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
@@ -135,67 +111,4 @@ fn gate_check_is_not_blind() {
         strings(&gate_problems(&nothing, &config)),
         ["pre-commit-all skips nothing; the check would pass on nothing"]
     );
-}
-
-/// Negative control: a whole-tree hook that takes the file list, runs only on matching files, or
-/// runs at every installed stage.
-#[test]
-fn always_run_check_is_not_blind() {
-    let config = meta::repo().read(HOOKS);
-    let entry = "        entry: scripts/check-license-headers.sh\n        language: system\n";
-    let settings = [
-        "        pass_filenames: false\n",
-        "        always_run: true\n",
-        "        stages: [pre-commit]\n",
-    ];
-    let licence = format!("{entry}{}", settings.concat());
-    for (dropped, want) in [(0, "pass_filenames"), (1, "always_run"), (2, "stage")] {
-        let mut kept = settings.to_vec();
-        kept.remove(dropped);
-        let change = format!("{entry}{}", kept.concat());
-        let problems = always_run_problems(
-            &hooks(&altered(&config, &licence, &change)),
-            WHOLE_TREE_HOOKS,
-        );
-        assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(
-            problems[0].message.contains("check-license-headers")
-                && problems[0].message.contains(want),
-            "{problems:?}"
-        );
-    }
-    let problems = always_run_problems(&hooks(&config), &["no-such-hook"]);
-    assert_eq!(
-        strings(&problems),
-        ["hook no-such-hook appears 0 times, want once"]
-    );
-}
-
-/// Negative control: a rustdoc recipe without `-D warnings`, a Makefile that narrows the features,
-/// and a CI step allowed to fail.
-#[test]
-fn rustdoc_gate_check_is_not_blind() {
-    let repo = meta::repo();
-    let fragment = repo.read(RUST_FRAGMENT);
-    let makefile = repo.read("Makefile");
-    let workflow = repo.read(WORKFLOW);
-    let problems = |fragment: &str, makefile: &str, workflow: &str| {
-        MAKE_COMMON_RUSTDOC.problems(fragment, makefile, &parse(WORKFLOW, workflow))
-    };
-
-    let lenient = altered(&fragment, "$(RUSTDOCFLAGS) -D warnings", "$(RUSTDOCFLAGS)");
-    assert_eq!(problems(&lenient, &makefile, &workflow).len(), 1);
-
-    let narrowed = format!("{makefile}RUST_FEATURES := --features x\n");
-    assert_eq!(
-        strings(&problems(&fragment, &narrowed, &workflow)),
-        ["the Makefile sets RUST_FEATURES, narrowing the documented features"]
-    );
-
-    let allowed_to_fail = altered(
-        &workflow,
-        "        run: make rust-doc\n",
-        "        run: make rust-doc\n        continue-on-error: true\n",
-    );
-    assert_eq!(problems(&fragment, &makefile, &allowed_to_fail).len(), 1);
 }

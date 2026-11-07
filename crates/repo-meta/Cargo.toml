@@ -1,6 +1,6 @@
 [package]
 name = "repo-meta"
-description = "Parameterised repository checks for the meta-tests: Dockerfiles, toolchain pins, CI gates, lint opt-in, vacuous flags"
+description = "Parameterised repository checks for the meta-tests: Dockerfiles, toolchain pins, CI gates, workspace lint opt-in, vacuous flags"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -23,7 +23,7 @@ it. All six are available.
 | `clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind, a stream pump, attach and wait, a fake engine | `tcp`, `tls`, `attach`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
-| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lints and layout, Dockerfiles and images, toolchain pins, CI gates, vacuous flags, | – (each check's strictness is a parameter) |
+| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags, | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals, a minimal HTTP server, the `process_*` metrics collector | `runtime`, `http`, `process-metrics` |
 
@@ -128,11 +128,11 @@ droast.
 | Module | What it checks |
 | --- | --- |
 | `Repo`, `Problem`, `report` | the repository under test (`Repo::new`, git with the process's environment, so a commit hook's index) or a scratch one (`Repo::scratch`, git isolated); the tracked files (`tracked`, `tracked_or_new`, `files_under`), reads that become problems (`try_read`); `file:line: message` problems |
-| `workspace` | `lint_opt_in` (the root's `[workspace.lints]`, every member's `[lints] workspace = true`, the expected members), `lint_level_problems`, `override_problems`, `layout_problems` (crates under one directory, nothing else tracked there) |
+| `workspace` | `lint_opt_in` (the root's `[workspace.lints]`, every member's `[lints] workspace = true`, the expected members) |
 | `dockerfile` | the parser (`parse`, `Stage`, `Instruction`, `syntax`; an `escape` directive other than `\` or a heredoc is `Malformed`), `tag_pinned`, `digest_pinned`, `from_dhi`, `base_pinned`, `repository`, `tag`, `labels` |
 | `image` | `dockerfiles` (tracked or new, `Dockerfile.<name>` included), `syntax_problems` (required or optional), `stage_problems` with a `BasePolicy` (`DhiTagElseDigest`, `DhiOnly`, `TagOnly`) |
 | `toolchain` | `one_value` (one pin read from several files, over `PinSource`s and `PinValue`s), the `PinSource` presets for the Rust release (`rust_channel`, `rust_channel_line`, `rust_version`, `rust_version_line`, `rust_image_tag`, `rust_version_arg`), `rust_release` and `toolchain_targets` (from `rust-toolchain.toml`), `make_value` (make's value of a variable, `export`, `override`, `?=` and `+=` read as make reads them) |
-| `ci` | `CiGates` (the result job needs every gate job; the pre-commit job skips something, and every hook it skips exists and is run by a job the result job needs), `RustdocGate`, `always_run_problems` |
+| `ci` | `CiGates` (the result job needs every gate job; the pre-commit job skips something, and every hook it skips exists and is run by a job the result job needs) |
 | `vacuous` | `VacuousFlags` (`core`, `with_rust`): what turns a failing gate into a pass (an `or true`, `continue-on-error`, `if: false`, make's `-` prefix, `--cap-lints`, cargo's `--skip`, `--passWithNoTests`, …) and a clippy run without `-D warnings`, with `AllowedFragment` exceptions that must each be used |
 | `yaml` | workflows and the pre-commit configuration as `serde_json::Value`: `action_steps`, `jobs`, `pre_commit_hooks` |
 | `scratch` | `ScratchRepo` (a git-isolated temporary repository, `repo()` a `Repo::scratch`), `ScratchRepo::run` (a script run in it) |
