@@ -24,8 +24,8 @@
 //! parameter; for the same parameters each check is as strict as the strictest consumer's copy.
 //!
 //! - [`Repo`]: the root, `read`, `tracked`, `tracked_or_new` and `files_under`.
-//! - [`scratch`]: scratch git repositories, and the harnesses that drive the licence-header
-//!   checker and the suppression ratchet in them with the caller's cases.
+//! - [`scratch`]: scratch git repositories, and the harness that drives the suppression
+//!   ratchet in them with the caller's cases.
 //! - [`dockerfile`]: the Dockerfile reader and the base-pin rules; [`image`]: the image checks
 //!   (only the shipped Dockerfile, the frontend and base pins, the build stage, the version
 //!   stamps, the platforms, the labels against `droast.toml`).

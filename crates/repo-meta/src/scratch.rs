@@ -11,38 +11,27 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! Scratch git repositories, and the harnesses that drive a repository's own check scripts in
-//! them: the licence-header checker (`scripts/check-license-headers.sh`) and the suppression
-//! ratchet (`scripts/check-suppressions.sh`). What is under test is the script's rule, not today's
-//! tree, so each case builds a repository of its own; the cases are the caller's, since each
-//! repository's header and suppression rules are its own.
+//! Scratch git repositories, and the harness that drives a repository's own suppression ratchet
+//! (`scripts/check-suppressions.sh`) in them. What is under test is the script's rule, not
+//! today's tree, so each case builds a repository of its own; the cases are the caller's, since
+//! each repository's suppression rules are its own.
 //!
 //! Every git command and every script run in a scratch repository goes through
 //! [`testenv_core::gitenv::isolate`]: under a commit hook, git exports the location of the
 //! repository being committed, and a `git add` in a scratch repository with that environment
 //! would write into the real index. [`ScratchRepo::repo`] hands a check the scratch repository as
-//! a [`Repo::scratch`], whose listings are isolated the same way. A repository under test's own
-//! run of its script ([`HeaderHarness::check_repository`] on a [`Repo::new`]) keeps that
-//! environment instead, so it names the index being committed.
+//! a [`Repo::scratch`], whose listings are isolated the same way.
 //!
 //! Like [`crate::Repo`], the scratch helpers panic when git or the file system fails: a harness
 //! that cannot build its fixture has nothing to say about the script. The verdicts are problems.
 //!
-//! Extracted from swarm-scheduler-exporter/meta/tests/license_headers.rs at c9e79afa8810
-//! (`scratch_repo`, `run_checker`, `HeaderCase`, `run_cases`),
-//! `bitgauge/meta/tests/license_headers.rs` at 600fc3905200 (the cases run in parallel, and a
-//! rejection names the exit status) and
-//! swarm-scheduler-exporter/meta/tests/suppressions.rs at c9e79afa8810 with
+//! Extracted from swarm-scheduler-exporter/meta/tests/suppressions.rs at c9e79afa8810 with
 //! swarm-device-access/meta/tests/suppressions.rs at 8b4ab3a3e417 (`Scratch`, its baseline and
 //! commits under any file name, `ratchet`, the cases and `run_cases`).
 
 use std::fs;
-use std::num::NonZeroUsize;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 
 use testenv_core::gitenv;
 
@@ -156,176 +145,6 @@ fn combined(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
-}
-
-/// The licence-header checker of a repository, run in scratch repositories that copy it.
-#[derive(Clone, Copy, Debug)]
-pub struct HeaderHarness<'harness> {
-    /// The checker, relative to the root; each scratch repository holds a copy at the same path,
-    /// executable, and the checker runs from there.
-    pub script: &'harness str,
-    /// Files every scratch repository holds unless the case brings a file of the same path, such
-    /// as a Makefile with its header (the checker reads `MK_COMMON_FILES` from it).
-    pub base_files: &'harness [(&'harness str, &'harness str)],
-    /// Files under this prefix are written but never added: the checker reads tracked files only.
-    pub untracked_prefix: &'harness str,
-}
-
-/// One scratch repository: its files, and whether the checker must accept it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HeaderCase {
-    /// What the case shows, named in a failure.
-    pub name: String,
-    /// The files, by path relative to the root.
-    pub files: Vec<(String, String)>,
-    /// Whether the checker must accept the repository.
-    pub pass: bool,
-}
-
-impl HeaderCase {
-    /// A case of `files` that the checker must accept (`pass`) or reject.
-    #[must_use]
-    pub fn new(name: &str, files: &[(&str, &str)], pass: bool) -> Self {
-        Self {
-            name: name.to_owned(),
-            files: files
-                .iter()
-                .map(|(path, content)| ((*path).to_owned(), (*content).to_owned()))
-                .collect(),
-            pass,
-        }
-    }
-}
-
-impl HeaderHarness<'_> {
-    /// Runs the checker on `repo` itself: a problem unless it accepts the repository. A
-    /// repository under test ([`Repo::new`]) keeps the process's git environment, so under the
-    /// commit hook it names the index being committed; a scratch one ([`Repo::scratch`]) runs
-    /// isolated.
-    #[must_use]
-    pub fn check_repository(&self, repo: &Repo) -> Vec<Problem> {
-        let mut command = Command::new(repo.path(self.script));
-        command.current_dir(repo.root());
-        if repo.is_isolated() {
-            gitenv::isolate(&mut command);
-        } else {
-            crate::repo::drop_unusable_relative_index(&mut command, repo.root());
-        }
-        match command.output() {
-            Ok(output) if output.status.success() => Vec::new(),
-            Ok(output) => vec![Problem::at(
-                self.script,
-                format!(
-                    "rejects the repository ({}):\n{}",
-                    output.status,
-                    combined(&output)
-                ),
-            )],
-            Err(error) => vec![Problem::at(self.script, format!("cannot run: {error}"))],
-        }
-    }
-
-    /// Runs each case in a scratch repository holding the checker copied from `repo`, the base
-    /// files and the case's files, every one added but those under the untracked prefix; the cases
-    /// run in parallel. A problem for every case whose verdict is wrong, one when the checker
-    /// cannot be read, and one unless the cases hold at least one the checker must accept and
-    /// one it must reject: a checker that accepted, or refused, everything would pass a one-sided
-    /// set.
-    ///
-    /// # Panics
-    ///
-    /// A scratch repository cannot be built or the checker cannot be started.
-    #[must_use]
-    pub fn run_cases(&self, repo: &Repo, cases: &[HeaderCase]) -> Vec<Problem> {
-        let script = match repo.try_read(self.script) {
-            Ok(script) => script,
-            Err(problem) => return vec![problem],
-        };
-        if !cases.iter().any(|case| case.pass) || cases.iter().all(|case| case.pass) {
-            return vec![Problem::at(
-                self.script,
-                "the cases need one the checker must accept and one it must reject",
-            )];
-        }
-        parallel_map(cases, |case| self.case_problem(&script, case))
-            .into_iter()
-            .flatten()
-            .collect()
-    }
-
-    fn case_problem(&self, script: &str, case: &HeaderCase) -> Option<Problem> {
-        let scratch = ScratchRepo::new();
-        let mut files: Vec<(&str, &str)> = case
-            .files
-            .iter()
-            .map(|(path, content)| (path.as_str(), content.as_str()))
-            .collect();
-        for (path, content) in self.base_files {
-            if !files.iter().any(|(name, _)| name == path) {
-                files.push((path, content));
-            }
-        }
-        files.push((self.script, script));
-        for (name, content) in &files {
-            scratch.write(name, content);
-        }
-        fs::set_permissions(
-            scratch.path().join(self.script),
-            fs::Permissions::from_mode(0o700),
-        )
-        .unwrap_or_else(|error| panic!("make the checker executable: {error}"));
-        for (name, _) in &files {
-            if !name.starts_with(self.untracked_prefix) {
-                scratch.git(&["add", "--", name]);
-            }
-        }
-        let (accepted, output) = scratch.run(&scratch.path().join(self.script), &[]);
-        match (case.pass, accepted) {
-            (true, false) => Some(Problem::at(
-                &case.name,
-                format!("rejected, want accepted:\n{output}"),
-            )),
-            (false, true) => Some(Problem::at(
-                &case.name,
-                format!("accepted, want rejected:\n{output}"),
-            )),
-            (true, true) | (false, false) => None,
-        }
-    }
-}
-
-/// Runs `run` on every item, on as many threads as the machine has cores, in item order.
-fn parallel_map<T: Sync, R: Send>(items: &[T], run: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let next = AtomicUsize::new(0);
-    let workers = thread::available_parallelism()
-        .map_or(1, NonZeroUsize::get)
-        .min(items.len());
-    let mut results: Vec<(usize, R)> = thread::scope(|scope| {
-        let handles: Vec<_> = (0..workers)
-            .map(|_| {
-                scope.spawn(|| {
-                    let mut done = Vec::new();
-                    loop {
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(item) = items.get(index) else {
-                            return done;
-                        };
-                        done.push((index, run(item)));
-                    }
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
-            })
-            .collect()
-    });
-    results.sort_by_key(|(index, _)| *index);
-    results.into_iter().map(|(_, result)| result).collect()
 }
 
 /// The suppression ratchet of a repository, run in scratch repositories from where it lives.

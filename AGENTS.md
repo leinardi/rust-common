@@ -59,16 +59,15 @@ The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git. They ru
 crate's checks on this repository, with its parameters: every workspace member opts into the
 workspace lints, the lints the rules depend on are set at their level and nothing outside the
 manifest lowers them (`workspace_lints.rs`); every member is `meta` or `crates/<name>` and every
-tracked crate is a member (`workspace_layout.rs`); the licence-header checker and the suppression
-ratchet accept and refuse what they should (`license_headers.rs`, `suppressions.rs`); one Rust
-release and one ShellCheck are pinned everywhere (`toolchain.rs`); no gate passes on nothing
-(`vacuous_flags.rs`); `ci-result` needs every gate, every skipped hook is run elsewhere, the
-whole-tree hooks always run and the rustdoc gate fails on warnings (`ci_gates.rs`); repo-meta's
-`BUILDINFO_FIELDS` are the fields service-kit's `buildinfo!` reads (`buildinfo_fields.rs`); and
-`feature-sets.toml` covers every crate and every feature it declares, while the matrix fails a set
-that leaves a warning (`feature_sets.rs`, on `meta/src`). Each test file also runs its checks on a
-scratch tree or an altered copy with a planted violation, so none is trusted on the strength of
-having found nothing to check.
+tracked crate is a member (`workspace_layout.rs`); the suppression ratchet accepts and refuses what
+it should (`suppressions.rs`); one Rust release and one ShellCheck are pinned everywhere
+(`toolchain.rs`); no gate passes on nothing (`vacuous_flags.rs`); `ci-result` needs every gate,
+every skipped hook is run elsewhere, the whole-tree hooks always run and the rustdoc gate fails on
+warnings (`ci_gates.rs`); repo-meta's `BUILDINFO_FIELDS` are the fields service-kit's `buildinfo!`
+reads (`buildinfo_fields.rs`); and `feature-sets.toml` covers every crate and every feature it
+declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on `meta/src`).
+Each test file also runs its checks on a scratch tree or an altered copy with a planted violation,
+so none is trusted on the strength of having found nothing to check.
 
 ### Generated or vendored: never hand-edit
 
