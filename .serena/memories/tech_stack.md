@@ -1,7 +1,8 @@
 # Tech stack
 
 - Rust: one line (1.98) across rust-toolchain.toml (1.98.1), the workspace `rust-version`
-  ("1.98", so consumers on any 1.98 patch build) and every CI toolchain step.
+  ("1.98", so consumers on any 1.98 patch build); CI installs the toolchain from
+  rust-toolchain.toml (`rustup toolchain install`).
 - Distribution: git tags `vX.Y.Z`. The Release workflow (svu from Conventional Commits) opens a
   pull request writing the workspace version; its merge makes Auto Tag Release tag it through
   gh-reusable-workflows' `simple-tag-and-release`. Every crate shares the workspace version;

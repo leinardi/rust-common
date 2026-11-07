@@ -112,7 +112,8 @@ own header.
 ## Conventions
 
 - Pin every action and reusable workflow by full commit SHA, with the version in a trailing comment
-  (`@<sha> # vX.Y.Z`). The toolchain step pins the same release as `rust-toolchain.toml`.
+  (`@<sha> # vX.Y.Z`). The toolchain step is `rustup toolchain install`, which installs what
+  `rust-toolchain.toml` names.
 - Give every workflow a top-level `permissions: contents: read`, and widen it only on the job that
   needs more.
 - Pass `${{ }}` expressions into `run:` scripts through `env:`, never inline them in the script.

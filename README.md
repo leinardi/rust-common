@@ -23,7 +23,7 @@ it. All six are available.
 | `clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind, a stream pump, attach and wait, a fake engine | `tcp`, `tls`, `attach`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
-| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags, | – (each check's strictness is a parameter) |
+| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals, a minimal HTTP server, the `process_*` metrics collector | `runtime`, `http`, `process-metrics` |
 
