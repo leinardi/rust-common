@@ -46,10 +46,46 @@ pub struct Repo {
     isolated: bool,
 }
 
+/// The value a plain `git commit` in a main checkout exports as `GIT_INDEX_FILE`.
+const COMMIT_INDEX: &str = ".git/index";
+
+/// Removes a `GIT_INDEX_FILE` of exactly `.git/index` from `command`, run at `root`, when `root`'s
+/// top level has no `.git` directory.
+///
+/// A plain `git commit` in a main checkout exports the index being committed as the relative
+/// `.git/index` (`commit -a`, `commit <path>` and a linked worktree export absolute paths), and git
+/// resolves a relative value against the top level of the checkout it finds. In the committing
+/// checkout that is the index being committed. A root that is another checkout, one whose `.git` is
+/// a file (a linked worktree or a submodule), cannot hold such an index, and git fails with
+/// `.git/index: ... Not a directory`; its own index is git's default, so the variable is removed.
+/// Any other value, absolute or a relative custom one such as `alternate.index`, is left alone.
+pub(crate) fn drop_unusable_relative_index(command: &mut Command, root: &Path) {
+    if std::env::var_os("GIT_INDEX_FILE").is_none_or(|value| value != COMMIT_INDEX) {
+        return;
+    }
+    let mut probe = Command::new("git");
+    probe
+        .current_dir(root)
+        .env_remove("GIT_INDEX_FILE")
+        .args(["rev-parse", "--show-toplevel"]);
+    let top_level = probe
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map_or_else(|| root.to_path_buf(), |line| PathBuf::from(line.trim_end()));
+    if !top_level.join(".git").is_dir() {
+        command.env_remove("GIT_INDEX_FILE");
+    }
+}
+
 impl Repo {
     /// The repository under test at `root`. Its git commands keep the process's git environment:
     /// under a commit hook, git exports the index being committed (`GIT_INDEX_FILE`, and `GIT_DIR`
-    /// in a worktree), and the listings read that index.
+    /// in a worktree), and the listings read that index. The index is absolute except in a plain
+    /// `git commit` in a main checkout, which exports `.git/index`; git resolves that against the
+    /// top level of the checkout it finds, so it is dropped for a root whose `.git` is a file (see
+    /// [`drop_unusable_relative_index`]).
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
@@ -82,6 +118,8 @@ impl Repo {
         command.current_dir(&self.root);
         if self.isolated {
             testenv_core::gitenv::isolate(&mut command);
+        } else {
+            drop_unusable_relative_index(&mut command, &self.root);
         }
         command
     }
@@ -365,6 +403,20 @@ mod tests {
         }
     }
 
+    /// The child half of the relative-index tests: the repository under test at `LISTING_ROOT`
+    /// lists `LISTING_EXPECTED` (comma-separated) under the parent's `GIT_INDEX_FILE`.
+    #[test]
+    #[ignore = "run by the relative-index tests"]
+    fn listing_under_a_relative_index() {
+        let root = std::env::var_os("LISTING_ROOT").unwrap();
+        let expected = std::env::var("LISTING_EXPECTED").unwrap();
+        let expected: Vec<&str> = expected
+            .split(',')
+            .filter(|name| !name.is_empty())
+            .collect();
+        assert_eq!(Repo::new(root).tracked(&["*.rs"]), expected);
+    }
+
     fn decoy() -> tempfile::TempDir {
         let decoy = tempfile::tempdir().unwrap();
         let repo = Repo::scratch(decoy.path());
@@ -375,13 +427,17 @@ mod tests {
     }
 
     fn run_child(env: &[(&str, &Path)]) {
+        run_named_child("scratch_listing_under_a_hook_environment", env);
+    }
+
+    fn run_named_child(child_test: &str, env: &[(&str, &Path)]) {
         let mut child = Command::new(std::env::current_exe().unwrap());
         // The parent's own git environment (a commit hook's) is dropped, so the child sees only
         // the decoy's.
         testenv_core::gitenv::isolate(&mut child);
         child.args([
             "--exact",
-            "repo::tests::scratch_listing_under_a_hook_environment",
+            &format!("repo::tests::{child_test}"),
             "--include-ignored",
             "--quiet",
         ]);
@@ -397,9 +453,9 @@ mod tests {
         );
     }
 
-    /// Under a commit hook, git exports the real repository's index (`GIT_INDEX_FILE`, absolute)
-    /// and, in a worktree, its git directory (`GIT_DIR`). A scratch repository's listing must not
-    /// read either.
+    /// Under a commit hook, git exports the real repository's index (`GIT_INDEX_FILE`, absolute
+    /// except for `.git/index` in a plain commit) and, in a worktree, its git directory
+    /// (`GIT_DIR`). A scratch repository's listing must not read either.
     #[test]
     fn a_commit_hook_environment_does_not_reach_a_scratch_repository() {
         let decoy = decoy();
@@ -407,5 +463,86 @@ mod tests {
         let index = git_dir.join("index");
         run_child(&[("GIT_INDEX_FILE", &index)]);
         run_child(&[("GIT_DIR", &git_dir), ("GIT_INDEX_FILE", &index)]);
+    }
+
+    /// A main checkout at `main` with `main.rs` committed and `staged.rs` added, and a linked
+    /// worktree of it at `worktree` with `own.rs` added to its own index.
+    fn main_and_worktree(main: &Path, worktree: &Path) {
+        let repo = Repo::scratch(main);
+        git(&repo, &["init", "--quiet", "-b", "main"]);
+        write(&repo, "main.rs", "m");
+        git(&repo, &["add", "main.rs"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "init",
+            ],
+        );
+        git(
+            &repo,
+            &["worktree", "add", "--quiet", worktree.to_str().unwrap()],
+        );
+        write(&repo, "staged.rs", "s");
+        git(&repo, &["add", "staged.rs"]);
+        let linked = Repo::scratch(worktree);
+        write(&linked, "own.rs", "o");
+        git(&linked, &["add", "own.rs"]);
+    }
+
+    /// A plain `git commit` in a main checkout exports the relative `.git/index`: a repository
+    /// under test at that checkout lists its default index, and one at a linked worktree, where
+    /// git cannot open `.git/index`, lists the worktree's own.
+    #[test]
+    fn a_relative_commit_index_lists_the_checkouts_own_index() {
+        let scratch = tempfile::tempdir().unwrap();
+        let worktree = scratch.path().join("linked");
+        let main = scratch.path().join("main");
+        fs::create_dir(&main).unwrap();
+        main_and_worktree(&main, &worktree);
+        let run = |root: &Path, expected: &str| {
+            run_named_child(
+                "listing_under_a_relative_index",
+                &[
+                    ("GIT_INDEX_FILE", Path::new(".git/index")),
+                    ("LISTING_ROOT", root),
+                    ("LISTING_EXPECTED", Path::new(expected)),
+                ],
+            );
+        };
+        run(&main, "main.rs,staged.rs");
+        run(&worktree, "main.rs,own.rs");
+    }
+
+    /// A relative custom index (`alternate.index`) is honoured, not dropped.
+    #[test]
+    fn a_relative_custom_index_is_honoured() {
+        let scratch = tempfile::tempdir().unwrap();
+        let repo = Repo::scratch(scratch.path());
+        git(&repo, &["init", "--quiet"]);
+        write(&repo, "default.rs", "d");
+        write(&repo, "alt.rs", "a");
+        git(&repo, &["add", "default.rs"]);
+        let status = repo
+            .git_command()
+            .env("GIT_INDEX_FILE", "alternate.index")
+            .args(["add", "alt.rs"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        run_named_child(
+            "listing_under_a_relative_index",
+            &[
+                ("GIT_INDEX_FILE", Path::new("alternate.index")),
+                ("LISTING_ROOT", scratch.path()),
+                ("LISTING_EXPECTED", Path::new("alt.rs")),
+            ],
+        );
     }
 }

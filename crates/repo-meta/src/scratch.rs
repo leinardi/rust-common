@@ -208,6 +208,8 @@ impl HeaderHarness<'_> {
         command.current_dir(repo.root());
         if repo.is_isolated() {
             gitenv::isolate(&mut command);
+        } else {
+            crate::repo::drop_unusable_relative_index(&mut command, repo.root());
         }
         match command.output() {
             Ok(output) if output.status.success() => Vec::new(),
