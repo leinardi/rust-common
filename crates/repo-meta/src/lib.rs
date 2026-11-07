@@ -12,16 +12,15 @@
  */
 
 //! Parameterised repository checks for the meta-tests of the projects that share this workspace:
-//! a project's meta crate calls them from thin tests, passing its own paths, pins and allowlists,
-//! and keeps local only what is its own.
+//! a project's meta crate calls them from thin tests, passing its own paths and pins, and
+//! keeps local only what is its own.
 //!
 //! Every check takes the contents it judges (or a root it reads through) and returns the
 //! [`Problem`]s it finds, empty on a passing repository, and never panics on what it reads. So a
 //! meta-test asserts the list is empty, and its negative control runs the same check on a copy
 //! with a planted violation and asserts what comes back. Where the consumers legitimately differ
-//! (an exact Rust release or only the line in `rust-version`, the extra flags a JavaScript gate
-//! carries, the item-level or file-level form of a lint exemption), the difference is a
-//! parameter; for the same parameters each check is as strict as the strictest consumer's copy.
+//! (an exact Rust release or only the line in `rust-version`), the difference is a parameter; for
+//! the same parameters each check is as strict as the strictest consumer's copy.
 //!
 //! - [`Repo`]: the root, `read`, `tracked`, `tracked_or_new` and `files_under`.
 //! - [`scratch`]: scratch git repositories, for the negative controls that plant a violation.
@@ -37,25 +36,17 @@
 //! - [`ci`]: `ci-result` needs every gate, `pre-commit-all` skips only hooks a needed job runs,
 //!   the rustdoc gate, and the whole-tree hooks that run once.
 //! - [`vacuous`]: no gate carries a flag that makes it pass on nothing.
-//! - [`allowlist`]: a lint lifted only where an allowlist says, file-level or on a named item.
-//! - [`integration`]: the line between the plain tests and a Docker-driving suite.
-//! - [`tools`]: no meta-test looks a tool up on `PATH`, for the projects whose policy is to fail
-//!   without the tool.
 //!
-//! The crate needs no network, no Docker and no tool beyond git: the harnesses run the
-//! repository's own scripts.
+//! The crate needs no network, no Docker and no tool beyond git.
 
-pub mod allowlist;
 mod case_arm;
 pub mod ci;
 pub mod dockerfile;
 pub mod image;
-pub mod integration;
 mod problem;
 mod repo;
 pub mod scratch;
 pub mod toolchain;
-pub mod tools;
 pub mod vacuous;
 pub mod workspace;
 pub mod yaml;
