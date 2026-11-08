@@ -33,10 +33,10 @@ assignees: []
 <!-- Describe how you imagine this feature working. Be as specific as possible. -->
 
 * **High-level description:**
-    *
+  *
 
 * **Example usage / scenario:**
-    *
+  *
 
 ---
 
@@ -70,5 +70,5 @@ assignees: []
 <!-- If applicable, include a rough example of the API: a signature, a feature flag, a call site. -->
 
 ```rust
-# Example (replace with your own sketch)
+// Example (replace with your own sketch)
 ```
