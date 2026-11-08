@@ -50,9 +50,9 @@ The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on
 | `deny.toml`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | cargo-deny policy, clippy settings (no application bans), formatting, the pinned toolchain |
 | `Makefile`, `.mk/`, `scripts/bootstrap-mk-common.sh` | make-common: shared snippets in `MK_COMMON_FILES`, local ones in `MK_LOCAL_FILES` |
 | `.github/workflows/ci.yaml` | `pre-commit-all`, `rust`, `feature-matrix`, `conventional-commits` and the `ci-result` aggregator; the reviewdog jobs on pull requests |
-| `.github/workflows/release.yaml`, `auto-tag-release.yaml` | the **Release** workflow writes the crates' version on a `release/vX.Y.Z` branch and opens its pull request; on its merge, **Auto Tag Release** tags `vX.Y.Z` through gh-reusable-workflows' `simple-tag-and-release` |
+| `.github/workflows/release.yaml` | the **Release** workflow, on gh-reusable-workflows: a dispatch writes the crates' version (`make release-bump`) on a `release/vX.Y.Z` branch and opens its pull request (`version-bump-pr`); its merge is checked and waited on (`release-on-merge`) and tagged `vX.Y.Z` (`simple-tag-and-release`) |
 | `.github/workflows/pre-commit-warmup.yaml` | refreshes the pre-commit cache on `main` (hook config change, weekly) and prunes the older entries |
-| `scripts/` | the licence-header check, the make-common bootstrap and the Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`) |
+| `scripts/` | the licence-header check, the make-common bootstrap, the release bump (`release-bump.sh` and its `release-bump.test.sh`, behind `make release-bump` and `make release-bump-test` in `.mk/release.mk`) and the Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`) |
 | `.agents/skills/` | project skills; `.claude/skills` is a symlink to it |
 
 The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git. They run the `repo-meta`
@@ -167,10 +167,11 @@ Run before considering an edit done. `make check` applies to every row.
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify` |
 | a crate's `[features]`, its dependencies, `feature-sets.toml` | `make rust-feature-matrix`, `cargo test -p meta --test feature_sets` |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (network) |
-| `.github/workflows/**`, `.github/actions/**`, `.github/dependabot.yml` | `pre-commit run actionlint --all-files`; reason through each trigger the workflow has (pull request, push, dispatch, schedule) |
+| `.github/workflows/**`, `.github/dependabot.yml` | `pre-commit run actionlint --all-files`; reason through each trigger the workflow has (pull request, push, dispatch, schedule) |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/*.mk` in `MK_LOCAL_FILES` | `make check`, `make help` |
 | `scripts/bootstrap-mk-common.sh`, the make-common `.mk` files | never by hand: port the change to make-common, then `make mk-common-update` and `make help` |
 | `scripts/check-license-headers.sh` | run it, and see a file without the header fail it |
+| `scripts/release-bump.sh`, `scripts/release-bump.test.sh`, `.mk/release.mk` | `make release-bump-test`; `make release-bump VERSION=<higher>` changes only the version lines (then `git checkout Cargo.toml Cargo.lock`) |
 | `meta/**` | `cargo test -p meta` |
 | `**/*.md`, `.agents/skills/**` | `pre-commit run lychee --all-files` (offline links and fragments); prose wraps at 100 columns |
 
