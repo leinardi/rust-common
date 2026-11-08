@@ -13,7 +13,7 @@
 
 //! One Rust release line and one ShellCheck everywhere they are written: `rust-toolchain.toml`
 //! pins an exact release and the workspace's `rust-version` is that release's line, and the
-//! ShellCheck the shellcheck-py hook wraps is the one CI's setup-shellcheck action installs. The
+//! ShellCheck the shellcheck-py hook wraps is the one CI's setup-shellcheck step installs. The
 //! pins are `repo_meta::toolchain::one_value`'s; the negative controls run it on altered copies.
 //!
 //! CI installs the toolchain from `rust-toolchain.toml` itself, so no workflow repeats the
@@ -30,7 +30,8 @@ use repo_meta::{Problem, report};
 const TOOLCHAIN: &str = "rust-toolchain.toml";
 const MANIFEST: &str = "Cargo.toml";
 const HOOKS: &str = ".pre-commit-config.yaml";
-const SHELLCHECK_ACTION: &str = ".github/actions/setup-shellcheck/action.yaml";
+/// The workflow whose gh-composite-actions setup-shellcheck step names the version it installs.
+const SHELLCHECK_WORKFLOW: &str = ".github/workflows/ci.yaml";
 
 /// The Rust line in the toolchain file and in the manifest.
 fn rust_line(toolchain: &str, manifest: &str) -> Vec<Problem> {
@@ -45,8 +46,8 @@ fn rust_line(toolchain: &str, manifest: &str) -> Vec<Problem> {
 }
 
 /// The ShellCheck release of the hook (its rev adds a fourth component for the wrapper, so only
-/// the first three count) and of the action that installs it.
-fn shellcheck(hooks: &str, action: &str) -> Vec<Problem> {
+/// the first three count) and of the CI step that installs it.
+fn shellcheck(hooks: &str, workflow: &str) -> Vec<Problem> {
     one_value(
         "ShellCheck",
         &[
@@ -56,9 +57,9 @@ fn shellcheck(hooks: &str, action: &str) -> Vec<Problem> {
                 r"repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*(v\d+\.\d+\.\d+)",
             ),
             PinSource::new(
-                SHELLCHECK_ACTION,
-                action,
-                r#"SHELLCHECK_VERSION:\s*["']?(v[\d.]+)"#,
+                SHELLCHECK_WORKFLOW,
+                workflow,
+                r#"/setup-shellcheck@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+version:\s*["']?(v\d+\.\d+\.\d+)"#,
             ),
         ],
         &[],
@@ -75,7 +76,7 @@ fn rust_version_is_the_toolchain_line() {
 #[test]
 fn shellcheck_is_one_version() {
     let repo = meta::repo();
-    let problems = shellcheck(&repo.read(HOOKS), &repo.read(SHELLCHECK_ACTION));
+    let problems = shellcheck(&repo.read(HOOKS), &repo.read(SHELLCHECK_WORKFLOW));
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
@@ -113,17 +114,23 @@ fn a_rust_version_off_the_line_is_refused() {
     );
 }
 
-/// Negative control: the hook and the action on different ShellCheck releases.
+/// Negative control: the hook and the CI step on different ShellCheck releases.
 #[test]
 fn two_shellcheck_versions_are_refused() {
     let hooks =
         "repos:\n  - repo: https://github.com/shellcheck-py/shellcheck-py\n    rev: v0.11.0.1\n";
-    let action = |version: &str| format!("      env:\n        SHELLCHECK_VERSION: {version}\n");
-    assert_eq!(shellcheck(hooks, &action("v0.11.0")), []);
+    let step = |version: &str| {
+        format!(
+            "      - uses: leinardi/gh-composite-actions/setup-shellcheck@{} # v1.0.0\n        \
+             with:\n          version: {version}\n",
+            "0".repeat(40)
+        )
+    };
+    assert_eq!(shellcheck(hooks, &step("v0.11.0")), []);
     assert_eq!(
-        strings(&shellcheck(hooks, &action("v0.10.0"))),
+        strings(&shellcheck(hooks, &step("v0.10.0"))),
         [
-            "ShellCheck is not one value: v0.10.0 in .github/actions/setup-shellcheck/action.yaml; \
+            "ShellCheck is not one value: v0.10.0 in .github/workflows/ci.yaml; \
              v0.11.0 in .pre-commit-config.yaml"
         ]
     );

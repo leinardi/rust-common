@@ -10,7 +10,7 @@
   installs both the `pre-commit` and the `commit-msg` hooks, so commit messages are checked when you
   commit. The hooks bring their own tools, shellcheck included; actionlint also checks the
   workflows' `run:` scripts when a [`shellcheck`](https://www.shellcheck.net/) is on `PATH`, as CI
-  installs it (`.github/actions/setup-shellcheck`).
+  installs it (gh-composite-actions' `setup-shellcheck`, in `ci.yaml`).
 
 ## Building and testing
 
@@ -62,29 +62,31 @@ whole.
 
 ## Releasing
 
-A release is two workflows and one merge, so a `vX.Y.Z` tag always marks a tree whose crates carry
-version `X.Y.Z`:
+A release is one workflow, `release.yaml` on gh-reusable-workflows, and one merge, so a `vX.Y.Z`
+tag always marks a tree whose crates carry version `X.Y.Z`:
 
 1. Dispatch the **Release** workflow (`release.yaml`) from `main`. Leave the version empty to derive
    it from the commits since the last tag, or pass one (e.g. `0.3.0` or `v0.3.0`); tick *dry run*
    first to see what it would do. It refuses a version not above every release tag and above the
-   crates' current version. It writes the version to `[workspace.package]` in the root
-   `Cargo.toml` (every crate inherits it) and to the workspace entries of `Cargo.lock`, pushes a
+   crates' current version. `make release-bump` writes the version to `[workspace.package]` in the
+   root `Cargo.toml` (every crate inherits it; the internal `meta` crate keeps its own) and to the
+   workspace entries of `Cargo.lock`, and the workflow pushes it as the one commit of a
    `release/vX.Y.Z` branch and opens a `chore(release): bump version to X.Y.Z` pull request, with
    CI dispatched on it.
-2. Review and merge that pull request (a merge commit, as always).
-3. **Auto Tag Release** (`auto-tag-release.yaml`) runs on the push to `main`, sees the version
-   change, and calls
+2. Review and merge that pull request with a merge commit once CI is green. Do not push to the
+   branch or use "Update branch": dispatch the Release workflow again with the same version.
+3. The push to `main` runs the same workflow: it checks that the merge is exactly that bump pull
+   request, waits for CI on the merge commit, then
    [`simple-tag-and-release`](https://github.com/leinardi/gh-reusable-workflows/blob/main/.github/workflows/simple-tag-and-release.md)
-   with it: the `vX.Y.Z` tag on the merge commit, the release with generated notes, and `vMAJOR`
-   and `latest` moved when it is the highest release. A failed run is finished by re-running it.
+   tags `vX.Y.Z` on it, creates the release with generated notes, and moves `vMAJOR` and `latest`
+   when it is the highest release. A failed run is finished by re-running it.
 
 - **The version is chosen at dispatch.** If `main` moves before the bump pull request is merged,
   close it and dispatch again, so the version counts the new commits.
-- **A failed Release run** is finished by re-running it: a leftover `release/vX.Y.Z` branch without
-  a pull request is recreated, and an open pull request gets its CI run again.
+- **A failed bump** is finished by dispatching again: an open bump pull request is reused or
+  brought up to date, and a branch left without one gets a new pull request.
 - **Never edit the version or push a tag by hand.** A version change merged to `main` by anything
-  but the `release/vX.Y.Z` pull request fails Auto Tag Release instead of tagging.
+  but the `release/vX.Y.Z` pull request releases nothing.
 - **v0.2.0 is tagged on crates that still say `0.1.0`** (it predates this flow), so its consumers
   write `version = "0.1"`. The next release needs an explicit version, `0.2.1` or above, since
   `0.2.0` is taken.

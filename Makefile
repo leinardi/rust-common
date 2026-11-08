@@ -23,7 +23,7 @@ MK_COMMON_DIR         := $(REPO_ROOT)/.mk
 MK_COMMON_FILES       := help.mk password.mk pre-commit.mk rust.mk
 
 # Repo-local snippets that are NOT in make-common
-MK_LOCAL_FILES        := audit-deps.mk feature-matrix.mk verify.mk
+MK_LOCAL_FILES        := audit-deps.mk feature-matrix.mk release.mk verify.mk
 
 MK_COMMON_BOOTSTRAP_SCRIPT := $(REPO_ROOT)/scripts/bootstrap-mk-common.sh
 

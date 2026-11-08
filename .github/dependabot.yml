@@ -37,6 +37,7 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
+    labels: ["dependencies", "ci"]
     # fix, not chore: the release version is derived from commit types, and a
     # crate bump (security fixes included) changes what the consumers build
     # when they move to the next tag, so it produces a patch release. The
@@ -51,7 +52,6 @@ updates:
       prefix: "fix(deps)"
       prefix-development: "chore(deps)"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "ci"]
     groups:
       cargo-crates:
         dependency-type: "production"

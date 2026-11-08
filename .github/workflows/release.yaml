@@ -1,11 +1,14 @@
 name: Release
 
-# The first half of a release: resolve the version, write it to the crates' package version
-# (`[workspace.package] version` in Cargo.toml, and the workspace entries of Cargo.lock) on a
-# `release/vX.Y.Z` branch, and open a pull request for it. Merging that pull request is the
-# release: auto-tag-release.yaml sees the version change on main and tags `vX.Y.Z` on the merge
-# commit, so the tag always marks a tree whose crates carry the tag's version. A tag is never
-# created by this workflow.
+# Both halves of a release, on gh-reusable-workflows:
+#   - a dispatch (bump) resolves the version (explicit, or derived by svu from the Conventional
+#     Commits since the last vX.Y.Z tag), writes it into the crates' version (`[workspace.package]
+#     version` in Cargo.toml, and the workspace entries of Cargo.lock) with `make release-bump`,
+#     and opens the release/vX.Y.Z pull request, with CI dispatched on it;
+#   - merging that pull request (release) is checked to be exactly that bump, waits for CI on the
+#     merge commit, and publish tags vX.Y.Z on it and creates the GitHub release, so a release tag
+#     always marks a tree whose crates carry its version.
+# See CONTRIBUTING.md (Releasing).
 on:
   workflow_dispatch:
     inputs:
@@ -14,238 +17,51 @@ on:
         required: false
         type: string
       dry_run:
-        description: "Dry run: resolve the version and print the plan, change nothing"
+        description: "Dry run: resolve the version and show the bump, change nothing"
         type: boolean
         default: false
+  push:
+    branches:
+      - main
+    paths:
+      - Cargo.toml
 
 permissions:
   contents: read
 
-# Two runs at once would race for the same bump branch and version.
-concurrency:
-  group: release
-  cancel-in-progress: false
-
+# No concurrency group here: each reusable workflow has its own, never cancelled.
 jobs:
   bump:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
       pull-requests: write
-      # The `gh workflow run ci.yaml` below: a pull request opened with GITHUB_TOKEN is documented
-      # not to fire `pull_request`, and ci-result is required to merge it.
       actions: write
-    env:
-      # A release tag: vMAJOR.MINOR.PATCH, strict SemVer core, no pre-release, no build metadata.
-      RELEASE_TAG_REGEX: '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-      # Pinned by hand as one unit with gh-reusable-workflows' simple-tag-and-release: version,
-      # archive and its SHA-256 (from the release's checksums.txt). Dependabot does not track it.
-      SVU_VERSION: 3.4.1
-      SVU_ARCHIVE: svu_3.4.1_linux_amd64.tar.gz
-      SVU_SHA256: 7ee8c91998c15109130638dc661a912d5f426e2f8642f6f6c04e6502be920770
+    uses: leinardi/gh-reusable-workflows/.github/workflows/version-bump-pr.yaml@2d081e865362f09c19a32f5ec86bc8a122d7c4aa # v1.5.1
+    with:
+      version: ${{ inputs.version }}
+      dry_run: ${{ inputs.dry_run }}
+      version_command: python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])'
+      # The toolchain rust-toolchain.toml pins, for the cargo metadata the bump runs.
+      bump_command: rustup toolchain install --no-self-update && make release-bump VERSION="$RELEASE_VERSION"
+      allowed_files: Cargo.toml Cargo.lock
 
-    steps:
-      # The bump branch is cut from the dispatched ref; from any other branch it would release
-      # commits that are not on main. A failing step, so a wrong dispatch is red, not skipped.
-      - name: Refuse to release anything but the default branch
-        env:
-          REF: ${{ github.ref }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          if [ -z "$DEFAULT_BRANCH" ] || [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
-            echo "A release runs from the default branch (${DEFAULT_BRANCH:-unknown}) only, got $REF. Nothing was changed." >&2
-            exit 1
-          fi
+  release:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    uses: leinardi/gh-reusable-workflows/.github/workflows/release-on-merge.yaml@2d081e865362f09c19a32f5ec86bc8a122d7c4aa # v1.5.1
+    with:
+      version_command: python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])'
+      allowed_files: Cargo.toml Cargo.lock
 
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # svu reads the tags and the commits since the last one.
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Install svu
-        run: |
-          set -euo pipefail
-          dir="$RUNNER_TEMP/svu"
-          mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$dir/$SVU_ARCHIVE" \
-            "https://github.com/caarlos0/svu/releases/download/v${SVU_VERSION}/${SVU_ARCHIVE}"
-          echo "$SVU_SHA256  $dir/$SVU_ARCHIVE" | sha256sum --check --strict
-          tar -xzf "$dir/$SVU_ARCHIVE" -C "$dir" svu
-          echo "$dir" >> "$GITHUB_PATH"
-
-      - name: Resolve the version to release
-        id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-
-          # The highest strict release tag in its input, or nothing.
-          # ENVIRON, not -v: awk runs escape processing on -v values, turning `\.` into `.`.
-          highest_release() {
-            awk '$0 ~ ENVIRON["RELEASE_TAG_REGEX"]' | sort -V | tail -n1
-          }
-          # The crates' package version, from [workspace.package].
-          CRATES=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-
-          if [ -n "$INPUT_VERSION" ]; then
-            VERSION="v${INPUT_VERSION#v}"
-            if ! [[ "$VERSION" =~ $RELEASE_TAG_REGEX ]]; then
-              echo "Version must be X.Y.Z or vX.Y.Z with no leading zeros, no pre-release and no build metadata (got '$INPUT_VERSION')." >&2
-              exit 1
-            fi
-          else
-            # svu is given the exact tag to count from, never a glob: a pattern would let a stray
-            # tag like v1.9.0-rc.1 become the current version.
-            CURRENT=$(git tag --merged HEAD | highest_release)
-            if [ -z "$CURRENT" ]; then
-              echo "No vX.Y.Z release tag is reachable from this commit, so there is nothing to derive a version from. Re-run with an explicit version." >&2
-              exit 1
-            fi
-            VERSION=$(svu next --tag.pattern "$CURRENT")
-            if ! [[ "$VERSION" =~ $RELEASE_TAG_REGEX ]]; then
-              echo "svu derived '$VERSION' from $CURRENT, which is not a vX.Y.Z release tag." >&2
-              exit 1
-            fi
-            # svu prints the current version unchanged when no feat/fix/breaking commit exists
-            # since the last release.
-            if [ "$VERSION" = "$CURRENT" ]; then
-              echo "No feat/fix or breaking-change commit since ${CURRENT}, so there is nothing to bump. Re-run with an explicit version to force one." >&2
-              exit 1
-            fi
-          fi
-
-          # Tags are immutable: only a version above every released one, and above the crates'
-          # current version, may be written.
-          for floor in "$(git tag --list | highest_release)" "v$CRATES"; do
-            if [ -n "$floor" ]; then
-              HIGHEST=$(printf '%s\n%s\n' "$VERSION" "$floor" | sort -V | tail -n1)
-              if [ "$VERSION" = "$floor" ] || [ "$HIGHEST" != "$VERSION" ]; then
-                echo "$VERSION is not higher than $floor (the latest release tag, or the crates' version $CRATES). Release a higher version." >&2
-                exit 1
-              fi
-            fi
-          done
-
-          echo "Releasing $VERSION (crates now at $CRATES)"
-          echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Rust
-        if: ${{ !inputs.dry_run }}
-        run: rustup toolchain install --no-self-update
-        env:
-          CARGO_INCREMENTAL: "0"
-          CARGO_TERM_COLOR: always
-
-      # Only the version line of [workspace.package] changes; every crate inherits it with
-      # `version.workspace = true`. A plain resolve (cargo metadata, without --locked) then
-      # rewrites the workspace entries of Cargo.lock and nothing else; `cargo update` would also
-      # move unrelated dependencies.
-      - name: Write the version
-        if: ${{ !inputs.dry_run }}
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os
-          import re
-          import tomllib
-
-          path = "Cargo.toml"
-          text = open(path, encoding="utf-8").read()
-          section = re.search(r"(?ms)^\[workspace\.package\]\n(.*?)(?=^\[|\Z)", text)
-          if section is None:
-              raise SystemExit("Cargo.toml has no [workspace.package] table")
-          body, count = re.subn(
-              r'(?m)^version = "[^"]*"$',
-              f'version = "{os.environ["VERSION"]}"',
-              section.group(1),
-          )
-          if count != 1:
-              raise SystemExit(f"[workspace.package] has {count} version lines, expected 1")
-          text = text[: section.start(1)] + body + text[section.end(1) :]
-          open(path, "w", encoding="utf-8").write(text)
-          written = tomllib.loads(text)["workspace"]["package"]["version"]
-          if written != os.environ["VERSION"]:
-              raise SystemExit(f"wrote {written}, expected {os.environ['VERSION']}")
-          PY
-          cargo metadata --format-version 1 >/dev/null
-          cargo metadata --format-version 1 --locked >/dev/null
-          CHANGED=$(git diff --name-only)
-          if [ "$CHANGED" != "$(printf 'Cargo.lock\nCargo.toml')" ]; then
-            echo "Expected Cargo.toml and Cargo.lock to change, got: $CHANGED" >&2
-            exit 1
-          fi
-          # Every line the resolve added to Cargo.lock is a workspace entry's new version.
-          STRAY=$(git diff -U0 Cargo.lock | awk '/^\+[^+]/ && $0 != "+version = \"" ENVIRON["VERSION"] "\""')
-          if [ -n "$STRAY" ]; then
-            echo "The resolve changed more than the workspace versions in Cargo.lock:" >&2
-            echo "$STRAY" >&2
-            exit 1
-          fi
-          git diff
-
-      - name: Commit and push the bump branch
-        if: ${{ !inputs.dry_run }}
-        id: branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          BRANCH="release/v$VERSION"
-
-          # A run that failed after this push leaves the branch behind. The branch is derived
-          # state (main plus the version lines), so recreating it is correct; an open pull
-          # request on it is not, and deleting the branch would close it silently. A run that
-          # failed after opening the pull request is finished by running its CI again.
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            OPEN_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')
-            if [ -n "$OPEN_PR" ]; then
-              echo "$BRANCH already has an open pull request (#$OPEN_PR); running its CI again. Close it to release $VERSION from a fresh main."
-              gh workflow run ci.yaml --ref "$BRANCH"
-              echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-              echo "reused=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Deleting $BRANCH, left behind by an earlier run."
-            git push origin --delete "$BRANCH"
-          fi
-
-          git switch -c "$BRANCH"
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): bump version to $VERSION"
-          git push origin "$BRANCH"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-
-      - name: Open the pull request
-        if: ${{ !inputs.dry_run && steps.branch.outputs.reused != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          BRANCH: ${{ steps.branch.outputs.branch }}
-        run: |
-          set -euo pipefail
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "chore(release): bump version to $VERSION" \
-            --body "Sets the crates' package version to $VERSION. Merge it with a merge commit: auto-tag-release.yaml then tags \`v$VERSION\` on the merge commit and publishes the release. Consumers pin \`tag = \"v$VERSION\"\` with \`version = \"${VERSION%.*}\"\`."
-
-      # Insurance against the documented rule that a GITHUB_TOKEN-authored pull request fires no
-      # `pull_request` run; ci-result also runs on workflow_dispatch.
-      - name: Run CI on the bump branch
-        if: ${{ !inputs.dry_run && steps.branch.outputs.reused != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.branch.outputs.branch }}
-        run: |
-          set -euo pipefail
-          gh workflow run ci.yaml --ref "$BRANCH"
+  publish:
+    needs: release
+    if: needs.release.outputs.release == 'true'
+    permissions:
+      contents: write
+    uses: leinardi/gh-reusable-workflows/.github/workflows/simple-tag-and-release.yaml@2d081e865362f09c19a32f5ec86bc8a122d7c4aa # v1.5.1
+    with:
+      version: ${{ needs.release.outputs.tag }}

@@ -10,6 +10,7 @@ assignees: []
 * [ ] I have checked that there are no duplicate active or recent issues (bugs, questions, or
   feature requests) describing this problem.
 * [ ] I am using the latest `vX.Y.Z` tag of rust-common (or have tested on the `main` branch).
+* [ ] This is not a security vulnerability (those go through the private process in SECURITY.md).
 
 ## Step 2: Describe your environment
 
