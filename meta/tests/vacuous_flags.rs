@@ -14,16 +14,19 @@
 //! No gate passes on nothing: the Makefile, the make fragments, the pre-commit configuration and
 //! every YAML file under `.github` carry none of the flags that turn a failing gate, or one with
 //! nothing to check, into a pass, and every clippy run denies warnings. The check is
-//! `repo_meta::vacuous::VacuousFlags` with the core and Rust sets; this repository needs no
-//! exception.
+//! `repo_meta::vacuous::VacuousFlags` with the core and Rust sets, with one reviewed exception.
 //!
 //! Extracted from swarm-device-access/meta/tests/vacuous_flags.rs at 8b4ab3a3e417.
 
 use repo_meta::vacuous::{AllowedFragment, VacuousFlags};
 use repo_meta::{report, strings};
 
-/// The reviewed exceptions: none.
-const ALLOWED: &[AllowedFragment<'static>] = &[];
+/// The reviewed exceptions.
+const ALLOWED: &[AllowedFragment<'static>] = &[AllowedFragment {
+    file: ".github/workflows/ci.yaml",
+    fragment: "save-if: false",
+    reason: "pre-commit-all restores the rust job's Rust cache and never saves it, so one job writes it",
+}];
 
 fn flags() -> VacuousFlags {
     VacuousFlags::core().with_rust()

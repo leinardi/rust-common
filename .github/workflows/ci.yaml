@@ -10,8 +10,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
-  cancel-in-progress: true
+  # A pull request's runs share one group per branch, so a newer push cancels the older run. Every
+  # other run (a push to main, a dispatch) gets a group of its own: GitHub keeps only one pending
+  # run per group, so a shared group would let a newer push replace a queued run, and a release
+  # gate needs CI to have passed on that exact commit.
+  group: "${{ github.workflow }} @ ${{ github.event_name == 'pull_request' && github.event.pull_request.head.label || github.run_id }}"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Every job reads the repository and nothing else, unless it says otherwise below.
 permissions:
@@ -32,20 +36,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # For the cargo-fmt, cargo-clippy and cargo-machete hooks and the language: system hooks that
-      # run cargo. rust-toolchain.toml names the release, the components and the targets. The Rust
-      # cache is saved only on a pull request, so a push to main does not write a cache scope every
-      # pull request would then restore.
+      # run cargo. rust-toolchain.toml names the release, the components and the targets.
       - name: Set up Rust
         run: rustup toolchain install --no-self-update
 
-      - name: Cache the Rust build
+      # The rust job's cache (shared-key ci, the same clippy flags), restored only: the rust job is
+      # its one writer, so two jobs never race to save the same key.
+      - name: Restore the Rust build cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'pull_request' }}
+          shared-key: ci
+          save-if: false
 
+      # The id gives the resolved Python version, which is part of the cache key.
       - name: Set up Python
+        id: python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
@@ -55,15 +64,21 @@ jobs:
 
       # actionlint runs the shellcheck on PATH over the workflows' run: scripts: the pinned one, not
       # the runner's.
+      # The version is the shellcheck-py rev's in .pre-commit-config.yaml (meta/tests/toolchain.rs);
+      # the action's default sha256 is that release's.
       - name: Set up ShellCheck
-        uses: ./.github/actions/setup-shellcheck
+        uses: leinardi/gh-composite-actions/setup-shellcheck@73fdb81c6cb1d2a3ea7c669e3bc136538e0f4ffa # v1.0.0
+        with:
+          version: v0.11.0
 
-      # Restore only: pre-commit-warmup.yaml saves the entry on main under the same key.
+      # Restore only: pre-commit-warmup.yaml saves the entry on main under the same key, with the
+      # same python_version and pre-commit version as above. The hook environments are bound to the
+      # interpreter that built them, so the resolved Python version is part of the key.
       - name: Restore the pre-commit cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit|${{ runner.os }}|${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit|${{ runner.os }}|${{ steps.python.outputs.python-version }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Run every pre-commit hook on every file
         env:
@@ -84,6 +99,7 @@ jobs:
   actionlint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
@@ -94,9 +110,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run actionlint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -105,6 +122,7 @@ jobs:
   pre-commit-hooks:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
@@ -115,11 +133,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # The core file hooks only: the Rust hooks need the toolchain, which this job does not set
       # up, and pre-commit-all runs them.
       - name: Run pre-commit hooks + reviewdog diff
-        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -136,6 +155,7 @@ jobs:
   markdownlint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
@@ -146,9 +166,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run markdownlint-cli2 via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -157,6 +178,7 @@ jobs:
   shellcheck:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
@@ -167,9 +189,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run shellcheck via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -178,6 +201,7 @@ jobs:
   yamllint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
@@ -188,9 +212,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run yamllint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -205,23 +230,26 @@ jobs:
     # commits. No pull-request title check: squash merging is disabled.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate the commit messages
-        uses: leinardi/gha-pre-commit-reviewdog-actions/conventional-commits@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/conventional-commits@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
 
   # The Rust workspace: the same workspace-wide commands as make verify and the pre-commit hooks,
   # plus cargo-deny (advisories, licences, bans and sources; the advisory database needs the
-  # network). The toolchain matches rust-toolchain.toml. The cache is saved only on a pull
-  # request, as in pre-commit-all.
+  # network). The toolchain matches rust-toolchain.toml. The cache is saved only on main, the one
+  # ref whose caches every pull request can restore, under shared-key ci, which pre-commit-all
+  # restores too.
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -233,6 +261,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
         run: rustup toolchain install --no-self-update
@@ -240,7 +270,8 @@ jobs:
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'pull_request' }}
+          shared-key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -254,6 +285,10 @@ jobs:
 
       - name: Check Rust documentation
         run: make rust-doc
+
+      # make release-bump, which the Release workflow runs, against throwaway workspaces.
+      - name: Test the release bump
+        run: make release-bump-test
 
       - name: Check dependencies with cargo-deny
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -278,14 +313,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
         run: rustup toolchain install --no-self-update
 
+      # Its own key: each crate builds under other feature sets than the rust job's.
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'pull_request' }}
+          shared-key: ci
+          key: feature-matrix
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Lint and test every feature set
         run: make rust-feature-matrix
