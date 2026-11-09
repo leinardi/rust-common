@@ -37,7 +37,7 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
-    uses: leinardi/gh-reusable-workflows/.github/workflows/version-bump-pr.yaml@2d081e865362f09c19a32f5ec86bc8a122d7c4aa # v1.5.1
+    uses: leinardi/gh-reusable-workflows/.github/workflows/version-bump-pr.yaml@83b67e285a75505ff27d4ce827235335b8101527 # v1.6.1
     with:
       version: ${{ inputs.version }}
       dry_run: ${{ inputs.dry_run }}
@@ -52,7 +52,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-    uses: leinardi/gh-reusable-workflows/.github/workflows/release-on-merge.yaml@2d081e865362f09c19a32f5ec86bc8a122d7c4aa # v1.5.1
+    uses: leinardi/gh-reusable-workflows/.github/workflows/release-on-merge.yaml@83b67e285a75505ff27d4ce827235335b8101527 # v1.6.1
     with:
       version_command: python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])'
       allowed_files: Cargo.toml Cargo.lock
@@ -62,6 +62,6 @@ jobs:
     if: needs.release.outputs.release == 'true'
     permissions:
       contents: write
-    uses: leinardi/gh-reusable-workflows/.github/workflows/simple-tag-and-release.yaml@2d081e865362f09c19a32f5ec86bc8a122d7c4aa # v1.5.1
+    uses: leinardi/gh-reusable-workflows/.github/workflows/simple-tag-and-release.yaml@83b67e285a75505ff27d4ce827235335b8101527 # v1.6.1
     with:
       version: ${{ needs.release.outputs.tag }}
