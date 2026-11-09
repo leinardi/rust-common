@@ -67,7 +67,7 @@ jobs:
       # The version is the shellcheck-py rev's in .pre-commit-config.yaml (meta/tests/toolchain.rs);
       # the action's default sha256 is that release's.
       - name: Set up ShellCheck
-        uses: leinardi/gh-composite-actions/setup-shellcheck@73fdb81c6cb1d2a3ea7c669e3bc136538e0f4ffa # v1.0.0
+        uses: leinardi/gh-composite-actions/setup-shellcheck@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           version: v0.11.0
 
