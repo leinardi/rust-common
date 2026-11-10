@@ -422,3 +422,28 @@ async fn a_bounded_call_ends_with_its_context() {
     .await;
     assert_eq!(ok.unwrap(), 7);
 }
+
+/// The call is boxed before the bounded future is built, so awaiting a large call costs the caller
+/// a pointer, not the call: unboxed, the call's 32 KiB sat in the returned future several times
+/// over, and every caller tripped `clippy::large_futures`.
+#[test]
+fn a_bounded_call_is_boxed() {
+    let ctx = Context::background();
+    let call = async {
+        #[expect(
+            clippy::large_stack_arrays,
+            reason = "the call must be large, held across an await"
+        )]
+        let buffer = [0_u8; 32 * 1024];
+        tokio::task::yield_now().await;
+        Ok::<_, bollard::errors::Error>(buffer[0])
+    };
+    let call_size = size_of_val(&call);
+    let bounded = with_timeout(&ctx, Duration::from_secs(1), call);
+    assert!(call_size >= 32 * 1024, "the call is {call_size} bytes");
+    assert!(
+        size_of_val(&bounded) < 1024,
+        "the bounded future is {} bytes",
+        size_of_val(&bounded)
+    );
+}
