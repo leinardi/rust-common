@@ -433,19 +433,27 @@ impl From<DockerError> for OpError {
 
 /// Runs one Docker call under its own deadline, `timeout` from now, derived from `ctx`.
 ///
+/// The call is boxed before the returned future is built, so that future stays a few words
+/// whatever the call's size: bollard's request futures are large, and a caller that awaited them
+/// inline would trip `clippy::large_futures`. As with Go's `context.WithTimeout`, the deadline
+/// starts at this call, not at the first poll.
+///
 /// # Errors
 ///
 /// The call's error, or why the context ended first.
-pub async fn with_timeout<T, E: Into<OpError>>(
+pub fn with_timeout<T, E: Into<OpError>>(
     ctx: &Context,
     timeout: Duration,
     call: impl Future<Output = Result<T, E>>,
-) -> Result<T, OpError> {
-    ctx.with_timeout(timeout)
-        .run(call)
-        .await
-        .map_err(OpError::Ended)?
-        .map_err(Into::into)
+) -> impl Future<Output = Result<T, OpError>> {
+    let call = Box::pin(call);
+    let ctx = ctx.with_timeout(timeout);
+    async move {
+        ctx.run(call)
+            .await
+            .map_err(OpError::Ended)?
+            .map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
