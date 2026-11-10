@@ -32,12 +32,15 @@
 //!   for the Rust release in `rust-toolchain.toml`, Cargo's `rust-version` and a Dockerfile, and
 //!   [`toolchain::make_value`].
 //! - [`ci`]: `ci-result` needs every gate, `pre-commit-all` skips only hooks a needed job runs.
+//! - [`git_pins`]: the `tag` and `version` pins of a consumer's dependencies on this workspace's
+//!   git repository agree with the release and with each other.
 //! - [`vacuous`]: no gate carries a flag that makes it pass on nothing.
 //!
 //! The crate needs no network, no Docker and no tool beyond git.
 
 pub mod ci;
 pub mod dockerfile;
+pub mod git_pins;
 pub mod image;
 mod problem;
 mod repo;
