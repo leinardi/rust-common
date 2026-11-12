@@ -21,6 +21,7 @@
 mod common;
 
 use common::{Kind, Loaded, Schema, Value};
+use config_layer::yaml::Booleans;
 use config_layer::{
     BareZero, BoolSpelling, DayUnit, DurationSyntax, EmptyValue, EnvOverlay, IntegerSyntax,
     IntegerText, ItemTrim, ListSplit, Map, Node, Origin, Raw, ScalarLists, Typing, Unseparated,
@@ -90,6 +91,7 @@ fn load(text: &str, environment: &[&str]) -> Loaded {
     common::load(
         &SCHEMA,
         typing(),
+        Booleans::GoYamlV3,
         &overlay(|path| SCHEMA.knows(path)),
         text,
         environment,
@@ -423,6 +425,29 @@ fn difference_14_refused_forms() {
             loaded.problems
         );
     }
+}
+
+/// Go's koanf with yaml.v3 reads `true` in another case as text, as a label value and as a label
+/// key, so a label Go accepted still types as text.
+#[test]
+fn mixed_case_booleans_in_the_file_are_label_text() {
+    let loaded = load(
+        "maintenance:\n  digest_refresh:\n    include_labels:\n      tRuE: FaLsE\n      tier: tRuE\n",
+        &[],
+    );
+    assert_eq!(loaded.problems, []);
+    assert_eq!(
+        loaded.value("maintenance.digest_refresh.include_labels"),
+        Some(&Value::TextMap(
+            [("tRuE", "FaLsE"), ("tier", "tRuE")]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                .collect()
+        ))
+    );
+    let loaded = load("terminal:\n  enabled: TRUE\n", &[]);
+    assert_eq!(loaded.problems, []);
+    assert_eq!(loaded.value("terminal.enabled"), Some(&Value::Bool(true)));
 }
 
 /// The segment after a map path keeps its case; deeper segments are lowercased again.

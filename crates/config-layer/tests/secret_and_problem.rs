@@ -104,8 +104,12 @@ fn yaml_errors_never_hold_the_file_text() {
     let directory = tempfile::tempdir().expect("a temporary directory");
     let text = format!("registry:\n  password: {SENTINEL}\nother: 1\nother: 2\n");
     let path = write(directory.path(), "config.yaml", text.as_bytes());
-    let error = config_layer::yaml::read_file(&path, config_layer::yaml::MissingFile::Refused)
-        .expect_err("a duplicate key");
+    let error = config_layer::yaml::read_file(
+        &path,
+        config_layer::yaml::MissingFile::Refused,
+        config_layer::yaml::Booleans::AnyCase,
+    )
+    .expect_err("a duplicate key");
     let mut shown = vec![error.to_string(), format!("{error:?}")];
     let mut source = std::error::Error::source(&error);
     while let Some(cause) = source {

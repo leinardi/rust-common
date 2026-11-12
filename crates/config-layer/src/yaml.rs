@@ -11,17 +11,19 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! The YAML file into the untyped tree, through serde-saphyr with spans. Only `true`, `True`,
-//! `TRUE`, `false`, `False` and `FALSE` are booleans (`tRue` and `yes` are text), `010` is
-//! octal, a duplicate key is an error, and `.nan` and `.inf` reach the typed read, which refuses
-//! them with a rule of its own. An empty file, or one holding only comments or a null, is an
-//! empty mapping; any other top-level value but a mapping is an error. Errors are one line with
-//! their location, without source excerpts or library hints, in `Debug` as in `Display`.
+//! The YAML file into the untyped tree, through serde-saphyr with spans. `true` and `false` are
+//! booleans and `yes`, `on` and `y` are text; whether `true` and `false` in another case
+//! (`tRuE`) are booleans too is the caller's [`Booleans`]. `010` is octal, a duplicate key is an
+//! error, and `.nan` and `.inf` reach the typed read, which refuses them with a rule of its own.
+//! An empty file, or one holding only comments or a null, is an empty mapping; any other
+//! top-level value but a mapping is an error. Errors are one line with their location, without
+//! source excerpts or library hints, in `Debug` as in `Display`.
 //!
 //! Extracted from bitgauge/src/config/raw.rs (the visitor and `from_yaml`) and
 //! bitgauge/src/config/load.rs (the file read and the diagnostic) at 9be3b0d20765; the author
 //! relicenses them from GPL-3.0-or-later to MIT OR Apache-2.0 for this repository.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -31,16 +33,32 @@ use serde_saphyr::Spanned;
 
 use crate::tree::{Location, Map, Node, Origin, Raw};
 
-/// Reads YAML text into the untyped tree.
+/// Which scalars spelled `true` or `false` are booleans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Booleans {
+    /// `true` and `false` in any case (`tRuE`, `FALSE`), as `BitGauge` reads them: serde-saphyr's
+    /// `strict_booleans`.
+    AnyCase,
+    /// `true`, `True`, `TRUE`, `false`, `False` and `FALSE` only, as yaml.v3 decodes into an
+    /// untyped value; another case (`tRuE`) is text, as a value and as a mapping key. Explicit
+    /// tags still differ: yaml.v3 refuses `!!bool` on another spelling (`!!bool tRuE`,
+    /// `!!bool "tRuE"`), which reads as its text here (a quoted one with an escape stays a
+    /// boolean, a multi-line one keeps its source lines), and reads a custom tag (`!x TRUE`) as
+    /// text, which is a boolean here in both modes.
+    GoYamlV3,
+}
+
+/// Reads YAML text into the untyped tree, with `booleans` deciding which scalars are booleans.
 ///
 /// # Errors
 ///
 /// A [`YamlError`] for text that is not valid YAML, holds a duplicate key, more than one document
 /// or a mapping key that is not text, or is not a mapping at the top.
-pub fn parse(text: &str) -> Result<Map, YamlError> {
+pub fn parse(text: &str, booleans: Booleans) -> Result<Map, YamlError> {
     let options = serde_saphyr::options! {
-        // Only true and false are booleans; `yes`, `on` and `y` stay text, as yaml.v3 decodes
-        // them into an untyped value.
+        // Only true and false are booleans, in any case; `yes`, `on` and `y` stay text, as
+        // yaml.v3 decodes them into an untyped value. Booleans::GoYamlV3 narrows the case after.
         strict_booleans: true,
         // `010` is 8, as yaml.v3 reads an integer with base prefixes.
         legacy_octal_numbers: true,
@@ -48,9 +66,17 @@ pub fn parse(text: &str) -> Result<Map, YamlError> {
         // .nan and .inf reach the typed read, which refuses them with a rule of their own.
         non_finite_float_policy: serde_saphyr::NonFiniteFloatPolicy::PassThrough,
     };
-    let root: Option<Parsed> = serde_saphyr::from_str_with_options(text, options)
-        .map_err(|error| YamlError(Kind::parse(&error)))?;
-    match root.map(|parsed| parsed.0) {
+    let root = match booleans {
+        Booleans::AnyCase => serde_saphyr::from_str_with_options::<Option<Parsed>>(text, options)
+            .map(|root| root.map(|parsed| parsed.0)),
+        Booleans::GoYamlV3 => {
+            let _source = Source::enter(text);
+            serde_saphyr::from_str_with_options::<Option<Spanned<Parsed>>>(text, options)
+                .map(|root| root.map(resolved))
+        }
+    }
+    .map_err(|error| YamlError(Kind::parse(&error)))?;
+    match root {
         None | Some(Raw::Null) => Ok(Map::new()),
         Some(Raw::Map(entries)) => Ok(entries),
         Some(
@@ -73,15 +99,15 @@ pub enum MissingFile {
     Empty,
 }
 
-/// Reads the YAML file at `path` into the untyped tree; a missing file is an error or an empty
-/// mapping, as `missing` says.
+/// Reads the YAML file at `path` into the untyped tree, as [`parse`] reads it under `booleans`; a
+/// missing file is an error or an empty mapping, as `missing` says.
 ///
 /// # Errors
 ///
 /// [`FileError::NotFound`] for a missing file under [`MissingFile::Refused`],
 /// [`FileError::Read`] for a file that cannot be read (a directory, no permission, not UTF-8),
 /// [`FileError::Yaml`] for one [`parse`] refuses.
-pub fn read_file(path: &Path, missing: MissingFile) -> Result<Map, FileError> {
+pub fn read_file(path: &Path, missing: MissingFile, booleans: Booleans) -> Result<Map, FileError> {
     let text = match std::fs::metadata(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => match missing {
             MissingFile::Refused => {
@@ -102,7 +128,7 @@ pub fn read_file(path: &Path, missing: MissingFile) -> Result<Map, FileError> {
             source,
         })?,
     };
-    parse(&text).map_err(|source| FileError::Yaml {
+    parse(&text, booleans).map_err(|source| FileError::Yaml {
         path: path.to_owned(),
         source,
     })
@@ -206,13 +232,73 @@ impl<'de> Deserialize<'de> for Parsed {
 
 /// A value read with its location.
 fn placed(spanned: Spanned<Parsed>) -> Node {
-    Node::new(
-        spanned.value.0,
-        Origin::Yaml(Location {
-            line: spanned.defined.line(),
-            column: spanned.defined.column(),
-        }),
-    )
+    let origin = Origin::Yaml(Location {
+        line: spanned.defined.line(),
+        column: spanned.defined.column(),
+    });
+    Node::new(resolved(spanned), origin)
+}
+
+thread_local! {
+    /// The text [`Booleans::GoYamlV3`] is parsing, for the spelling of a boolean: serde's
+    /// `Deserialize`, which serde-saphyr's `Spanned` needs, takes no state of its own.
+    static SOURCE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The text being parsed under [`Booleans::GoYamlV3`], set for this thread until dropped.
+struct Source(Option<String>);
+
+impl Source {
+    fn enter(text: &str) -> Self {
+        Self(SOURCE.with(|source| source.replace(Some(text.to_owned()))))
+    }
+
+    fn active() -> bool {
+        SOURCE
+            .try_with(|source| source.borrow().is_some())
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for Source {
+    fn drop(&mut self) {
+        SOURCE.with(|source| source.replace(self.0.take()));
+    }
+}
+
+/// The spellings yaml.v3 resolves to a boolean in an untyped value (its resolve table).
+const YAML_V3_BOOLEANS: [&str; 6] = ["true", "True", "TRUE", "false", "False", "FALSE"];
+
+/// A value with a boolean read as yaml.v3 reads it, while [`Booleans::GoYamlV3`] is parsing:
+/// text unless spelled as yaml.v3 spells a boolean. An alias resolves to its anchor's span, so it
+/// reads as the anchored scalar does. A quoted scalar is a boolean only under `!!bool`, so its
+/// spelling is inside the quotes; one with an escape keeps serde-saphyr's reading.
+fn resolved(spanned: Spanned<Parsed>) -> Raw {
+    let Raw::Bool(value) = spanned.value.0 else {
+        return spanned.value.0;
+    };
+    let span = spanned.defined.span();
+    // try_with: a parse from another thread-local's destructor keeps serde-saphyr's reading.
+    let spelling = SOURCE
+        .try_with(|source| {
+            let source = source.borrow();
+            let start = usize::try_from(span.byte_offset()?).ok()?;
+            let end = start.checked_add(usize::try_from(span.byte_len()?).ok()?)?;
+            let written = source.as_deref()?.get(start..end)?;
+            let unquoted = ['"', '\'']
+                .iter()
+                .find_map(|&quote| written.strip_prefix(quote)?.strip_suffix(quote))
+                .unwrap_or(written);
+            (!written.starts_with('"') || !unquoted.contains('\\')).then(|| unquoted.to_owned())
+        })
+        .ok()
+        .flatten();
+    match spelling {
+        Some(spelling) if !YAML_V3_BOOLEANS.contains(&spelling.as_str()) => Raw::Text(spelling),
+        // Without the parse's source (Booleans::AnyCase) or a span (serde-saphyr spans every
+        // scalar it reads from a string), serde-saphyr's reading stands.
+        Some(_) | None => Raw::Bool(value),
+    }
 }
 
 struct RawVisitor;
@@ -279,11 +365,20 @@ impl<'de> Visitor<'de> for RawVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Raw, A::Error> {
         let mut entries = Map::new();
-        while let Some(key) = access.next_key::<Parsed>()? {
-            let Raw::Text(key) = key.0 else {
+        loop {
+            // A key's spelling needs its span; without Booleans::GoYamlV3, it is read as before.
+            let key = if Source::active() {
+                access.next_key::<Spanned<Parsed>>()?.map(resolved)
+            } else {
+                access.next_key::<Parsed>()?.map(|key| key.0)
+            };
+            let Some(key) = key else {
+                break;
+            };
+            let Raw::Text(key) = key else {
                 return Err(de::Error::custom(format!(
                     "a mapping key must be text, not {}",
-                    key.0.kind()
+                    key.kind()
                 )));
             };
             let value = access.next_value::<Spanned<Parsed>>()?;

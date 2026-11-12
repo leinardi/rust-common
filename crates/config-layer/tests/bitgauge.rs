@@ -25,7 +25,7 @@ mod common;
 use std::path::Path;
 
 use common::{Kind, Loaded, Schema, Value};
-use config_layer::yaml::{self, FileError, MissingFile};
+use config_layer::yaml::{self, Booleans, FileError, MissingFile};
 use config_layer::{
     BoolSpelling, EmptyValue, EnvOverlay, ItemTrim, ListSplit, Origin, QuotedScalars, Source,
     Typing, Unseparated,
@@ -75,7 +75,15 @@ fn overlay() -> EnvOverlay<'static> {
     reason = "a test helper: a broken fixture fails the test"
 )]
 fn load(text: &str, environment: &[&str]) -> Loaded {
-    common::load(&SCHEMA, typing(), &overlay(), text, environment).expect("valid YAML")
+    common::load(
+        &SCHEMA,
+        typing(),
+        Booleans::AnyCase,
+        &overlay(),
+        text,
+        environment,
+    )
+    .expect("valid YAML")
 }
 
 fn text(value: &str) -> Value {
@@ -95,20 +103,34 @@ fn yaml_diagnostics_are_single_line_without_developer_hints() {
         "server: {}\n---\nserver: {}\n",
         "- not\n- a mapping\n",
     ] {
-        let message = yaml::parse(text).expect_err("invalid YAML").to_string();
+        let message = yaml::parse(text, Booleans::AnyCase)
+            .expect_err("invalid YAML")
+            .to_string();
         assert!(!message.contains('\n'), "{message}");
         assert!(!message.contains("DuplicateKeyPolicy"), "{message}");
         assert!(!message.contains("from_str_multiple"), "{message}");
         assert!(!message.contains("display_name: one"), "{message}");
         assert!(!message.is_empty(), "a diagnostic explains the failure");
     }
-    let duplicate = yaml::parse("server:\n  display_name: one\n  display_name: two\n")
-        .expect_err("a duplicate key");
+    let duplicate = yaml::parse(
+        "server:\n  display_name: one\n  display_name: two\n",
+        Booleans::AnyCase,
+    )
+    .expect_err("a duplicate key");
     assert_eq!(
         duplicate.location().map(|location| location.line),
         Some(3),
         "a syntax problem keeps its location: {duplicate}"
     );
+}
+
+/// `BitGauge` reads `true` and `false` in any case as booleans (serde-saphyr's `strict_booleans`),
+/// so a mixed-case value types as a boolean and is refused where text is expected.
+#[test]
+fn mixed_case_booleans_in_the_file_are_booleans() {
+    let loaded = load("metrics:\n  enabled: tRuE\nlog:\n  level: FaLsE\n", &[]);
+    assert_eq!(loaded.value("metrics.enabled"), Some(&Value::Bool(true)));
+    assert_eq!(loaded.problem_paths(), ["log.level"]);
 }
 
 /// From: bitgauge `environment_mapping`
@@ -235,21 +257,22 @@ fn file_paths() {
     let directory = tempfile::tempdir().expect("a temporary directory");
     let missing = directory.path().join("missing.yaml");
     assert!(matches!(
-        yaml::read_file(&missing, MissingFile::Refused),
+        yaml::read_file(&missing, MissingFile::Refused, Booleans::AnyCase),
         Err(FileError::NotFound { .. })
     ));
     assert_eq!(
-        yaml::read_file(&missing, MissingFile::Empty).expect("a missing default path"),
+        yaml::read_file(&missing, MissingFile::Empty, Booleans::AnyCase)
+            .expect("a missing default path"),
         config_layer::Map::new()
     );
     assert!(matches!(
-        yaml::read_file(directory.path(), MissingFile::Refused),
+        yaml::read_file(directory.path(), MissingFile::Refused, Booleans::AnyCase),
         Err(FileError::Read { .. })
     ));
     let readme = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
     assert!(
         matches!(
-            yaml::read_file(readme, MissingFile::Refused),
+            yaml::read_file(readme, MissingFile::Refused, Booleans::AnyCase),
             Err(FileError::Yaml { .. })
         ),
         "a file that is not YAML"
@@ -261,11 +284,14 @@ fn file_paths() {
         "- a list\n",
         "just text\n",
     ] {
-        assert!(yaml::parse(invalid).is_err(), "{invalid:?} must not load");
+        assert!(
+            yaml::parse(invalid, Booleans::AnyCase).is_err(),
+            "{invalid:?} must not load"
+        );
     }
     for empty in ["", "# only a comment\n", "~\n", "{}\n"] {
         assert_eq!(
-            yaml::parse(empty).expect("an empty configuration"),
+            yaml::parse(empty, Booleans::AnyCase).expect("an empty configuration"),
             config_layer::Map::new(),
             "{empty:?} is empty"
         );

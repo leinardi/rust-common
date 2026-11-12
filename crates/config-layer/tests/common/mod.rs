@@ -107,7 +107,8 @@ impl Schema {
     }
 }
 
-/// Loads `text` and `environment` under `typing`, with `overlay` built over `schema`.
+/// Loads `text` (its booleans read as `booleans` says) and `environment` under `typing`, with
+/// `overlay` built over `schema`.
 #[expect(
     clippy::expect_used,
     reason = "a test helper: a broken fixture fails the test"
@@ -115,11 +116,12 @@ impl Schema {
 pub fn load(
     schema: &Schema,
     typing: Typing,
+    booleans: yaml::Booleans,
     overlay: &EnvOverlay<'_>,
     text: &str,
     environment: &[&str],
 ) -> Result<Loaded, yaml::YamlError> {
-    let mut tree = yaml::parse(text)?;
+    let mut tree = yaml::parse(text, booleans)?;
     let pairs: Vec<(&str, &str)> = environment
         .iter()
         .map(|entry| entry.split_once('=').expect("NAME=value"))
