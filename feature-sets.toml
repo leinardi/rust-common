@@ -33,6 +33,13 @@ clock = [
     { all-features = true },
 ]
 
+# config-layer has no features: runhold (from v1.2.0) and bitgauge (once it moves over) build it
+# as it is and pass their own environment rules, typing profile and rule texts.
+config-layer = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
 # service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
 # no-default-features set, as the default enables nothing); swarm-scheduler-exporter and
 # swarm-device-access also use the runtime and the signals, awtrix-controller the runtime only.
@@ -84,16 +91,26 @@ tracing-setup = [
 ]
 
 # docker-client: swarm-rootless-docker builds it with `attach` (the host socket only: unix, no
-# TCP) and `test-util` for its tests; a program that reads DOCKER_HOST adds `tcp` (and `tls` for
-# DOCKER_TLS_VERIFY and DOCKER_CERT_PATH). The User-Agent, the API version and the
-# response-header timeout are parameters. Every feature is also built alone.
+# TCP) and `test-util` for its tests; runhold with `exec`, `logs`, `raw-spec`, `stats`, `tcp` and
+# `tls`; a program that reads DOCKER_HOST adds `tcp` (and `tls` for DOCKER_TLS_VERIFY and
+# DOCKER_CERT_PATH). The User-Agent, the API version and the response-header timeout are
+# parameters. Every feature is also built alone.
 docker-client = [
     { no-default-features = true },
     { features = ["tcp"] },
     { features = ["tls"] },
     { features = ["attach"] },
     { features = ["test-util"] },
+    { features = ["exec"] },
     { features = ["attach", "test-util"] },     # swarm-rootless-docker, with its tests
+    { features = ["exec", "test-util"] },       # exec with its tests
+    { features = ["logs"] },
+    { features = ["logs", "test-util"] },       # logs with its tests
+    { features = ["stats"] },
+    { features = ["stats", "test-util"] },      # stats with its tests
+    { features = ["raw-spec"] },
+    { features = ["raw-spec", "test-util"] },   # raw-spec with its tests
+    { features = ["exec", "logs", "raw-spec", "stats", "tcp", "tls"] }, # runhold
     { features = ["tcp", "tls", "test-util"] }, # a DOCKER_HOST client, with its tests
     { all-features = true },
 ]

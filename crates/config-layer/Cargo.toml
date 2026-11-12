@@ -1,0 +1,28 @@
+[package]
+name = "config-layer"
+description = "A layered YAML and environment configuration loader that keeps where every value came from and reports every problem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "config_layer"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The duration type and its friendly parser; no tzdb or system feature.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+# The visitor that reads the YAML into the untyped tree (the traits serde-saphyr implements).
+serde_core = { version = "1.0.229", default-features = false, features = ["std"] }
+# The YAML parser with spans, strict booleans and a duplicate-key policy.
+serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"

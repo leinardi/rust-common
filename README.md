@@ -16,12 +16,13 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. All six are available.
+it. All seven are available.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
 | `clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
-| `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind, a stream pump, attach and wait, a fake engine | `tcp`, `tls`, `attach`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
+| `config-layer` (available) | A layered YAML and environment configuration loader: a spanned untyped tree, an environment overlay checked against the known paths, koanf's merge, typed reads under a profile, `*_file` secrets, every problem with its source | – (the environment rules, the typing profile and the rule texts are parameters) |
+| `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind, a stream pump, attach and wait, exec with a bidirectional stream, log streams and the output demultiplexer, one-shot stats, a raw service spec round trip, a fake engine | `tcp`, `tls`, `attach`, `exec`, `logs`, `stats`, `raw-spec`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
 | `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
@@ -44,10 +45,32 @@ handed:
 
 It depends on `jiff` and on `tokio` with only the `time` feature.
 
+### config-layer
+
+The pieces of a configuration loader that collects every problem instead of stopping at the
+first: the YAML file and the environment become one untyped tree whose values remember where they
+came from, and the caller walks its own schema over it.
+
+| Item | What it is |
+| --- | --- |
+| `Raw`, `Node`, `Map`, `Origin`, `Location` | the untyped tree; a node's origin is the file's line and column or the environment variable that set it; `Raw` displays in the shape of Go's `fmt.Sprint` of the decoded YAML (floats as `f64` `Display`) |
+| `yaml::parse`, `yaml::read_file`, `MissingFile`, `Booleans` | serde-saphyr with strict booleans (`true` and `false` in any case, `AnyCase`, or only yaml.v3's six spellings with `tRuE` text, `GoYamlV3`), legacy octal, duplicate keys refused and non-finite floats passed through; an empty or null file is an empty map, a non-map root an error; `YamlError` is one line with its location (`location()`); a missing file is an error (`Refused`) or an empty map (`Empty`) |
+| `merge`, `insert_path`, `null_keys` | koanf's merge (maps key by key, anything else replaced), a value set at a path, and every null with its path (`a.b`, `a.list[2]`) |
+| `EnvOverlay`, `Overlay`, `EnvVar` | `<PREFIX>A<SEP>B` to the path `a.b`, checked against the caller's known paths before insertion; the unknown and ignored variables come back as data. Parameters: `Unseparated` (`Ignored` or `Mapped`), `map_paths` (the next segment keeps its case, as Go's `envKey`), `lists` with a `ListSplit::new` (separator, `ItemTrim`, `EmptyValue`); the predicates are `Send + Sync` |
+| `Typing` | `integer`, `number`, `boolean`, `text`, `list`, `duration` on a node, from `Typing::strict()` widened by `QuotedScalars`, `BoolSpelling` (`Exact`, `GoParseBool`), `IntegerSyntax` (`Decimal`, `GoBaseZero`), `IntegerText`, `ScalarLists` and a `DurationSyntax`; `TypeError` |
+| `parse_duration`, `DurationSyntax` | jiff's friendly syntax, with an optional bare `0` (`BareZero`) and a leading day unit of exactly 24 hours (`DayUnit`), expanded as koanf does |
+| `read_secret_file`, `SecretTrim`, `EmptySecret`, `SecretError` | a `*_file` key's file, trimmed by Go's `TrimRight(" \t\r\n")` or `TrimSpace`; an error names the key and the path, never the content |
+| `Problem`, `Source`, `Problems` | a path, its source (file and location, file, variable, secret file, missing) and the caller's message; the collector sorts stably by path |
+| `text` | `quote`, `float` and `duration`, how a value is written in a message |
+
+It depends on `serde-saphyr` (`deserialize`), `serde_core`, `jiff` (`std`) and `thiserror`.
+
 ### docker-client
 
-The plumbing around [bollard](https://crates.io/crates/bollard) that programs share, and none of
-its calls: those stay the program's, made on the `Docker` that `connect` returns.
+The plumbing around [bollard](https://crates.io/crates/bollard) that programs share, and the few
+calls bollard cannot make as a program needs them (`attach::wait`, `events_established`, the `exec`
+calls, the `logs` streams, `stats::stats_once` and the `raw_spec` calls); every other call stays the
+program's, made on the `Docker` that `connect` returns.
 
 | Item | What it is |
 | --- | --- |
@@ -59,20 +82,27 @@ its calls: those stay the program's, made on the `Docker` that `connect` returns
 | `pump_stream` | a bollard stream (events, logs) as a channel, fed by a task that ends when the receiver is dropped, the `CancellationToken` fires or the stream ends |
 | `events_established(&config, options, timeout, &cancel)`, `EventStream` | `GET /events` returned only once the engine answered 2xx, so a subscription that is stalled or refused is an error (`Timeout`, `NotFound`, ...) within the caller's timeout instead of a stream that looks live, and a fired `CancellationToken` interrupts the establishment (`ErrorKind::Cancelled`, not `Timeout`); items are `EventMessage`s, and a line that does not decode is an `Err` item that does not end the stream |
 | `attach::attach`, `attach::wait` (`attach`) | a container's stdout and stderr as `Output` pieces through the pump, and its exit code under a `WaitCondition` (`NotRunning`, `NextExit`, `Removed`); `wait(&config, id, condition, timeout, cancel)` is async and returns only after the engine answered the response headers (or fails with `Timeout`, or `Cancelled` when `cancel` fires first) (it holds the waiter then, so a `start` cannot overtake it), then yields the code through a `oneshot` (a non-zero exit, which bollard reports as an error, is the code) |
-| `test_util` (`test-util`) | a fake engine on a unix socket: scripted `Reply`s per path (JSON, 404, 409, an event stream that closes, an attach upgrade, a body that stalls after the headers, a delayed or silent answer, headers now and body later), and the requests it recorded; its connection tasks end with it |
+| `exec::create`, `exec::start`, `exec::resize`, `exec::inspect`, `ExecOptions`, `ExecStream`, `ExecState` (`exec`) | a command in a running container, with moby's Go client's request bodies byte for byte (no create-time console size; a 409 on create, the container not running, is `Conflict`); `start(&config, id, framing, timeout, &cancel)` returns once the engine answered `101`, the connection then the command's stdin (a write-side shutdown closes it) and output, as raw as the engine sends it; `resize` sends `?h=<rows>&w=<cols>`; `inspect` gives `running` and the exit code once there is one; `create` and `resize` trim the ID and refuse an empty one, as moby's client does. `cancel` ends any call; `timeout` bounds `create`, `resize` and `inspect` whole and `start`'s establishment, not its session |
+| `demux::Demuxer`, `Framing`, `Frame`, `Pipe`, `DemuxError` (`exec` or `logs`) | an output stream split into stdout and stderr by the framing the caller knows (`Multiplexed` without a TTY, `Raw` with one, all stdout), never guessed from the bytes as bollard does; it reads as moby's `stdcopy.StdCopy` (a partial frame at the end dropped, stream byte 3 the engine's error, an unknown byte an error); fed chunk by chunk (`push`, `next_frame`) or from an `AsyncRead` (`read_frame`) |
+| `logs::container_logs`, `logs::service_logs`, `ContainerLogsOptions`, `ServiceLogsOptions`, `LogItem`, `StreamEnd` (`logs`) | a log stream read as the caller's `Framing` (never guessed), returned once the engine answered 2xx: a receiver of `Frame`s followed by exactly one `End`, `Eof` (the body ended, a partial last frame dropped), `Cancelled` (the token fired, sent once there is room) or `Failed(Error)` (the connection cut, an error the engine sent in the stream); the task ends when the receiver is dropped (or closed, which may skip the `End`). The query is moby's Go client's: flags only when set, `tail` not for empty or `all`, `since` and `until` as given (the conversion of a time is the caller's), the keys sorted and escaped as `url.Values.Encode`, the ID trimmed (not escaped); a service has no `until`; a container's `details` is not offered. `timeout` bounds the establishment, not the stream |
+| `stats::stats_once` (`stats`) | one sample of a container's usage as bollard's `ContainerStatsResponse`, asked as moby's Go client asks with the previous sample included (`?stream=false`, no `one-shot`), so `precpu_stats` is a real previous sample; the first JSON value of the answer is read, as Go's decoder; no streaming variant; `timeout` bounds the whole call |
+| `raw_spec::inspect_service_raw`, `raw_spec::update_service_raw`, `RawService` (`raw-spec`) | a service as the engine's JSON, every field kept (bollard's typed spec drops the fields newer than its model): `GET /services/{id}` (no query, as moby's Go client without `InsertDefaults`) with `Version.Index` (missing or not an unsigned integer is an error), and `POST /services/{id}/update?version=<index>` with the spec as the body, answering the warnings; a 409 is `Conflict`, while Docker 29 answers a stale version with a 500 (`update out of sequence`, `Other`); no registry authentication header. moby's client-side spec checks and its `:latest` on an untagged image are the caller's; `timeout` bounds each whole call |
+| `test_util` (`test-util`) | a fake engine on a unix socket: scripted `Reply`s per path (JSON, 404, 409, an event stream that closes, an attach upgrade, an exec session that records what the client writes and can echo it, raw bytes then a held connection, a body that stalls after the headers, a delayed or silent answer, headers now and body later), and the requests it recorded, bodies included; its connection tasks end with it |
 
-`wait` and `events_established` send their request themselves, over hyper on the `Config`'s endpoint
-(unix; `tcp` adds plain TCP with keepalive on, 15 seconds idle and apart and nine probes on Linux;
-`tls` adds rustls presenting `cert.pem` and `key.pem` and trusting the system roots plus `ca.pem`,
-exactly as bollard's ssl path does, so both kinds of call accept the same engines), because bollard
-hides when a streaming call's headers arrive. They send the config's `User-Agent`.
+`wait`, `events_established` and the `exec`, `logs`, `stats` and `raw_spec` calls send their request
+themselves, over hyper on the `Config`'s endpoint (unix; `tcp` adds plain TCP with keepalive on, 15
+seconds idle and apart and nine probes on Linux; `tls` adds rustls presenting `cert.pem` and
+`key.pem` and trusting the system roots plus `ca.pem`, exactly as bollard's ssl path does, so both
+kinds of call accept the same engines), because bollard hides when a streaming call's headers arrive
+and guesses the framing of an exec session or a log, and its typed models drop or rename fields.
+They send the config's `User-Agent` and API version.
 
 It depends on `bollard` (pinned `=0.21.1`, only `pipe`; `tcp` adds `http`, `tls` adds `ssl`, which
 is rustls on ring), `http`, `hyper` (`client`, `http1`), `hyper-util`, `http-body-util`, `bytes`,
 `serde_json`, `serde_urlencoded`, `futures-util`, `thiserror`, `tokio` (`rt`, `time`, `sync`,
-`macros`, `net`; `io-util` with `test-util`) and `tokio-util`; `tcp` adds `socket2`, and `tls`
-adds `rustls`, `tokio-rustls`, `rustls-native-certs` and `rustls-pki-types`, all of which bollard's
-`ssl` already brings.
+`macros`, `net`; `io-util` with `exec`, `logs` and `test-util`) and `tokio-util`; `tcp` adds
+`socket2`, and `tls` adds `rustls`, `tokio-rustls`, `rustls-native-certs` and `rustls-pki-types`,
+all of which bollard's `ssl` already brings.
 
 ### testenv-core
 

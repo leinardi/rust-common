@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::error::{Error, bounded};
 use crate::pump::pump_stream;
-use crate::stream::{Target, establish};
+use crate::stream::{Call, Target, establish};
 
 /// A piece of a container's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,12 +129,12 @@ pub async fn wait(
 ) -> Result<oneshot::Receiver<Result<i64, Error>>, Error> {
     let (mut sender, receiver) = oneshot::channel();
     let target = Target::of(config);
+    let path = format!("/containers/{id}/wait");
+    let query = format!("condition={}", condition.as_str());
     let body = establish(
         config,
         &target,
-        Method::POST,
-        &format!("/containers/{id}/wait"),
-        &format!("condition={}", condition.as_str()),
+        Call::new(Method::POST, &path, &query),
         timeout,
         &cancel,
     )
