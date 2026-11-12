@@ -1,6 +1,6 @@
 [package]
 name = "docker-client"
-description = "Small shared plumbing over bollard: a connection from DOCKER_HOST, a whole-call timeout, an error with a kind, a stream pump, exec with a bidirectional stream, log streams, and a fake engine for tests"
+description = "Small shared plumbing over bollard: a connection from DOCKER_HOST, a whole-call timeout, an error with a kind, a stream pump, exec with a bidirectional stream, log streams, one-shot stats, a raw service spec round trip, and a fake engine for tests"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -36,6 +36,10 @@ exec = ["tokio/io-util"]
 # Container and service logs as frames of the caller's framing, followed by why the stream ended
 # (io-util for the demultiplexer's reader).
 logs = ["tokio/io-util"]
+# One container stats sample with the previous one (bollard's model).
+stats = []
+# A service inspected and updated as raw JSON, every field kept.
+raw-spec = []
 # The fake engine on a unix socket that the consumers' tests share.
 test-util = ["tokio/net", "tokio/io-util"]
 

@@ -29,6 +29,8 @@
 //!   connection, and `demux`, which splits an output stream by the framing the caller knows.
 //! * `logs` (feature): a container's or a service's log stream as `demux` frames, followed by
 //!   exactly one end that says why it stopped.
+//! * `stats` (feature): one container stats sample with the previous one inside it.
+//! * `raw-spec` (feature): a service inspected and updated as raw JSON, so no field is lost.
 //! * `test_util` (feature `test-util`): a fake engine on a unix socket.
 //!
 //! Extracted from swarm-rootless-docker/src/docker/mod.rs at e0961f77655f (the call bound, the
@@ -53,6 +55,13 @@ pub mod logs;
 #[cfg(feature = "logs")]
 mod logs_tests;
 mod pump;
+#[cfg(feature = "raw-spec")]
+pub mod raw_spec;
+#[cfg(feature = "stats")]
+pub mod stats;
+#[cfg(test)]
+#[cfg(any(feature = "stats", feature = "raw-spec"))]
+mod stats_spec_tests;
 mod stream;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;

@@ -117,7 +117,7 @@ impl<'call> Call<'call> {
         }
     }
 
-    #[cfg(feature = "exec")]
+    #[cfg(any(feature = "exec", feature = "raw-spec"))]
     /// The same request with `json` as its body, sent with `Content-Type: application/json`.
     pub(crate) fn json(self, json: String) -> Self {
         Self {
@@ -169,7 +169,7 @@ pub(crate) async fn establish(
 ///
 /// As [`establish`], with [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) also for a body that
 /// does not end in `timeout`.
-#[cfg(feature = "exec")]
+#[cfg(any(feature = "exec", feature = "stats", feature = "raw-spec"))]
 pub(crate) async fn complete(
     config: &Config,
     target: &Target,
@@ -310,8 +310,14 @@ async fn exchange(
 }
 
 /// `id` without surrounding whitespace, or the refusal of an empty one, as moby's client's
-/// `trimID` does before the calls that use it; `kind` names the object (`container`, `exec`).
-#[cfg(any(feature = "exec", feature = "logs"))]
+/// `trimID` does before the calls that use it; `kind` names the object (`container`, `exec`,
+/// `service`).
+#[cfg(any(
+    feature = "exec",
+    feature = "logs",
+    feature = "stats",
+    feature = "raw-spec"
+))]
 pub(crate) fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> {
     let id = id.trim();
     if id.is_empty() {
@@ -323,7 +329,13 @@ pub(crate) fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> 
 }
 
 /// A failure of the client's own making, in bollard's error.
-#[cfg(any(feature = "tls", feature = "exec", feature = "logs"))]
+#[cfg(any(
+    feature = "tls",
+    feature = "exec",
+    feature = "logs",
+    feature = "stats",
+    feature = "raw-spec"
+))]
 pub(crate) fn failure(message: String) -> BollardError {
     BollardError::DockerStreamError { error: message }
 }

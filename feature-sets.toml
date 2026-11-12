@@ -91,9 +91,10 @@ tracing-setup = [
 ]
 
 # docker-client: swarm-rootless-docker builds it with `attach` (the host socket only: unix, no
-# TCP) and `test-util` for its tests; a program that reads DOCKER_HOST adds `tcp` (and `tls` for
-# DOCKER_TLS_VERIFY and DOCKER_CERT_PATH). The User-Agent, the API version and the
-# response-header timeout are parameters. Every feature is also built alone.
+# TCP) and `test-util` for its tests; runhold with `exec`, `logs`, `raw-spec`, `stats`, `tcp` and
+# `tls`; a program that reads DOCKER_HOST adds `tcp` (and `tls` for DOCKER_TLS_VERIFY and
+# DOCKER_CERT_PATH). The User-Agent, the API version and the response-header timeout are
+# parameters. Every feature is also built alone.
 docker-client = [
     { no-default-features = true },
     { features = ["tcp"] },
@@ -105,6 +106,11 @@ docker-client = [
     { features = ["exec", "test-util"] },       # exec with its tests
     { features = ["logs"] },
     { features = ["logs", "test-util"] },       # logs with its tests
+    { features = ["stats"] },
+    { features = ["stats", "test-util"] },      # stats with its tests
+    { features = ["raw-spec"] },
+    { features = ["raw-spec", "test-util"] },   # raw-spec with its tests
+    { features = ["exec", "logs", "raw-spec", "stats", "tcp", "tls"] }, # runhold
     { features = ["tcp", "tls", "test-util"] }, # a DOCKER_HOST client, with its tests
     { all-features = true },
 ]
