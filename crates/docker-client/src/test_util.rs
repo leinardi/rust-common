@@ -31,6 +31,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::task::{JoinHandle, JoinSet};
 
 const JSON_HEAD: &str = "Content-Type: application/json\r\nConnection: close\r\n";
+/// The engine's answer to an attach or an exec start it accepts.
+const UPGRADED: &[u8] = b"HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n";
 
 /// What a route answers.
 #[derive(Debug, Clone)]
@@ -57,6 +59,17 @@ pub enum Reply {
     },
     /// The request is logged and never answered, the connection held open.
     Silent,
+    /// An accepted exec start or attach: a `101`, then `output` at once, then every byte the client
+    /// writes is recorded ([`FakeEngine::sessions`]), and echoed back when `echo` is set, until
+    /// the client shuts its write side down; then the connection closes. The connection stays
+    /// open after `output` until the client's end, so a client that waits for more output than
+    /// `output` before writing hangs: the test of a client that buffers.
+    Session {
+        /// What the command writes before reading anything.
+        output: Vec<u8>,
+        /// Whether each chunk the client writes is sent back.
+        echo: bool,
+    },
     /// A `200` with the headers sent at once and `body` only after `body_delay`: a wait the engine
     /// has registered but whose container has not exited yet.
     HeadersThenBody {
@@ -72,6 +85,12 @@ impl Reply {
     #[must_use]
     pub fn ok(body: &str) -> Self {
         Self::json(200, body)
+    }
+
+    /// `status` with a JSON `body`, as the engine answers `201` to a create.
+    #[must_use]
+    pub fn json_status(status: u16, body: &str) -> Self {
+        Self::json(status, body)
     }
 
     /// An engine error: `status` with `{"message": message}`.
@@ -113,7 +132,7 @@ impl Reply {
     /// An accepted attach: a `101` and then `stream`'s bytes, then the connection closes.
     #[must_use]
     pub fn upgrade(stream: &[u8]) -> Self {
-        let mut bytes = b"HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n".to_vec();
+        let mut bytes = UPGRADED.to_vec();
         bytes.extend_from_slice(stream);
         Self::Raw(bytes)
     }
@@ -135,6 +154,8 @@ pub struct Request {
     pub target: String,
     /// The headers as sent.
     pub headers: Vec<(String, String)>,
+    /// The body as sent, as long as its `Content-Length` says (empty without one).
+    pub body: Vec<u8>,
 }
 
 impl Request {
@@ -184,6 +205,7 @@ pub struct FakeEngine {
     dir: PathBuf,
     socket: PathBuf,
     requests: Arc<Mutex<Vec<Request>>>,
+    sessions: Arc<Mutex<Vec<Vec<u8>>>>,
     task: JoinHandle<()>,
 }
 
@@ -211,7 +233,11 @@ impl FakeEngine {
                 .collect(),
         );
         let requests = Arc::new(Mutex::new(Vec::new()));
-        let log = Arc::clone(&requests);
+        let sessions = Arc::new(Mutex::new(Vec::new()));
+        let log = Log {
+            requests: Arc::clone(&requests),
+            sessions: Arc::clone(&sessions),
+        };
         let task = tokio::spawn(async move {
             // The connection tasks live in this set, so aborting this task (the engine's drop)
             // drops the set and aborts them too, closing their sockets.
@@ -220,7 +246,7 @@ impl FakeEngine {
                 tokio::select! {
                     accepted = listener.accept() => {
                         let Ok((stream, _)) = accepted else { break };
-                        connections.spawn(serve(stream, Arc::clone(&routes), Arc::clone(&log)));
+                        connections.spawn(serve(stream, Arc::clone(&routes), log.clone()));
                     }
                     Some(_) = connections.join_next() => {}
                 }
@@ -230,6 +256,7 @@ impl FakeEngine {
             dir,
             socket,
             requests,
+            sessions,
             task,
         })
     }
@@ -248,6 +275,23 @@ impl FakeEngine {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
+
+    /// What the client wrote in each [`Reply::Session`] that has ended (the client shut its write
+    /// side down), oldest first.
+    #[must_use]
+    pub fn sessions(&self) -> Vec<Vec<u8>> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// Where the connections record what they received.
+#[derive(Clone)]
+struct Log {
+    requests: Arc<Mutex<Vec<Request>>>,
+    sessions: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl Drop for FakeEngine {
@@ -257,25 +301,18 @@ impl Drop for FakeEngine {
     }
 }
 
-async fn serve(
-    mut stream: UnixStream,
-    routes: Arc<Vec<(String, Reply)>>,
-    log: Arc<Mutex<Vec<Request>>>,
-) {
+async fn serve(mut stream: UnixStream, routes: Arc<Vec<(String, Reply)>>, log: Log) {
     let _ = answer(&mut stream, &routes, &log).await;
 }
 
-async fn answer(
-    stream: &mut UnixStream,
-    routes: &[(String, Reply)],
-    log: &Mutex<Vec<Request>>,
-) -> io::Result<()> {
+async fn answer(stream: &mut UnixStream, routes: &[(String, Reply)], log: &Log) -> io::Result<()> {
     let request = read_request(stream).await?;
     let reply = routes
         .iter()
         .find(|(path, _)| path == request.path())
         .map_or_else(Reply::not_found, |(_, reply)| reply.clone());
-    log.lock()
+    log.requests
+        .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(request);
     let mut reply = reply;
@@ -300,6 +337,28 @@ async fn answer(
         }
         Reply::Raw(bytes) => stream.write_all(&bytes).await?,
         Reply::Silent => tokio::time::sleep(Duration::from_secs(3600)).await,
+        Reply::Session { output, echo } => {
+            stream.write_all(UPGRADED).await?;
+            stream.write_all(&output).await?;
+            stream.flush().await?;
+            let mut received = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).await?;
+                if read == 0 {
+                    break;
+                }
+                received.extend_from_slice(&chunk[..read]);
+                if echo {
+                    stream.write_all(&chunk[..read]).await?;
+                    stream.flush().await?;
+                }
+            }
+            log.sessions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(received);
+        }
         Reply::HeadersThenBody { body_delay, body } => {
             let head = format!(
                 "HTTP/1.1 200 OK\r\n{JSON_HEAD}Content-Length: {}\r\n\r\n",
@@ -315,7 +374,7 @@ async fn answer(
     stream.shutdown().await
 }
 
-/// Reads the request line and headers, and drains a body its `Content-Length` announces.
+/// Reads the request line and headers, and the body its `Content-Length` announces.
 async fn read_request(stream: &mut UnixStream) -> io::Result<Request> {
     let mut buffer = Vec::new();
     let head_end = loop {
@@ -332,26 +391,30 @@ async fn read_request(stream: &mut UnixStream) -> io::Result<Request> {
     let head = String::from_utf8_lossy(&buffer[..head_end]).into_owned();
     let mut lines = head.lines();
     let mut first = lines.next().unwrap_or_default().split(' ');
-    let request = Request {
+    let mut request = Request {
         method: first.next().unwrap_or_default().to_owned(),
         target: first.next().unwrap_or_default().to_owned(),
         headers: lines
             .filter_map(|line| line.split_once(':'))
             .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
             .collect(),
+        body: Vec::new(),
     };
     let length: usize = request
         .header("content-length")
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
-    let mut remaining = length.saturating_sub(buffer.len() - head_end);
-    while remaining > 0 {
+    let mut body = buffer[head_end..].to_vec();
+    body.truncate(length);
+    while body.len() < length {
         let mut chunk = [0_u8; 4096];
-        let read = stream.read(&mut chunk[..remaining.min(4096)]).await?;
+        let wanted = (length - body.len()).min(chunk.len());
+        let read = stream.read(&mut chunk[..wanted]).await?;
         if read == 0 {
             break;
         }
-        remaining -= read;
+        body.extend_from_slice(&chunk[..read]);
     }
+    request.body = body;
     Ok(request)
 }

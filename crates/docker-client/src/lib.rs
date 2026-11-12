@@ -12,7 +12,7 @@
  */
 
 //! Small shared plumbing over [bollard]: what a program that talks to a Docker engine through it
-//! needs around the SDK, and nothing of the calls themselves.
+//! needs around the SDK, and the few calls bollard cannot make as a program needs them.
 //!
 //! * [`Config`] and [`connect`]: the engine's address (a unix socket, or `DOCKER_HOST` and the
 //!   `DOCKER_*` variables through [`Config::from_env`]), a fixed API version, a `User-Agent` and
@@ -25,6 +25,8 @@
 //!   with its receiver or its [`CancellationToken`].
 //! * [`events_established`]: the events stream, returned once the engine accepted the subscription.
 //! * `attach` (feature): a container's output pump and its exit code (`wait` returns once the engine holds the waiter).
+//! * `exec` (feature): a command run in a container, its standard streams one bidirectional
+//!   connection, and `demux`, which splits an output stream by the framing the caller knows.
 //! * `test_util` (feature `test-util`): a fake engine on a unix socket.
 //!
 //! Extracted from swarm-rootless-docker/src/docker/mod.rs at e0961f77655f (the call bound, the
@@ -35,7 +37,14 @@
 #[cfg(feature = "attach")]
 pub mod attach;
 mod config;
+#[cfg(feature = "exec")]
+pub mod demux;
 mod error;
+#[cfg(feature = "exec")]
+pub mod exec;
+#[cfg(test)]
+#[cfg(feature = "exec")]
+mod exec_tests;
 mod pump;
 mod stream;
 #[cfg(any(test, feature = "test-util"))]

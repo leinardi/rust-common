@@ -11,7 +11,9 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
-//! Streaming calls whose response headers can be awaited.
+//! Calls sent on docker-client's own connection: streaming ones whose response headers can be
+//! awaited, ones that take the connection over, and plain ones whose JSON body bollard cannot
+//! express.
 //!
 //! bollard hides the moment a streaming call's response headers arrive: its stream is lazy, and
 //! its first item is the first body chunk. For a wait (the engine has the waiter once it answers
@@ -24,6 +26,7 @@
 //! trusts and presents: the system roots plus `ca.pem`, and `cert.pem` and `key.pem` from the
 //! config's certificate directory, so bollard's calls and these accept the same engines.
 
+use std::future::Future;
 use std::time::Duration;
 
 use bollard::errors::Error as BollardError;
@@ -31,9 +34,9 @@ use bollard::models::EventMessage;
 use bollard::query_parameters::EventsOptions;
 use bytes::Bytes;
 use futures_util::Stream;
-use http::header::{HOST, USER_AGENT};
+use http::header::{CONNECTION, CONTENT_TYPE, HOST, UPGRADE, USER_AGENT};
 use http::{Method, Request, StatusCode};
-use http_body_util::{BodyExt as _, Empty};
+use http_body_util::{BodyExt as _, Either, Empty, Full};
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use tokio::net::UnixStream;
@@ -94,9 +97,50 @@ fn versioned_path(config: &Config, path: &str) -> String {
     )
 }
 
-/// Sends `method path?query` to `target` and returns the response once its headers are in and say
-/// success, its body unread. `timeout` bounds the connection, the headers and, for a refusal, the
-/// refusal's body; `cancel` ends it at once.
+/// A request to the engine: its method, path (without the version prefix), query string (without
+/// its `?`, empty for none) and JSON body.
+pub(crate) struct Call<'call> {
+    pub(crate) method: Method,
+    pub(crate) path: &'call str,
+    pub(crate) query: &'call str,
+    pub(crate) body: Option<Bytes>,
+}
+
+impl<'call> Call<'call> {
+    /// `method path?query` with no body.
+    pub(crate) const fn new(method: Method, path: &'call str, query: &'call str) -> Self {
+        Self {
+            method,
+            path,
+            query,
+            body: None,
+        }
+    }
+
+    #[cfg(feature = "exec")]
+    /// The same request with `json` as its body, sent with `Content-Type: application/json`.
+    pub(crate) fn json(self, json: String) -> Self {
+        Self {
+            body: Some(Bytes::from(json)),
+            ..self
+        }
+    }
+}
+
+/// The body of a request: none (no `Content-Length`, as the calls before the exec ones sent), or
+/// a JSON document whose length hyper announces.
+type RequestBody = Either<Empty<Bytes>, Full<Bytes>>;
+
+/// Whether the connection may be taken over after a `101`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Plain,
+    Upgrade,
+}
+
+/// Sends `call` to `target` and returns the response once its headers are in and say success, its
+/// body unread. `timeout` bounds the connection, the headers and, for a refusal, the refusal's
+/// body; `cancel` ends it at once.
 ///
 /// # Errors
 ///
@@ -106,65 +150,168 @@ fn versioned_path(config: &Config, path: &str) -> String {
 pub(crate) async fn establish(
     config: &Config,
     target: &Target,
-    method: Method,
-    path: &str,
-    query: &str,
+    call: Call<'_>,
     timeout: Duration,
     cancel: &CancellationToken,
 ) -> Result<Incoming, Error> {
-    let mut uri = versioned_path(config, path);
-    if !query.is_empty() {
+    let request = request(config, target, call, Mode::Plain)?;
+    guarded(timeout, cancel, async {
+        let response = exchange(target, request, Mode::Plain).await?;
+        accepted(response).await
+    })
+    .await
+}
+
+/// Sends `call` to `target` and returns the whole body of its successful answer. `timeout` bounds
+/// all of it, the body included; `cancel` ends it at once.
+///
+/// # Errors
+///
+/// As [`establish`], with [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) also for a body that
+/// does not end in `timeout`.
+#[cfg(feature = "exec")]
+pub(crate) async fn complete(
+    config: &Config,
+    target: &Target,
+    call: Call<'_>,
+    timeout: Duration,
+    cancel: &CancellationToken,
+) -> Result<Bytes, Error> {
+    let request = request(config, target, call, Mode::Plain)?;
+    guarded(timeout, cancel, async {
+        let response = exchange(target, request, Mode::Plain).await?;
+        Ok(accepted(response).await?.collect().await?.to_bytes())
+    })
+    .await
+}
+
+/// Sends `call` to `target` asking to take the connection over (`Connection: Upgrade`,
+/// `Upgrade: tcp`, as moby's hijack does) and returns the connection once the engine has answered
+/// `101`. `timeout` bounds the connection and the answer, not the session; `cancel` ends the
+/// establishment at once.
+///
+/// # Errors
+///
+/// As [`establish`]; an answer other than `101` is an error with that status (so 404 is
+/// `NotFound`, 409 `Conflict`, a `200` `Other`) and moby's text, `unable to upgrade to tcp,
+/// received <status>`.
+#[cfg(feature = "exec")]
+pub(crate) async fn upgrade(
+    config: &Config,
+    target: &Target,
+    call: Call<'_>,
+    timeout: Duration,
+    cancel: &CancellationToken,
+) -> Result<hyper::upgrade::Upgraded, Error> {
+    let request = request(config, target, call, Mode::Upgrade)?;
+    guarded(timeout, cancel, async {
+        let response = exchange(target, request, Mode::Upgrade).await?;
+        let status = response.status();
+        if status != StatusCode::SWITCHING_PROTOCOLS {
+            return Err(BollardError::DockerResponseServerError {
+                status_code: status.as_u16(),
+                message: format!("unable to upgrade to tcp, received {}", status.as_u16()),
+            });
+        }
+        Ok(hyper::upgrade::on(response).await?)
+    })
+    .await
+}
+
+/// The request for `call`, with the client's version prefix and `User-Agent`.
+fn request(
+    config: &Config,
+    target: &Target,
+    call: Call<'_>,
+    mode: Mode,
+) -> Result<Request<RequestBody>, Error> {
+    let mut uri = versioned_path(config, call.path);
+    if !call.query.is_empty() {
         uri.push('?');
-        uri.push_str(query);
+        uri.push_str(call.query);
     }
     let mut request = Request::builder()
-        .method(method)
+        .method(call.method)
         .uri(uri)
         .header(HOST, target.host());
     if let Some(agent) = &config.user_agent {
         request = request.header(USER_AGENT, agent.as_str());
     }
-    let request = request
-        .body(Empty::<Bytes>::new())
-        .map_err(|error| Error::from(BollardError::from(error)))?;
-    let answered = async {
-        let response = match target {
-            #[cfg(feature = "tls")]
-            Target::Tls { addr, certs } => {
-                let certs = certs.clone();
-                let connector = tokio::task::spawn_blocking(move || tls_connector(&certs))
-                    .await
-                    .map_err(|error| failure(error.to_string()))??;
-                let name = rustls_pki_types::ServerName::try_from(host_of(addr).to_owned())
-                    .map_err(|error| failure(format!("TLS server name {addr:?}: {error}")))?;
-                let tls = connector.connect(name, connect_tcp(addr).await?).await?;
-                send(TokioIo::new(tls), request).await?
-            }
-            Target::Unix(path) => {
-                send(TokioIo::new(UnixStream::connect(path).await?), request).await?
-            }
-            #[cfg(feature = "tcp")]
-            Target::Tcp(addr) => send(TokioIo::new(connect_tcp(addr).await?), request).await?,
-        };
-        let status = response.status();
-        if status.is_success() {
-            return Ok(response.into_body());
+    if mode == Mode::Upgrade {
+        request = request.header(CONNECTION, "Upgrade").header(UPGRADE, "tcp");
+    }
+    let body = match call.body {
+        Some(json) => {
+            request = request.header(CONTENT_TYPE, "application/json");
+            Either::Right(Full::new(json))
         }
-        let body = response.into_body().collect().await?.to_bytes();
-        Err(refusal(status, &body))
+        None => Either::Left(Empty::new()),
     };
+    request
+        .body(body)
+        .map_err(|error| Error::from(BollardError::from(error)))
+}
+
+/// Runs `exchange` under `timeout` and `cancel`, `cancel` winning a tie.
+async fn guarded<T>(
+    timeout: Duration,
+    cancel: &CancellationToken,
+    exchange: impl Future<Output = Result<T, BollardError>>,
+) -> Result<T, Error> {
     tokio::select! {
         biased;
         () = cancel.cancelled() => Err(Error::cancelled()),
-        bounded = tokio::time::timeout(timeout, answered) => match bounded {
-            Ok(result) => result.map_err(|error: BollardError| Error::from(error)),
+        bounded = tokio::time::timeout(timeout, exchange) => match bounded {
+            Ok(result) => result.map_err(Error::from),
             Err(_elapsed) => Err(Error::timeout(timeout)),
         },
     }
 }
 
-#[cfg(feature = "tls")]
-fn failure(message: String) -> BollardError {
+/// The body of a successful `response`, or the refusal its status and body make.
+async fn accepted(response: http::Response<Incoming>) -> Result<Incoming, BollardError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response.into_body());
+    }
+    let body = response.into_body().collect().await?.to_bytes();
+    Err(refusal(status, &body))
+}
+
+/// Connects to `target` and sends `request` on that connection.
+async fn exchange(
+    target: &Target,
+    request: Request<RequestBody>,
+    mode: Mode,
+) -> Result<http::Response<Incoming>, BollardError> {
+    match target {
+        #[cfg(feature = "tls")]
+        Target::Tls { addr, certs } => {
+            let certs = certs.clone();
+            let connector = tokio::task::spawn_blocking(move || tls_connector(&certs))
+                .await
+                .map_err(|error| failure(error.to_string()))??;
+            let name = rustls_pki_types::ServerName::try_from(host_of(addr).to_owned())
+                .map_err(|error| failure(format!("TLS server name {addr:?}: {error}")))?;
+            let tls = connector.connect(name, connect_tcp(addr).await?).await?;
+            send(TokioIo::new(tls), request, mode).await
+        }
+        Target::Unix(path) => {
+            send(
+                TokioIo::new(UnixStream::connect(path).await?),
+                request,
+                mode,
+            )
+            .await
+        }
+        #[cfg(feature = "tcp")]
+        Target::Tcp(addr) => send(TokioIo::new(connect_tcp(addr).await?), request, mode).await,
+    }
+}
+
+/// A failure of the client's own making, in bollard's error.
+#[cfg(any(feature = "tls", feature = "exec"))]
+pub(crate) fn failure(message: String) -> BollardError {
     BollardError::DockerStreamError { error: message }
 }
 
@@ -233,16 +380,27 @@ pub(crate) async fn connect_tcp(addr: &str) -> std::io::Result<tokio::net::TcpSt
 
 async fn send<I>(
     io: I,
-    request: Request<Empty<Bytes>>,
+    request: Request<RequestBody>,
+    mode: Mode,
 ) -> Result<http::Response<Incoming>, BollardError>
 where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
 {
     let (mut sender, connection) = hyper::client::conn::http1::handshake(io).await?;
-    // Ends with the response body; a failure surfaces through the body or the response.
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    // Ends with the response body, or hands the connection over after a `101`; a failure surfaces
+    // through the body, the response or the upgrade.
+    match mode {
+        Mode::Plain => {
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+        }
+        Mode::Upgrade => {
+            tokio::spawn(async move {
+                let _ = connection.with_upgrades().await;
+            });
+        }
+    }
     Ok(sender.send_request(request).await?)
 }
 
@@ -291,9 +449,7 @@ pub async fn events_established(
     let body = establish(
         config,
         &target,
-        Method::GET,
-        "/events",
-        &query,
+        Call::new(Method::GET, "/events", &query),
         timeout,
         cancel,
     )
