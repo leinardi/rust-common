@@ -309,8 +309,21 @@ async fn exchange(
     }
 }
 
+/// `id` without surrounding whitespace, or the refusal of an empty one, as moby's client's
+/// `trimID` does before the calls that use it; `kind` names the object (`container`, `exec`).
+#[cfg(any(feature = "exec", feature = "logs"))]
+pub(crate) fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(Error::from(failure(format!(
+            "invalid {kind} name or ID: value is empty"
+        ))));
+    }
+    Ok(id)
+}
+
 /// A failure of the client's own making, in bollard's error.
-#[cfg(any(feature = "tls", feature = "exec"))]
+#[cfg(any(feature = "tls", feature = "exec", feature = "logs"))]
 pub(crate) fn failure(message: String) -> BollardError {
     BollardError::DockerStreamError { error: message }
 }

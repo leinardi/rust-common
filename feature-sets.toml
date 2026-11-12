@@ -103,6 +103,8 @@ docker-client = [
     { features = ["exec"] },
     { features = ["attach", "test-util"] },     # swarm-rootless-docker, with its tests
     { features = ["exec", "test-util"] },       # exec with its tests
+    { features = ["logs"] },
+    { features = ["logs", "test-util"] },       # logs with its tests
     { features = ["tcp", "tls", "test-util"] }, # a DOCKER_HOST client, with its tests
     { all-features = true },
 ]

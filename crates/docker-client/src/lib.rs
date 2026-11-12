@@ -27,6 +27,8 @@
 //! * `attach` (feature): a container's output pump and its exit code (`wait` returns once the engine holds the waiter).
 //! * `exec` (feature): a command run in a container, its standard streams one bidirectional
 //!   connection, and `demux`, which splits an output stream by the framing the caller knows.
+//! * `logs` (feature): a container's or a service's log stream as `demux` frames, followed by
+//!   exactly one end that says why it stopped.
 //! * `test_util` (feature `test-util`): a fake engine on a unix socket.
 //!
 //! Extracted from swarm-rootless-docker/src/docker/mod.rs at e0961f77655f (the call bound, the
@@ -37,7 +39,7 @@
 #[cfg(feature = "attach")]
 pub mod attach;
 mod config;
-#[cfg(feature = "exec")]
+#[cfg(any(feature = "exec", feature = "logs"))]
 pub mod demux;
 mod error;
 #[cfg(feature = "exec")]
@@ -45,6 +47,11 @@ pub mod exec;
 #[cfg(test)]
 #[cfg(feature = "exec")]
 mod exec_tests;
+#[cfg(feature = "logs")]
+pub mod logs;
+#[cfg(test)]
+#[cfg(feature = "logs")]
+mod logs_tests;
 mod pump;
 mod stream;
 #[cfg(any(test, feature = "test-util"))]

@@ -1,6 +1,6 @@
 [package]
 name = "docker-client"
-description = "Small shared plumbing over bollard: a connection from DOCKER_HOST, a whole-call timeout, an error with a kind, a stream pump, exec with a bidirectional stream, and a fake engine for tests"
+description = "Small shared plumbing over bollard: a connection from DOCKER_HOST, a whole-call timeout, an error with a kind, a stream pump, exec with a bidirectional stream, log streams, and a fake engine for tests"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -33,6 +33,9 @@ attach = []
 # Exec: create, start as a bidirectional stream, resize and inspect, and the demultiplexer for its
 # output.
 exec = ["tokio/io-util"]
+# Container and service logs as frames of the caller's framing, followed by why the stream ended
+# (io-util for the demultiplexer's reader).
+logs = ["tokio/io-util"]
 # The fake engine on a unix socket that the consumers' tests share.
 test-util = ["tokio/net", "tokio/io-util"]
 

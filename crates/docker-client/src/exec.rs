@@ -18,7 +18,9 @@
 //! a TTY session through its framing guess (a chunk starting with `\x01` is taken for a header),
 //! its resize takes an `i32` where moby's Go client sends a `uint` (the engine reads a `u32`), and its create body leaves
 //! out the fields moby's writes. The request bodies here are the ones moby's Go client writes,
-//! byte for byte.
+//! byte for byte. The IDs go into the path as they are, where moby's client escapes them: an
+//! engine-issued ID or name needs no escaping, and one with `/`, `?`, `#` or `%` is the caller's
+//! to keep out.
 //!
 //! The wire is moby/moby `client/container_exec.go` and `client/hijack.go`'s at client/v0.6.2
 //! (`ExecCreate`, `ExecAttach`, `ExecResize`, `ExecInspect`, `setupHijackConn`); the code is
@@ -38,7 +40,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::demux::Framing;
 use crate::error::Error;
-use crate::stream::{Call, Target, complete, failure, upgrade};
+use crate::stream::{Call, Target, complete, failure, trim_id, upgrade};
 
 /// What to run, and which of its standard streams to attach.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -130,18 +132,6 @@ fn go_json(items: &[String]) -> String {
     }
     written.push(']');
     written
-}
-
-/// `id` without surrounding whitespace, or moby's refusal of an empty one, as its client's `trimID`
-/// does before `ExecCreate` and `ExecResize` (not before the start or the inspect).
-fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> {
-    let id = id.trim();
-    if id.is_empty() {
-        return Err(Error::from(failure(format!(
-            "invalid {kind} name or ID: value is empty"
-        ))));
-    }
-    Ok(id)
 }
 
 /// Creates an exec instance of `options` in the running container `container` and returns its ID.

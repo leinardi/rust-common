@@ -49,6 +49,9 @@ pub enum Reply {
     Stalled,
     /// These bytes as they are, then the connection closes.
     Raw(Vec<u8>),
+    /// These bytes as they are, then the connection is held open for an hour: a followed stream
+    /// that has gone quiet.
+    Held(Vec<u8>),
     /// The request is logged at once, `reply` is sent only after `delay`: an engine that is slow
     /// to answer the headers.
     Delayed {
@@ -336,6 +339,11 @@ async fn answer(stream: &mut UnixStream, routes: &[(String, Reply)], log: &Log) 
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
         Reply::Raw(bytes) => stream.write_all(&bytes).await?,
+        Reply::Held(bytes) => {
+            stream.write_all(&bytes).await?;
+            stream.flush().await?;
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
         Reply::Silent => tokio::time::sleep(Duration::from_secs(3600)).await,
         Reply::Session { output, echo } => {
             stream.write_all(UPGRADED).await?;
