@@ -33,6 +33,13 @@ clock = [
     { all-features = true },
 ]
 
+# config-layer has no features: runhold (from v1.2.0) and bitgauge (once it moves over) build it
+# as it is and pass their own environment rules, typing profile and rule texts.
+config-layer = [
+    { no-default-features = true },
+    { all-features = true },
+]
+
 # service-kit: bitgauge and swarm-rootless-docker use `buildinfo!` alone, with no features (the
 # no-default-features set, as the default enables nothing); swarm-scheduler-exporter and
 # swarm-device-access also use the runtime and the signals, awtrix-controller the runtime only.

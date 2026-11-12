@@ -16,11 +16,12 @@ shares the workspace version.
 ## Crates
 
 Each crate lives under `crates/<name>` with its tests; a crate depends only on crates listed above
-it. All six are available.
+it. All seven are available.
 
 | Crate | What it is | Features |
 | --- | --- | --- |
 | `clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
+| `config-layer` (available) | A layered YAML and environment configuration loader: a spanned untyped tree, an environment overlay checked against the known paths, koanf's merge, typed reads under a profile, `*_file` secrets, every problem with its source | – (the environment rules, the typing profile and the rule texts are parameters) |
 | `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind, a stream pump, attach and wait, a fake engine | `tcp`, `tls`, `attach`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
 | `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners | `async`, `sync`, `bollard`, `redact` (the labels, variables, tools and runner output are parameters) |
 | `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags | – (each check's strictness is a parameter) |
@@ -43,6 +44,26 @@ handed:
 | `FakeClock` | set and advanced by hand; clones share the time |
 
 It depends on `jiff` and on `tokio` with only the `time` feature.
+
+### config-layer
+
+The pieces of a configuration loader that collects every problem instead of stopping at the
+first: the YAML file and the environment become one untyped tree whose values remember where they
+came from, and the caller walks its own schema over it.
+
+| Item | What it is |
+| --- | --- |
+| `Raw`, `Node`, `Map`, `Origin`, `Location` | the untyped tree; a node's origin is the file's line and column or the environment variable that set it; `Raw` displays in the shape of Go's `fmt.Sprint` of the decoded YAML (floats as `f64` `Display`) |
+| `yaml::parse`, `yaml::read_file`, `MissingFile` | serde-saphyr with strict booleans, legacy octal, duplicate keys refused and non-finite floats passed through; an empty or null file is an empty map, a non-map root an error; `YamlError` is one line with its location (`location()`); a missing file is an error (`Refused`) or an empty map (`Empty`) |
+| `merge`, `insert_path`, `null_keys` | koanf's merge (maps key by key, anything else replaced), a value set at a path, and every null with its path (`a.b`, `a.list[2]`) |
+| `EnvOverlay`, `Overlay`, `EnvVar` | `<PREFIX>A<SEP>B` to the path `a.b`, checked against the caller's known paths before insertion; the unknown and ignored variables come back as data. Parameters: `Unseparated` (`Ignored` or `Mapped`), `map_paths` (the next segment keeps its case, as Go's `envKey`), `lists` with a `ListSplit::new` (separator, `ItemTrim`, `EmptyValue`); the predicates are `Send + Sync` |
+| `Typing` | `integer`, `number`, `boolean`, `text`, `list`, `duration` on a node, from `Typing::strict()` widened by `QuotedScalars`, `BoolSpelling` (`Exact`, `GoParseBool`), `IntegerSyntax` (`Decimal`, `GoBaseZero`), `IntegerText`, `ScalarLists` and a `DurationSyntax`; `TypeError` |
+| `parse_duration`, `DurationSyntax` | jiff's friendly syntax, with an optional bare `0` (`BareZero`) and a leading day unit of exactly 24 hours (`DayUnit`), expanded as koanf does |
+| `read_secret_file`, `SecretTrim`, `EmptySecret`, `SecretError` | a `*_file` key's file, trimmed by Go's `TrimRight(" \t\r\n")` or `TrimSpace`; an error names the key and the path, never the content |
+| `Problem`, `Source`, `Problems` | a path, its source (file and location, file, variable, secret file, missing) and the caller's message; the collector sorts stably by path |
+| `text` | `quote`, `float` and `duration`, how a value is written in a message |
+
+It depends on `serde-saphyr` (`deserialize`), `serde_core`, `jiff` (`std`) and `thiserror`.
 
 ### docker-client
 

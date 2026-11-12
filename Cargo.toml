@@ -5,6 +5,7 @@
 members = [
     "crates/docker-client",
     "crates/clock",
+    "crates/config-layer",
     "crates/repo-meta",
     "crates/service-kit",
     "crates/testenv-core",
