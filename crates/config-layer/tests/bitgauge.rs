@@ -521,6 +521,22 @@ fn a_non_finite_number_for_a_list_is_the_wrong_kind() {
     assert_eq!(loaded.problems[0].message, "expected a list, got a number");
 }
 
+/// A leading zero in an integer given as text is refused, in the file (quoted) and in the
+/// environment; an unquoted YAML `010` stays the YAML 1.1 octal 8.
+#[test]
+fn a_leading_zero_in_integer_text_is_refused() {
+    let loaded = load("limits:\n  requests_per_minute: \"010\"\n", &[]);
+    assert_eq!(loaded.problem_paths(), ["limits.requests_per_minute"]);
+    let loaded = load("", &["BITGAUGE_LIMITS__REQUESTS_PER_MINUTE=010"]);
+    assert_eq!(loaded.problem_paths(), ["limits.requests_per_minute"]);
+    let loaded = load("limits:\n  requests_per_minute: 010\n", &[]);
+    assert_eq!(loaded.problems, []);
+    assert_eq!(
+        loaded.value("limits.requests_per_minute"),
+        Some(&Value::Int(8))
+    );
+}
+
 /// From: bitgauge `file_value_syntax`
 #[test]
 fn file_value_syntax() {

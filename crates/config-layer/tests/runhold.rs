@@ -47,7 +47,8 @@ const SCHEMA: Schema = Schema {
 fn typing() -> Typing {
     Typing::strict()
         .booleans(BoolSpelling::GoParseBool)
-        .integers(IntegerSyntax::GoBaseZero)
+        // Runhold reads an environment integer as decimal, refusing Go's other bases (finding 33).
+        .integers(IntegerSyntax::Decimal)
         .integer_text(IntegerText::Decimal)
         .scalar_lists(ScalarLists::Lifted)
         .durations(DurationSyntax::new(
@@ -252,20 +253,14 @@ fn difference_14_kept_forms() {
             Value::Bool(flag),
         ));
     }
-    // strconv.ParseInt(s, 0, 64).
+    // Decimal, as Go's base-0 parse reads it too.
     for (text, number) in [
-        ("0x10", 16),
-        ("0X1f", 31),
-        ("010", 8),
-        ("0o17", 15),
-        ("0b101", 5),
-        ("1_000", 1000),
-        ("0x_1F", 31),
-        ("0_7", 7),
+        ("10", 10),
         ("+5", 5),
         ("-5", -5),
         ("0", 0),
-        ("00", 0),
+        ("-0", 0),
+        ("+0", 0),
         ("9223372036854775807", i64::MAX),
         ("-9223372036854775808", i64::MIN),
     ] {
@@ -396,7 +391,18 @@ fn difference_14_refused_forms() {
             "terminal.enabled",
         ));
     }
+    // Go's other bases (strconv.ParseInt(s, 0, 64) read them), and every malformed form.
     for text in [
+        "0x10",
+        "0X1f",
+        "010",
+        "-010",
+        "00",
+        "0o17",
+        "0b101",
+        "1_000",
+        "0x_1F",
+        "0_7",
         "_1",
         "1_",
         "1__0",

@@ -61,7 +61,10 @@ pub enum BoolSpelling {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum IntegerSyntax {
-    /// Decimal digits with an optional sign (`str::parse::<i64>`).
+    /// Decimal digits with an optional sign and no leading zero, for an environment value and for
+    /// file text under [`QuotedScalars::Parsed`]. `010` is refused, where `str::parse` would read
+    /// 10 and Go's base-0 parse reads 8, so a value Go read in another base is an error instead
+    /// of a different number. `0`, `-0` and `+0` are zero.
     Decimal,
     /// Go's `strconv.ParseInt(text, 0, 64)`, as mapstructure reads a string into an integer: an
     /// optional sign, then `0x`, `0o`, `0b` or a leading `0` (octal) for the base, and `_` as a
@@ -407,7 +410,13 @@ fn parse_bool(text: &str, spelling: BoolSpelling) -> Option<bool> {
 
 fn parse_integer(text: &str, syntax: IntegerSyntax) -> Option<i64> {
     match syntax {
-        IntegerSyntax::Decimal => text.parse().ok(),
+        IntegerSyntax::Decimal => {
+            let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
+            if digits.len() > 1 && digits.starts_with('0') {
+                return None;
+            }
+            text.parse().ok()
+        }
         IntegerSyntax::GoBaseZero => parse_go_base_zero(text),
     }
 }
@@ -511,5 +520,84 @@ fn underscore_ok(text: &str) -> bool {
 impl fmt::Display for BoolSpelling {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(spellings(*self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IntegerSyntax, parse_integer};
+
+    /// `Decimal` reads what Go's base-0 parse reads in base 10 and refuses the rest, a leading
+    /// zero included.
+    #[test]
+    fn decimal_refuses_other_bases_and_leading_zeros() {
+        for (text, want) in [
+            ("10", Some(10)),
+            ("+5", Some(5)),
+            ("-5", Some(-5)),
+            ("0", Some(0)),
+            ("-0", Some(0)),
+            ("+0", Some(0)),
+            ("9223372036854775807", Some(i64::MAX)),
+            ("-9223372036854775808", Some(i64::MIN)),
+            ("010", None),
+            ("-010", None),
+            ("+010", None),
+            ("00", None),
+            ("0x10", None),
+            ("1_000", None),
+            ("", None),
+            ("-", None),
+            ("9223372036854775808", None),
+        ] {
+            assert_eq!(
+                parse_integer(text, IntegerSyntax::Decimal),
+                want,
+                "{text:?}"
+            );
+        }
+    }
+
+    /// `GoBaseZero` is Go's `strconv.ParseInt(s, 0, 64)` (values from a Go run).
+    #[test]
+    fn go_base_zero_reads_every_base() {
+        for (text, want) in [
+            ("0x10", Some(16)),
+            ("0X1f", Some(31)),
+            ("010", Some(8)),
+            ("0o17", Some(15)),
+            ("0b101", Some(5)),
+            ("1_000", Some(1000)),
+            ("0x_1F", Some(31)),
+            ("0_7", Some(7)),
+            ("+5", Some(5)),
+            ("-5", Some(-5)),
+            ("0", Some(0)),
+            ("00", Some(0)),
+            ("9223372036854775807", Some(i64::MAX)),
+            ("-9223372036854775808", Some(i64::MIN)),
+            ("-010", Some(-8)),
+            ("+010", Some(8)),
+            ("08", None),
+            ("1__0", None),
+            ("0x", None),
+            ("0b", None),
+            ("_1", None),
+            ("1_", None),
+            ("-", None),
+            ("", None),
+            ("9223372036854775808", None),
+            ("-9223372036854775809", None),
+            (" 5", None),
+            ("5 ", None),
+            ("1e3", None),
+            ("0x1p4", None),
+        ] {
+            assert_eq!(
+                parse_integer(text, IntegerSyntax::GoBaseZero),
+                want,
+                "{text:?}"
+            );
+        }
     }
 }
