@@ -328,6 +328,34 @@ pub(crate) fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> 
     Ok(id)
 }
 
+/// `id` as moby's client puts it into a request path: Go's `url.URL.EscapedPath` writes every byte
+/// but an ASCII letter, a digit and `-_.~$&+,/:;=@` as `%XX` with upper-case hex. An ID holding
+/// `?`, `#`, `%` or a space so names that ID to the engine, which answers 404, rather than another
+/// endpoint or another ID. `/` stays, as in Go. moby's `path.Join` also cleans the path (dot
+/// segments, repeated and trailing slashes), which is not done here, so an ID holding `/` or one of
+/// `.` or `..` stays the caller's to keep out.
+#[cfg(any(
+    feature = "attach",
+    feature = "exec",
+    feature = "logs",
+    feature = "stats",
+    feature = "raw-spec"
+))]
+pub(crate) fn escape_id(id: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut escaped = String::with_capacity(id.len());
+    for &byte in id.as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~$&+,/:;=@".contains(&byte) {
+            escaped.push(char::from(byte));
+        } else {
+            escaped.push('%');
+            escaped.push(char::from(HEX[usize::from(byte >> 4)]));
+            escaped.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    escaped
+}
+
 /// A failure of the client's own making, in bollard's error.
 #[cfg(any(
     feature = "tls",
@@ -522,4 +550,41 @@ fn lines(body: Incoming) -> impl Stream<Item = Result<EventMessage, Error>> + Se
             }
         },
     )
+}
+
+#[cfg(all(
+    test,
+    any(
+        feature = "attach",
+        feature = "exec",
+        feature = "logs",
+        feature = "stats",
+        feature = "raw-spec"
+    )
+))]
+mod escape_tests {
+    use super::escape_id;
+
+    /// Each ID against the path segment Go 1.26 writes for it with
+    /// `url.URL{Path: path.Join("/v1.44", "/containers/"+id+"/logs")}.String()`.
+    #[test]
+    fn ids_are_escaped_as_go_writes_them() {
+        for (id, go) in [
+            ("abc123", "abc123"),
+            ("a?b", "a%3Fb"),
+            ("a#b", "a%23b"),
+            ("a%b", "a%25b"),
+            ("a b", "a%20b"),
+            ("a/b", "a/b"),
+            ("név", "n%C3%A9v"),
+            (
+                "x!'()*[]{}|\\^`\"<>",
+                "x%21%27%28%29%2A%5B%5D%7B%7D%7C%5C%5E%60%22%3C%3E",
+            ),
+            ("-_.~$&+,:;=@", "-_.~$&+,:;=@"),
+            ("\t\n\x7f\x00", "%09%0A%7F%00"),
+        ] {
+            assert_eq!(escape_id(id), go, "{id:?}");
+        }
+    }
 }

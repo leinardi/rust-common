@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::stream::{Call, Target, complete, failure, trim_id};
+use crate::stream::{Call, Target, complete, escape_id, failure, trim_id};
 
 /// One sample of the container `id`'s usage, with the previous one. `timeout` bounds the whole call
 /// (the engine takes about a second to collect the two cycles); `cancel` ends it at once.
@@ -55,7 +55,7 @@ pub async fn stats_once(
     cancel: &CancellationToken,
 ) -> Result<ContainerStatsResponse, Error> {
     let id = trim_id("container", id)?;
-    let path = format!("/containers/{id}/stats");
+    let path = format!("/containers/{}/stats", escape_id(id));
     let body = complete(
         config,
         &Target::of(config),

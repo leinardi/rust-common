@@ -490,3 +490,41 @@ async fn create_and_resize_trim_the_id_as_moby_does() {
         .collect();
     assert_eq!(paths, ["/containers/c/exec", "/exec/e1/resize?h=1&w=1"]);
 }
+
+/// Every exec call escapes its ID in the path as moby's client does.
+#[tokio::test]
+async fn every_exec_call_escapes_the_id() {
+    let engine = FakeEngine::start(&[]).unwrap();
+    let config = config_of(&engine);
+    let cancel = CancellationToken::new();
+    assert!(
+        exec::create(&config, "a?b", &terminal(), SECS, &cancel)
+            .await
+            .is_err()
+    );
+    assert!(
+        exec::start(&config, "a?b", Framing::Raw, SECS, &cancel)
+            .await
+            .is_err()
+    );
+    assert!(
+        exec::resize(&config, "a?b", 24, 80, SECS, &cancel)
+            .await
+            .is_err()
+    );
+    assert!(exec::inspect(&config, "a?b", SECS, &cancel).await.is_err());
+    let paths: Vec<String> = engine
+        .requests()
+        .iter()
+        .map(|request| request.path().to_owned())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/containers/a%3Fb/exec",
+            "/exec/a%3Fb/start",
+            "/exec/a%3Fb/resize",
+            "/exec/a%3Fb/json",
+        ]
+    );
+}
