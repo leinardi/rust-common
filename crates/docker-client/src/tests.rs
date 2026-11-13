@@ -492,6 +492,23 @@ mod attach_tests {
         assert_eq!(error.kind(), ErrorKind::NotFound);
     }
 
+    /// The wait escapes the ID in the path as moby's client does.
+    #[tokio::test]
+    async fn wait_escapes_the_id() {
+        let engine = FakeEngine::start(&[]).unwrap();
+        let config = config_of(&engine);
+        let _ = wait(
+            &config,
+            "a?b",
+            WaitCondition::NotRunning,
+            SECS,
+            CancellationToken::new(),
+        )
+        .await;
+        let requests = engine.requests();
+        assert_eq!(requests[0].path(), "/containers/a%3Fb/wait");
+    }
+
     #[tokio::test]
     async fn wait_answers_an_exit_code_zero_or_not() {
         let engine = FakeEngine::start(&[

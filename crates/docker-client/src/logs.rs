@@ -22,9 +22,8 @@
 //! also turns a `since` or `until` given as a time or a duration into the engine's
 //! `<seconds>.<nanoseconds>` form against the wall clock; that conversion is the caller's, and the
 //! value is sent as given. A service's log stream has no `until`: the engine ignores it there. The
-//! ID goes into the path as it is, where moby's client escapes it: an engine-issued ID or name
-//! needs no escaping, one with a space is refused before sending, and one with `/`, `?`, `#` or
-//! `%` is the caller's to keep out, as it would reach another endpoint.
+//! ID goes into the path escaped as moby's client escapes it, so one with `?`, `#`, `%` or a space
+//! names that ID rather than another endpoint.
 //!
 //! The ends are the classes runhold's Go client tells apart (`streamend.go`): the body ended
 //! ([`StreamEnd::Eof`]; a partial frame at the end is dropped, as `stdcopy.StdCopy` does), the
@@ -46,7 +45,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::demux::{Demuxer, Frame, Framing};
 use crate::error::Error;
-use crate::stream::{Call, Target, establish, failure, trim_id};
+use crate::stream::{Call, Target, escape_id, establish, failure, trim_id};
 
 /// What to ask of a container's log.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -143,7 +142,7 @@ pub async fn container_logs(
     query.tail(options.tail.as_deref());
     query.flag("timestamps", options.timestamps);
     query.value("until", options.until.as_deref());
-    let path = format!("/containers/{id}/logs");
+    let path = format!("/containers/{}/logs", escape_id(id));
     logs(config, &path, &query.0, framing, timeout, capacity, cancel).await
 }
 
@@ -183,7 +182,7 @@ pub async fn service_logs(
     query.flag("stdout", options.stdout);
     query.tail(options.tail.as_deref());
     query.flag("timestamps", options.timestamps);
-    let path = format!("/services/{id}/logs");
+    let path = format!("/services/{}/logs", escape_id(id));
     logs(config, &path, &query.0, framing, timeout, capacity, cancel).await
 }
 

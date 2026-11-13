@@ -297,3 +297,43 @@ garbage"#;
         assert_eq!(error.kind(), ErrorKind::NotFound);
     }
 }
+
+/// The stats and raw-spec calls escape the ID in the path as moby's client does.
+#[tokio::test]
+async fn the_id_is_escaped_in_the_path() {
+    let engine = FakeEngine::start(&[]).unwrap();
+    let config = config_of(&engine);
+    let cancel = CancellationToken::new();
+    let mut expected: Vec<&str> = Vec::new();
+    #[cfg(feature = "stats")]
+    {
+        assert!(
+            crate::stats::stats_once(&config, "a?b", SECS, &cancel)
+                .await
+                .is_err()
+        );
+        expected.push("/containers/a%3Fb/stats");
+    }
+    #[cfg(feature = "raw-spec")]
+    {
+        use crate::raw_spec::{inspect_service_raw, update_service_raw};
+        assert!(
+            inspect_service_raw(&config, "a?b", SECS, &cancel)
+                .await
+                .is_err()
+        );
+        let spec = serde_json::json!({});
+        assert!(
+            update_service_raw(&config, "a?b", 1, &spec, SECS, &cancel)
+                .await
+                .is_err()
+        );
+        expected.extend(["/services/a%3Fb", "/services/a%3Fb/update"]);
+    }
+    let paths: Vec<String> = engine
+        .requests()
+        .iter()
+        .map(|request| request.path().to_owned())
+        .collect();
+    assert_eq!(paths, expected);
+}

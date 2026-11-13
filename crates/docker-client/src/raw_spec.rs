@@ -42,7 +42,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::stream::{Call, Target, complete, failure, trim_id};
+use crate::stream::{Call, Target, complete, escape_id, failure, trim_id};
 
 /// The first JSON value of `body`, anything after it ignored, as Go's `json.Decoder` reads an
 /// answer.
@@ -91,7 +91,7 @@ pub async fn inspect_service_raw(
     cancel: &CancellationToken,
 ) -> Result<RawService, Error> {
     let id = trim_id("service", id)?;
-    let path = format!("/services/{id}");
+    let path = format!("/services/{}", escape_id(id));
     let body = complete(
         config,
         &Target::of(config),
@@ -134,7 +134,7 @@ pub async fn update_service_raw(
     cancel: &CancellationToken,
 ) -> Result<Vec<String>, Error> {
     let id = trim_id("service", id)?;
-    let path = format!("/services/{id}/update");
+    let path = format!("/services/{}/update", escape_id(id));
     let query = format!("version={version}");
     let call = Call::new(Method::POST, &path, &query).json(spec.to_string());
     let body = complete(config, &Target::of(config), call, timeout, cancel).await?;

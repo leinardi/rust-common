@@ -557,3 +557,55 @@ async fn dropping_the_receiver_closes_the_connection() {
         .expect("the connection closes")
         .unwrap();
 }
+
+/// An ID is escaped in the path as moby's client escapes it, so one with `?`, `#`, `%` or a space
+/// reaches the engine as that ID and is answered as unknown (the paths are Go 1.26's
+/// `url.URL{Path: path.Join(...)}.String()` for the same IDs).
+#[tokio::test]
+async fn an_id_is_escaped_in_the_path_as_moby_does() {
+    let engine = FakeEngine::start(&[]).unwrap();
+    let config = config_of(&engine).api_version("1.44").unwrap();
+    let cancel = CancellationToken::new();
+    for id in ["a?b", "a#b", "a%b", "a b", "név"] {
+        let error = logs::container_logs(
+            &config,
+            id,
+            &ContainerLogsOptions::default(),
+            Framing::Raw,
+            SECS,
+            1,
+            cancel.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotFound, "{id}: {error}");
+    }
+    let error = logs::service_logs(
+        &config,
+        "a?b",
+        &ServiceLogsOptions::default(),
+        Framing::Raw,
+        SECS,
+        1,
+        cancel.clone(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NotFound, "{error}");
+    let seen: Vec<String> = engine
+        .requests()
+        .iter()
+        .map(|request| request.raw_path().to_owned())
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            "/v1.44/containers/a%3Fb/logs",
+            "/v1.44/containers/a%23b/logs",
+            "/v1.44/containers/a%25b/logs",
+            "/v1.44/containers/a%20b/logs",
+            "/v1.44/containers/n%C3%A9v/logs",
+            "/v1.44/services/a%3Fb/logs",
+        ]
+    );
+}
