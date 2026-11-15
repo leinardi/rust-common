@@ -19,6 +19,14 @@
 //!   `SSE_IT_STALE_AFTER`;
 //! - swarm-device-access: `swarm-device-access-it.` and the same three; `SDA_IT_STALE_AFTER`.
 //!
+//! - runhold: `runhold.it.` and the same three, plus the keep label `runhold.it.keep`;
+//!   `RUNHOLD_TEST_STALE_AFTER`.
+//!
+//! A suite that retains a failed run's environment labels its resources with a keep label and
+//! decides with [`SweepRules::decide_kept`] over a [`Labels::record_keeping`] listing, so a later
+//! run never sweeps what was kept for a reader; [`SweepRules::decide`] and [`Labels::record`]
+//! read no keep label.
+//!
 //! Each with [`DEFAULT_STALE_AFTER`], an hour. bitgauge's sweep is another design (a keep marker,
 //! no PID namespace, jiff's friendly durations, six hours) and stays its own, and so do its owner
 //! label helpers: it shares only the `<hostname>:<pid>` form of an owner, which [`Owner`] writes.
@@ -29,6 +37,9 @@
 //! swarm-device-access/testenv/src/host.rs at 8b4ab3a3e417 (`run_labels`, `record`,
 //! `cleanup_command`) and swarm-scheduler-exporter/testenv/src/dind.rs at c9e79afa8810 (`record`,
 //! `cleanup_command`), for [`Labels`] and [`Resources`].
+//! Ported from runhold/internal/testenv/sweep.go at c1c71c9a418e (the keep branch of `Decide`)
+//! and runhold/internal/testenv/{owner.go,dind.go} at c1c71c9a418e (`LabelKeep`, the keep read
+//! of `listEnvs`), for [`SweepRules::decide_kept`], [`Labels::record_keeping`] and [`Listed`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -100,6 +111,36 @@ impl Labels {
             id: env_id.clone(),
             ..Found::default()
         });
+        self.merge(found, labels);
+    }
+
+    /// [`Self::record`], also reading `keep_label`: the environment is kept when any of its
+    /// resources carries that label with the value `true`, exactly (Go's
+    /// `labels[LabelKeep] == "true"`); `false`, another spelling or no label keeps nothing.
+    pub fn record_keeping(
+        &self,
+        by_id: &mut BTreeMap<String, Listed>,
+        labels: Option<&HashMap<String, String>>,
+        keep_label: &str,
+    ) {
+        let Some(labels) = labels else {
+            return;
+        };
+        let Some(env_id) = labels.get(self.env_id).filter(|id| !id.is_empty()) else {
+            return;
+        };
+        let listed = by_id.entry(env_id.clone()).or_insert_with(|| Listed {
+            env: Found {
+                id: env_id.clone(),
+                ..Found::default()
+            },
+            kept: false,
+        });
+        self.merge(&mut listed.env, labels);
+        listed.kept = listed.kept || labels.get(keep_label).is_some_and(|value| value == "true");
+    }
+
+    fn merge(&self, found: &mut Found, labels: &HashMap<String, String>) {
         // A resource may carry the envid alone (a helper container, a Go suite's container); the
         // owner and start time come from whichever resource has them.
         for (field, key) in [
@@ -245,6 +286,16 @@ pub struct Found {
     pub pid_namespace: String,
 }
 
+/// One environment as a keep-aware listing reads it ([`Labels::record_keeping`]): its labels,
+/// and whether a failed run that brought it up asked for it to be retained.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Listed {
+    /// The environment.
+    pub env: Found,
+    /// Whether any of its resources carries the keep label with the value `true`.
+    pub kept: bool,
+}
+
 /// The sweep's decision about one environment, with the reason a reader is shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
@@ -276,6 +327,21 @@ pub struct SweepRules {
 }
 
 impl SweepRules {
+    /// Applies the rules to one environment that a failed run may have asked to retain, in Go's
+    /// order: the current environment first, then a kept one (`kept after a failure`), which is
+    /// never removed however stale it is, then [`Self::decide`]'s rules.
+    #[must_use]
+    pub fn decide_kept(&self, env: Found, kept: bool) -> Verdict {
+        if kept && env.id != self.self_id {
+            return Verdict {
+                env,
+                remove: false,
+                reason: "kept after a failure".to_owned(),
+            };
+        }
+        self.decide(env)
+    }
+
     /// Applies the rules to one environment.
     #[must_use]
     pub fn decide(&self, env: Found) -> Verdict {

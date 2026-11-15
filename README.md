@@ -115,7 +115,7 @@ The suites' tests, clusters, images, label names and variables stay theirs; they
 | `run_filter::RunFilter` | Go's `-run` (levels split on `/`, alternatives on a top-level bar, unanchored); a pattern that selects nothing is an error |
 | `Error` | a message with Go's `%w` context chain and `errors.Join` |
 | `envid::EnvIds` | `{bytes, label, prefix}`: `generate`, `resource_name`, `label_filter` (Engine API), `cli_filter` (`label=…`); `random_hex` |
-| `sweep_rules` | `SweepRules::decide` (stale, same host and PID namespace, owner dead), `Owner`, `parse_owner`, `current_owner`, `hostname`, `current_pid_namespace`, `stale_after_from_env(name, default, getenv)`, `Labels` (`run_labels`, `record`), `Resources::cleanup_command` |
+| `sweep_rules` | `SweepRules::decide` (stale, same host and PID namespace, owner dead), `SweepRules::decide_kept` (a run a failure retained, labelled `<keep label>=true`, is never removed), `Owner`, `parse_owner`, `current_owner`, `hostname`, `current_pid_namespace`, `stale_after_from_env(name, default, getenv)`, `Labels` (`run_labels`, `record`, `record_keeping` into `Listed`), `Resources::cleanup_command` |
 | `toolgate::Gate` | `{require_env, tools, locate, note}`: a tool on `PATH` or under the nearest ancestor's directory, a skip with a note or, with the variable at `1`, a failure (`Required`); `lookup`, the testable `lookup_in`; `repo_root!()` |
 | `gitenv` | `isolate(&mut Command)`: no `GIT_*` redirection, no user or system config; `REPOSITORY_VARS`, `redirects` |
 | `identity` | `IDENTITY_FLAG` (`-help`), `Answer` and `Text` (an implementation's whole answer), `excerpt` (Go or Rust quoting), `is_static_elf` |
@@ -123,7 +123,7 @@ The suites' tests, clusters, images, label names and variables stay theirs; they
 | `testing` (`async`) | `TestHandle` (`log`, `error`, `fatal`, `skip`, `cleanup`, `run`), `Fatal`, `OrFatal`, `Outcome`, `Test`, `Suite<S>`, and `Runner` over a `RunnerConfig` (`--run`, the suite deadline, SIGINT and SIGTERM, the tally) |
 | `runner` (`sync`) | bitgauge's runner: `TestCase<S>`, `Test`, `main`, `main_selected`, `run`, `run_selected`, each given the prefix of the tests' temporary directories (bitgauge's `bitgauge-test-`); libtest's flags accepted |
 | `redact` (`redact`) | no logging crate: `Log` (the trait the sweep logs through), `Logger` (plain `&str` fields to a writer, `secret` fields redacted), `Level`, `Secret`, `redact_env` |
-| `host` (`bollard`) | `HostSweep {labels, resources, op_timeout}`: `sweep`, `list_environments`, `cleanup`, the removals; `sweep_rules`, `process_alive`, `with_timeout`, `OpError` |
+| `host` (`bollard`) | `HostSweep {labels, resources, op_timeout}`: `sweep`, `list_environments`, their keep-aware `sweep_keeping` and `list_environments_keeping` (a keep label), `cleanup`, the removals; `sweep_rules`, `process_alive`, `with_timeout`, `OpError` |
 
 Each consumer passes its own: swarm-scheduler-exporter and swarm-device-access build `async`,
 `bollard` and `redact` with their envid bytes, labels, stale-after and suite-deadline variables,

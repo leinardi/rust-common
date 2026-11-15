@@ -23,7 +23,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 
 use super::{
-    DEFAULT_STALE_AFTER, Found, Labels, Owner, Resources, SweepRules, parse_owner, round,
+    DEFAULT_STALE_AFTER, Found, Labels, Listed, Owner, Resources, SweepRules, parse_owner, round,
     stale_after_from_env,
 };
 
@@ -280,6 +280,112 @@ fn run_labels_are_read_back_by_record() {
             started: "2026-10-11T12:00:00Z".to_owned(),
             pid_namespace: "pid:[4026531836]".to_owned(),
         }]
+    );
+}
+
+/// The keep label a run retained after a failure carries, as runhold names it.
+const KEEP: &str = "runhold.it.keep";
+
+/// Go: runhold `TestSweepRules` (its "kept after a failure" case, Go's `Found.Keep`).
+#[test]
+fn decide_kept_keeps_a_retained_environment() {
+    let now = timestamp("2026-10-11T12:00:00Z");
+    let old = rfc3339(now - SignedDuration::from_hours(2));
+    let rules = rules(now, "pid:[1]");
+    // Stale, on this host and namespace, its owner gone: removed unless kept.
+    let abandoned = found("a", "here:200", &old, "pid:[1]");
+
+    let kept = rules.decide_kept(abandoned.clone(), true);
+    assert_eq!(
+        (kept.remove, kept.reason.as_str()),
+        (false, "kept after a failure"),
+        "a kept environment"
+    );
+    assert_eq!(kept.env, abandoned, "the verdict names another environment");
+
+    let unkept = rules.decide_kept(abandoned.clone(), false);
+    assert_eq!(
+        (unkept.remove, unkept.reason.as_str()),
+        (true, "stale, and its owner PID 200 is gone"),
+        "the same environment unkept"
+    );
+    assert_eq!(
+        unkept,
+        rules.decide(abandoned),
+        "unkept is decide's verdict"
+    );
+
+    // The current environment wins over the keep label, with its own reason.
+    let current = rules.decide_kept(found("self", "here:200", &old, "pid:[1]"), true);
+    assert_eq!(
+        (current.remove, current.reason.as_str()),
+        (false, "the current environment")
+    );
+
+    // A kept environment with unreadable labels is still kept as kept, as in Go, where the keep
+    // check comes before any label is read.
+    let unreadable = rules.decide_kept(found("b", "nonsense", "yesterday", ""), true);
+    assert_eq!(unreadable.reason, "kept after a failure");
+}
+
+/// The keep label read from recorded label maps: kept when any resource says `true`, exactly.
+#[test]
+fn record_keeping_reads_the_keep_label() {
+    let resource = |env_id: &str, keep: Option<&str>| {
+        let mut labels = HashMap::from([
+            (SSE_LABELS.env_id.to_owned(), env_id.to_owned()),
+            (SSE_LABELS.owner.to_owned(), "ci:42".to_owned()),
+            (
+                SSE_LABELS.started.to_owned(),
+                "2026-10-11T12:00:00Z".to_owned(),
+            ),
+        ]);
+        if let Some(keep) = keep {
+            labels.insert(KEEP.to_owned(), keep.to_owned());
+        }
+        labels
+    };
+    let mut by_id = BTreeMap::new();
+    for labels in [
+        // Mixed across resources, in both orders: kept.
+        resource("mixed-1", Some("true")),
+        resource("mixed-1", Some("false")),
+        resource("mixed-2", Some("false")),
+        resource("mixed-2", None),
+        resource("mixed-2", Some("true")),
+        // false everywhere, another spelling, or the label absent: not kept.
+        resource("false", Some("false")),
+        resource("spelled", Some("True")),
+        resource("spelled", Some("1")),
+        resource("absent", None),
+    ] {
+        SSE_LABELS.record_keeping(&mut by_id, Some(&labels), KEEP);
+    }
+    SSE_LABELS.record_keeping(&mut by_id, None, KEEP);
+    let kept: Vec<(&str, bool)> = by_id
+        .values()
+        .map(|listed| (listed.env.id.as_str(), listed.kept))
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            ("absent", false),
+            ("false", false),
+            ("mixed-1", true),
+            ("mixed-2", true),
+            ("spelled", false),
+        ]
+    );
+
+    // The labels are read as `record` reads them.
+    let mut plain = BTreeMap::new();
+    SSE_LABELS.record(&mut plain, Some(&resource("absent", None)));
+    assert_eq!(
+        by_id.remove("absent"),
+        Some(Listed {
+            env: plain.remove("absent").unwrap(),
+            kept: false,
+        })
     );
 }
 
