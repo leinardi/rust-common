@@ -26,6 +26,9 @@
 //! `list_environments` and `cleanup` over containers and networks, `process_alive`, `OpError`,
 //! `with_timeout`) and swarm-device-access/testenv/src/host.rs at 8b4ab3a3e417 (the same over
 //! containers and images, `remove_container`, `remove_image`, `default_sweep_rules`).
+//! Ported from runhold/internal/testenv/dind.go at c1c71c9a418e (the keep read of `Sweep` and
+//! `listEnvs`), for [`HostSweep::sweep_keeping`] and
+//! [`HostSweep::list_environments_keeping`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -43,7 +46,7 @@ use jiff::Timestamp;
 use crate::Error;
 use crate::context::{Context, Ended};
 use crate::redact::Log;
-use crate::sweep_rules::{Found, Labels, Owner, Resources, SweepRules};
+use crate::sweep_rules::{Found, Labels, Listed, Owner, Resources, SweepRules, Verdict};
 
 /// Bounds one ordinary Docker call in both suites, so a hung daemon fails that call instead of
 /// stalling the run until the suite deadline.
@@ -67,37 +70,68 @@ impl HostSweep {
     /// cleanup that did not finish at warn.
     pub async fn sweep(&self, ctx: &Context, client: &Docker, rules: &SweepRules, log: &dyn Log) {
         for env in self.list_environments(ctx, client, log).await {
-            let verdict = rules.decide(env);
-            if !verdict.remove {
-                if verdict.env.id != rules.self_id {
-                    log.debug(
-                        "sweep: keeping environment",
-                        &[
-                            ("other_envid", verdict.env.id.as_str()),
-                            ("reason", verdict.reason.as_str()),
-                        ],
-                    );
-                }
-                continue;
-            }
+            self.settle(ctx, client, rules, rules.decide(env), log)
+                .await;
+        }
+    }
 
-            log.info(
-                "sweep: removing leaked environment",
-                &[
-                    ("leaked_envid", verdict.env.id.as_str()),
-                    ("reason", verdict.reason.as_str()),
-                ],
-            );
+    /// [`Self::sweep`], keeping every environment a failed run retained: one with any resource
+    /// labelled `keep_label=true` is never removed ([`SweepRules::decide_kept`]).
+    pub async fn sweep_keeping(
+        &self,
+        ctx: &Context,
+        client: &Docker,
+        rules: &SweepRules,
+        keep_label: &str,
+        log: &dyn Log,
+    ) {
+        for listed in self
+            .list_environments_keeping(ctx, client, keep_label, log)
+            .await
+        {
+            let verdict = rules.decide_kept(listed.env, listed.kept);
+            self.settle(ctx, client, rules, verdict, log).await;
+        }
+    }
 
-            if let Err(error) = self.cleanup(ctx, client, &verdict.env.id).await {
-                log.warn(
-                    "sweep: cleanup incomplete",
+    /// Logs one verdict and removes the environment it condemns.
+    async fn settle(
+        &self,
+        ctx: &Context,
+        client: &Docker,
+        rules: &SweepRules,
+        verdict: Verdict,
+        log: &dyn Log,
+    ) {
+        if !verdict.remove {
+            if verdict.env.id != rules.self_id {
+                log.debug(
+                    "sweep: keeping environment",
                     &[
-                        ("leaked_envid", verdict.env.id.as_str()),
-                        ("err", error.to_string().as_str()),
+                        ("other_envid", verdict.env.id.as_str()),
+                        ("reason", verdict.reason.as_str()),
                     ],
                 );
             }
+            return;
+        }
+
+        log.info(
+            "sweep: removing leaked environment",
+            &[
+                ("leaked_envid", verdict.env.id.as_str()),
+                ("reason", verdict.reason.as_str()),
+            ],
+        );
+
+        if let Err(error) = self.cleanup(ctx, client, &verdict.env.id).await {
+            log.warn(
+                "sweep: cleanup incomplete",
+                &[
+                    ("leaked_envid", verdict.env.id.as_str()),
+                    ("err", error.to_string().as_str()),
+                ],
+            );
         }
     }
 
@@ -110,8 +144,41 @@ impl HostSweep {
         client: &Docker,
         log: &dyn Log,
     ) -> Vec<Found> {
-        let filters = label_filters(self.labels.env_id.to_owned());
         let mut by_id = BTreeMap::new();
+        self.each_labels(ctx, client, log, |labels| {
+            self.labels.record(&mut by_id, labels);
+        })
+        .await;
+        by_id.into_values().collect()
+    }
+
+    /// [`Self::list_environments`], with whether each environment is kept: any of its resources
+    /// carries `keep_label` with the value `true` ([`Labels::record_keeping`]).
+    pub async fn list_environments_keeping(
+        &self,
+        ctx: &Context,
+        client: &Docker,
+        keep_label: &str,
+        log: &dyn Log,
+    ) -> Vec<Listed> {
+        let mut by_id = BTreeMap::new();
+        self.each_labels(ctx, client, log, |labels| {
+            self.labels.record_keeping(&mut by_id, labels, keep_label);
+        })
+        .await;
+        by_id.into_values().collect()
+    }
+
+    /// Hands `record` the labels of every resource carrying the envid label: containers, then
+    /// networks and images as configured. A listing that fails is logged at warn and skipped.
+    async fn each_labels(
+        &self,
+        ctx: &Context,
+        client: &Docker,
+        log: &dyn Log,
+        mut record: impl FnMut(Option<&HashMap<String, String>>),
+    ) {
+        let filters = label_filters(self.labels.env_id.to_owned());
 
         match with_timeout(
             ctx,
@@ -126,7 +193,7 @@ impl HostSweep {
         {
             Ok(containers) => {
                 for container in &containers {
-                    self.labels.record(&mut by_id, container.labels.as_ref());
+                    record(container.labels.as_ref());
                 }
             }
             Err(error) => log.warn(
@@ -147,7 +214,7 @@ impl HostSweep {
             {
                 Ok(networks) => {
                     for network in &networks {
-                        self.labels.record(&mut by_id, network.labels.as_ref());
+                        record(network.labels.as_ref());
                     }
                 }
                 Err(error) => log.warn(
@@ -170,7 +237,7 @@ impl HostSweep {
             {
                 Ok(images) => {
                     for image in &images {
-                        self.labels.record(&mut by_id, Some(&image.labels));
+                        record(Some(&image.labels));
                     }
                 }
                 Err(error) => {
@@ -178,8 +245,6 @@ impl HostSweep {
                 }
             }
         }
-
-        by_id.into_values().collect()
     }
 
     /// Removes every container (with its anonymous volumes, if configured), then every network

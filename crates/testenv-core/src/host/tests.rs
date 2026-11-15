@@ -304,6 +304,79 @@ async fn the_sweep_removes_only_the_abandoned_run() {
     assert_eq!(log.lines().count(), 3, "{lines:?}");
 }
 
+/// One resource of a run with an extra label, as [`labels_json`] writes it.
+fn labels_json_with(env_id: &str, owner: &Owner, started: &str, extra: &str) -> String {
+    let plain = labels_json(env_id, owner, started);
+    let open = plain.strip_suffix("}}").unwrap();
+    format!("{open},{extra}}}}}")
+}
+
+/// The keep-aware sweep: a stale run of a dead owner whose resources carry the keep label on one
+/// of them (`true` on one, `false` on the other) is kept and logged as kept after a failure;
+/// one whose label is `false` or absent everywhere is removed as `sweep` removes it; the current
+/// run is still never logged.
+#[tokio::test]
+async fn the_keeping_sweep_leaves_a_retained_run() {
+    let host = hostname().unwrap();
+    let me = Owner {
+        host,
+        pid: i64::from(std::process::id()),
+        pid_namespace: current_pid_namespace(),
+    };
+    let gone = Owner {
+        pid: dead_pid(),
+        ..me.clone()
+    };
+    let old = "2000-01-01T00:00:00Z";
+    let listing = [
+        labels_json_with("old", &gone, old, r#""it.keep":"false""#),
+        labels_json_with("kept", &gone, old, r#""it.keep":"false""#),
+        labels_json_with("kept", &gone, old, r#""it.keep":"true""#),
+        labels_json_with("self", &me, old, r#""it.keep":"true""#),
+    ]
+    .join(",");
+    let (client, wire, _dir) = daemon(listing);
+    let sink = MemorySink::default();
+    let rules = sweep_rules(Timestamp::now(), Duration::from_secs(3600), "self", &me);
+    let ctx = Context::background();
+
+    let listed = SSE
+        .list_environments_keeping(&ctx, &client, "it.keep", &logger(&sink))
+        .await;
+    assert_eq!(
+        listed
+            .iter()
+            .map(|listed| (listed.env.id.as_str(), listed.kept))
+            .collect::<Vec<_>>(),
+        [("kept", true), ("old", false), ("self", true)]
+    );
+
+    SSE.sweep_keeping(&ctx, &client, &rules, "it.keep", &logger(&sink))
+        .await;
+    let wire: Vec<String> = wire.lock().unwrap().clone();
+    assert!(
+        wire.iter().all(|line| !line.contains("it.envid=kept")),
+        "the kept run was selected for removal: {wire:#?}"
+    );
+    assert!(
+        wire.iter().any(|line| line.contains("it.envid=old")),
+        "the abandoned run was not removed: {wire:#?}"
+    );
+    let log = sink.contents();
+    assert!(
+        log.contains(
+            "level=DEBUG msg=\"sweep: keeping environment\" other_envid=kept \
+             reason=\"kept after a failure\""
+        ),
+        "{log}"
+    );
+    assert!(
+        log.contains("level=INFO msg=\"sweep: removing leaked environment\" leaked_envid=old"),
+        "{log}"
+    );
+    assert!(!log.contains("other_envid=self"), "{log}");
+}
+
 /// swarm-device-access's shape removes images rather than networks, and containers without their
 /// volumes; a container already gone is not an error, a failed removal is.
 #[tokio::test]
