@@ -74,7 +74,8 @@ impl Target {
 
     fn host(&self) -> &str {
         match self {
-            Self::Unix(_) => "docker",
+            // moby's DummyHost: a unix socket has no host of its own.
+            Self::Unix(_) => "api.moby.localhost",
             #[cfg(feature = "tls")]
             Self::Tls { addr, .. } => addr,
             #[cfg(feature = "tcp")]
