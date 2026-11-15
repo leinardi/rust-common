@@ -74,7 +74,8 @@ impl Target {
 
     fn host(&self) -> &str {
         match self {
-            Self::Unix(_) => "docker",
+            // moby's DummyHost: a unix socket has no host of its own.
+            Self::Unix(_) => "api.moby.localhost",
             #[cfg(feature = "tls")]
             Self::Tls { addr, .. } => addr,
             #[cfg(feature = "tcp")]
@@ -104,6 +105,8 @@ pub(crate) struct Call<'call> {
     pub(crate) path: &'call str,
     pub(crate) query: &'call str,
     pub(crate) body: Option<Bytes>,
+    /// Whether the path goes out under the version prefix; `/_ping` does not.
+    pub(crate) versioned: bool,
 }
 
 impl<'call> Call<'call> {
@@ -114,6 +117,16 @@ impl<'call> Call<'call> {
             path,
             query,
             body: None,
+            versioned: true,
+        }
+    }
+
+    #[cfg(feature = "raw-get")]
+    /// The same request without the version prefix, as moby sends its ping.
+    pub(crate) fn unversioned(self) -> Self {
+        Self {
+            versioned: false,
+            ..self
         }
     }
 
@@ -169,7 +182,12 @@ pub(crate) async fn establish(
 ///
 /// As [`establish`], with [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) also for a body that
 /// does not end in `timeout`.
-#[cfg(any(feature = "exec", feature = "stats", feature = "raw-spec"))]
+#[cfg(any(
+    feature = "exec",
+    feature = "stats",
+    feature = "raw-get",
+    feature = "raw-spec"
+))]
 pub(crate) async fn complete(
     config: &Config,
     target: &Target,
@@ -181,6 +199,32 @@ pub(crate) async fn complete(
     guarded(timeout, cancel, async {
         let response = exchange(target, request, Mode::Plain).await?;
         Ok(accepted(response).await?.collect().await?.to_bytes())
+    })
+    .await
+}
+
+/// Sends `call` to `target` and returns its answer whatever the status: the status, the headers
+/// and the whole body. `timeout` bounds all of it; `cancel` ends it at once.
+///
+/// # Errors
+///
+/// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when `timeout` passes first, `Cancelled`,
+/// and the connection's failure as `Unavailable`.
+#[cfg(feature = "raw-get")]
+pub(crate) async fn answered(
+    config: &Config,
+    target: &Target,
+    call: Call<'_>,
+    timeout: Duration,
+    cancel: &CancellationToken,
+) -> Result<(StatusCode, http::HeaderMap, Bytes), Error> {
+    let request = request(config, target, call, Mode::Plain)?;
+    guarded(timeout, cancel, async {
+        let response = exchange(target, request, Mode::Plain).await?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.into_body().collect().await?.to_bytes();
+        Ok((status, headers, body))
     })
     .await
 }
@@ -225,7 +269,11 @@ fn request(
     call: Call<'_>,
     mode: Mode,
 ) -> Result<Request<RequestBody>, Error> {
-    let mut uri = versioned_path(config, call.path);
+    let mut uri = if call.versioned {
+        versioned_path(config, call.path)
+    } else {
+        call.path.to_owned()
+    };
     if !call.query.is_empty() {
         uri.push('?');
         uri.push_str(call.query);
@@ -339,9 +387,11 @@ pub(crate) fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> 
     feature = "exec",
     feature = "logs",
     feature = "stats",
+    feature = "raw-get",
     feature = "raw-spec"
 ))]
-pub(crate) fn escape_id(id: &str) -> String {
+#[must_use]
+pub fn escape_id(id: &str) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut escaped = String::with_capacity(id.len());
     for &byte in id.as_bytes() {
@@ -457,7 +507,7 @@ where
     Ok(sender.send_request(request).await?)
 }
 
-fn refusal(status: StatusCode, body: &[u8]) -> BollardError {
+pub(crate) fn refusal(status: StatusCode, body: &[u8]) -> BollardError {
     let message = serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .and_then(|value| value.get("message")?.as_str().map(str::to_owned))
@@ -559,6 +609,7 @@ fn lines(body: Incoming) -> impl Stream<Item = Result<EventMessage, Error>> + Se
         feature = "exec",
         feature = "logs",
         feature = "stats",
+        feature = "raw-get",
         feature = "raw-spec"
     )
 ))]

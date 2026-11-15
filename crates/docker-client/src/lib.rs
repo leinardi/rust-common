@@ -30,6 +30,8 @@
 //! * `logs` (feature): a container's or a service's log stream as `demux` frames, followed by
 //!   exactly one end that says why it stopped.
 //! * `stats` (feature): one container stats sample with the previous one inside it.
+//! * `raw-get` (feature): a read answered as the engine's bytes, for a caller that decodes them
+//!   itself (bollard's models close every enum).
 //! * `raw-spec` (feature): a service inspected and updated as raw JSON, so no field is lost.
 //! * `test_util` (feature `test-util`): a fake engine on a unix socket.
 //!
@@ -55,6 +57,8 @@ pub mod logs;
 #[cfg(feature = "logs")]
 mod logs_tests;
 mod pump;
+#[cfg(feature = "raw-get")]
+pub mod raw_get;
 #[cfg(feature = "raw-spec")]
 pub mod raw_spec;
 #[cfg(feature = "stats")]
