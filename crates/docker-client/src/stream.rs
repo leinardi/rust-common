@@ -169,7 +169,12 @@ pub(crate) async fn establish(
 ///
 /// As [`establish`], with [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) also for a body that
 /// does not end in `timeout`.
-#[cfg(any(feature = "exec", feature = "stats", feature = "raw-spec"))]
+#[cfg(any(
+    feature = "exec",
+    feature = "stats",
+    feature = "raw-get",
+    feature = "raw-spec"
+))]
 pub(crate) async fn complete(
     config: &Config,
     target: &Target,
@@ -339,9 +344,11 @@ pub(crate) fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> 
     feature = "exec",
     feature = "logs",
     feature = "stats",
+    feature = "raw-get",
     feature = "raw-spec"
 ))]
-pub(crate) fn escape_id(id: &str) -> String {
+#[must_use]
+pub fn escape_id(id: &str) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut escaped = String::with_capacity(id.len());
     for &byte in id.as_bytes() {
@@ -559,6 +566,7 @@ fn lines(body: Incoming) -> impl Stream<Item = Result<EventMessage, Error>> + Se
         feature = "exec",
         feature = "logs",
         feature = "stats",
+        feature = "raw-get",
         feature = "raw-spec"
     )
 ))]
