@@ -40,6 +40,9 @@ logs = ["tokio/io-util"]
 stats = []
 # A read answered as the engine's bytes, decoded by the caller.
 raw-get = []
+# Changes (`POST`, `DELETE`) sent as moby's client sends them, the IDs escaped through raw-get's
+# escape_id.
+raw-request = ["raw-get"]
 # A service inspected and updated as raw JSON, every field kept.
 raw-spec = []
 # The fake engine on a unix socket that the consumers' tests share.
