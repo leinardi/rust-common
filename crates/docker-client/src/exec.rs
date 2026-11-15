@@ -18,9 +18,8 @@
 //! a TTY session through its framing guess (a chunk starting with `\x01` is taken for a header),
 //! its resize takes an `i32` where moby's Go client sends a `uint` (the engine reads a `u32`), and its create body leaves
 //! out the fields moby's writes. The request bodies here are the ones moby's Go client writes,
-//! byte for byte. The IDs go into the path as they are, where moby's client escapes them: an
-//! engine-issued ID or name needs no escaping, and one with `/`, `?`, `#` or `%` is the caller's
-//! to keep out.
+//! byte for byte, and the IDs go into the path escaped as moby's client escapes them, so an ID
+//! with `?`, `#`, `%` or a space names that ID rather than another endpoint.
 //!
 //! The wire is moby/moby `client/container_exec.go` and `client/hijack.go`'s at client/v0.6.2
 //! (`ExecCreate`, `ExecAttach`, `ExecResize`, `ExecInspect`, `setupHijackConn`); the code is
@@ -40,7 +39,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::demux::Framing;
 use crate::error::Error;
-use crate::stream::{Call, Target, complete, failure, trim_id, upgrade};
+use crate::stream::{Call, Target, complete, escape_id, failure, trim_id, upgrade};
 
 /// What to run, and which of its standard streams to attach.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -152,7 +151,7 @@ pub async fn create(
     cancel: &CancellationToken,
 ) -> Result<String, Error> {
     let container = trim_id("container", container)?;
-    let path = format!("/containers/{container}/exec");
+    let path = format!("/containers/{}/exec", escape_id(container));
     let call = Call::new(Method::POST, &path, "").json(options.body());
     let body = complete(config, &Target::of(config), call, timeout, cancel).await?;
     let answer: serde_json::Value =
@@ -187,7 +186,7 @@ pub async fn start(
     timeout: Duration,
     cancel: &CancellationToken,
 ) -> Result<ExecStream, Error> {
-    let path = format!("/exec/{id}/start");
+    let path = format!("/exec/{}/start", escape_id(id));
     let tty = framing == Framing::Raw;
     let call =
         Call::new(Method::POST, &path, "").json(format!(r#"{{"Detach":false,"Tty":{tty}}}"#));
@@ -213,7 +212,7 @@ pub async fn resize(
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let id = trim_id("exec", id)?;
-    let path = format!("/exec/{id}/resize");
+    let path = format!("/exec/{}/resize", escape_id(id));
     let query = format!("h={rows}&w={cols}");
     complete(
         config,
@@ -259,7 +258,7 @@ pub async fn inspect(
     timeout: Duration,
     cancel: &CancellationToken,
 ) -> Result<ExecState, Error> {
-    let path = format!("/exec/{id}/json");
+    let path = format!("/exec/{}/json", escape_id(id));
     let body = complete(
         config,
         &Target::of(config),
