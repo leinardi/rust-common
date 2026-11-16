@@ -140,6 +140,32 @@ mod tests {
         assert!(requests[0].body.is_empty());
     }
 
+    /// A route naming its method answers that method alone; a plain one answers the others.
+    #[tokio::test]
+    async fn a_method_route_answers_its_method_alone() {
+        let engine = FakeEngine::start(&[
+            (
+                "DELETE /networks/n1",
+                Reply::error(409, "network n1 has active endpoints"),
+            ),
+            ("/networks/n1", Reply::ok("{}")),
+        ])
+        .unwrap();
+        let config = config_of(&engine);
+        let refused = delete(&config, "/networks/n1", "", SECS, &CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Conflict);
+        assert!(
+            refused.to_string().contains("active endpoints"),
+            "{refused}"
+        );
+        let answered = post(&config, "/networks/n1", "", SECS, &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(answered, b"{}");
+    }
+
     /// `DELETE`, and no query, no `?`.
     #[tokio::test]
     async fn delete_without_a_query_sends_no_question_mark() {
