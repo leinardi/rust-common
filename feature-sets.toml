@@ -91,10 +91,11 @@ tracing-setup = [
 ]
 
 # docker-client: swarm-rootless-docker builds it with `attach` (the host socket only: unix, no
-# TCP) and `test-util` for its tests; runhold with `exec`, `logs`, `raw-get`, `raw-spec`, `stats`,
-# `tcp` and `tls`, plus `test-util` for its FakeEngine tests; a program that reads DOCKER_HOST adds
-# `tcp` (and `tls` for DOCKER_TLS_VERIFY and DOCKER_CERT_PATH). The User-Agent, the API version and
-# the response-header timeout are parameters. Every feature is also built alone.
+# TCP) and `test-util` for its tests; runhold with `exec`, `logs`, `raw-get`, `raw-request`,
+# `raw-spec`, `stats`, `tcp` and `tls`, plus `test-util` for its FakeEngine tests; a program that
+# reads DOCKER_HOST adds `tcp` (and `tls` for DOCKER_TLS_VERIFY and DOCKER_CERT_PATH). The
+# User-Agent, the API version and the response-header timeout are parameters. Every feature is
+# also built alone.
 docker-client = [
     { no-default-features = true },
     { features = ["tcp"] },
@@ -110,10 +111,12 @@ docker-client = [
     { features = ["stats", "test-util"] },      # stats with its tests
     { features = ["raw-get"] },
     { features = ["raw-get", "test-util"] },    # raw-get with its tests
+    { features = ["raw-request"] },
+    { features = ["raw-request", "test-util"] }, # raw-request with its tests
     { features = ["raw-spec"] },
     { features = ["raw-spec", "test-util"] },   # raw-spec with its tests
-    { features = ["exec", "logs", "raw-get", "raw-spec", "stats", "tcp", "tls"] }, # runhold
-    { features = ["exec", "logs", "raw-get", "raw-spec", "stats", "tcp", "test-util", "tls"] }, # runhold's tests
+    { features = ["exec", "logs", "raw-get", "raw-request", "raw-spec", "stats", "tcp", "tls"] }, # runhold
+    { features = ["exec", "logs", "raw-get", "raw-request", "raw-spec", "stats", "tcp", "test-util", "tls"] }, # runhold's tests
     { features = ["tcp", "tls", "test-util"] }, # a DOCKER_HOST client, with its tests
     { all-features = true },
 ]

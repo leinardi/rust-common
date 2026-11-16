@@ -214,7 +214,9 @@ pub struct FakeEngine {
 
 impl FakeEngine {
     /// Starts an engine that answers `routes`, `(path, reply)` pairs matched against
-    /// [`Request::path`], the first match winning. Must be called inside a tokio runtime.
+    /// [`Request::path`], the first match winning. A route may name its method before the path
+    /// (`"DELETE /networks/n1"`), to answer one method apart from the others on the same path.
+    /// Must be called inside a tokio runtime.
     ///
     /// # Errors
     ///
@@ -304,6 +306,14 @@ impl Drop for FakeEngine {
     }
 }
 
+/// Whether `route`, a path or `METHOD path`, matches `request`.
+fn route_matches(route: &str, request: &Request) -> bool {
+    match route.split_once(' ') {
+        Some((method, path)) => method == request.method && path == request.path(),
+        None => route == request.path(),
+    }
+}
+
 async fn serve(mut stream: UnixStream, routes: Arc<Vec<(String, Reply)>>, log: Log) {
     let _ = answer(&mut stream, &routes, &log).await;
 }
@@ -312,7 +322,7 @@ async fn answer(stream: &mut UnixStream, routes: &[(String, Reply)], log: &Log) 
     let request = read_request(stream).await?;
     let reply = routes
         .iter()
-        .find(|(path, _)| path == request.path())
+        .find(|(route, _)| route_matches(route, &request))
         .map_or_else(Reply::not_found, |(_, reply)| reply.clone());
     log.requests
         .lock()

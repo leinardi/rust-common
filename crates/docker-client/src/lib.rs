@@ -32,6 +32,8 @@
 //! * `stats` (feature): one container stats sample with the previous one inside it.
 //! * `raw-get` (feature): a read answered as the engine's bytes, for a caller that decodes them
 //!   itself (bollard's models close every enum).
+//! * `raw-request` (feature): a `POST` or a `DELETE` sent as moby's client sends it, at the
+//!   client's version prefix (bollard's own mutations drop it).
 //! * `raw-spec` (feature): a service inspected and updated as raw JSON, so no field is lost.
 //! * `test_util` (feature `test-util`): a fake engine on a unix socket.
 //!
@@ -59,6 +61,8 @@ mod logs_tests;
 mod pump;
 #[cfg(feature = "raw-get")]
 pub mod raw_get;
+#[cfg(feature = "raw-request")]
+pub mod raw_request;
 #[cfg(feature = "raw-spec")]
 pub mod raw_spec;
 #[cfg(feature = "stats")]
