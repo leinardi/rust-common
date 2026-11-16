@@ -115,17 +115,17 @@ anywhere before a colon (`prefix:` counts as `fix:`). See `AGENTS.md`.
 
 ## Gates
 
-Do not re-run the repository's gates (`make check`, `make verify`, `make rust-feature-matrix`,
-`make rust-deny`). The implementer is expected to run them and CI runs them again, but do not
-assume either happened: report the verification evidence you actually have (under
-adversarial-review-loop, `verification.txt` when supplied, which is the implementer's claim and
-not proof; when invoked directly, the CI status or gate output in the PR or session) and what is
-missing, such as a change to a crate's features or dependencies, or to `feature-sets.toml`, with
-no feature-matrix result reported. Never say that a check you did not see passed. Judge whether
-the change's tests prove it: a behaviour change needs a test that fails on the old code. When
-invoked directly, one focused test (`cargo test -p <crate> <name>`) may be run to confirm a
-single suspected finding, never a full suite or gate. A candidate that is neither reproduced nor
-traced end to end is dropped.
+Do not re-run the repository's gates (`make check`, `make verify`, `make rust-feature-matrix`, `make
+rust-deny`). The implementer is expected to run them and CI runs them again, but do not assume
+either happened: report the verification evidence you actually have (under adversarial-review-loop,
+`verification.txt` when supplied, which is the implementer's claim and not proof; when invoked
+directly, the CI status or gate output in the PR or session) and what is missing, such as a change
+to a crate's features or dependencies, or to `feature-sets.toml`, with no feature-matrix result
+reported. Judge what is missing against `AGENTS.md`'s *Validation matrix*: every changed path owes
+the checks its row names. Never say that a check you did not see passed. Judge whether the change's
+tests prove it: a behaviour change needs a test that fails on the old code. When invoked directly,
+one focused test (`cargo test -p <crate> <name>`) may be run to confirm a single suspected finding,
+never a full suite or gate. A candidate that is neither reproduced nor traced end to end is dropped.
 
 ## Report
 
