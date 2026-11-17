@@ -539,6 +539,8 @@ mod attach_tests {
         assert_eq!(request.header("content-type"), Some("text/plain"));
         assert_eq!(request.header("connection"), Some("Upgrade"));
         assert_eq!(request.header("upgrade"), Some("tcp"));
+        // hyper sends no length for an empty body (moby's Go request says 0; see the module doc).
+        assert_eq!(request.header("content-length"), None);
         assert!(request.body.is_empty());
     }
 

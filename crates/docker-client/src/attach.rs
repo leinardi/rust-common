@@ -19,7 +19,9 @@
 //! [`attach`] sends moby client v0.6.2's `ContainerAttach` with `Stream`, `Stdout` and `Stderr` set:
 //! `POST /containers/<id>/attach?stderr=1&stdout=1&stream=1` with `Content-Type: text/plain`, no
 //! body, and the connection taken over (`Connection: Upgrade`, `Upgrade: tcp`, moby's
-//! `postHijacked`). The query is Go's `url.Values.Encode`, which sorts the keys. The ID is trimmed
+//! `postHijacked`). The query is Go's `url.Values.Encode`, which sorts the keys. Go's
+//! `Request.Write` also sends `Content-Length: 0` on a POST without a body; hyper sends no length
+//! for an empty one. The engine reads no body either way. The ID is trimmed
 //! and escaped as moby's `trimID` and `url.URL` do. The output is read with the framing the caller
 //! passes, never guessed from the bytes as bollard's `attach_container` does: a TTY session or a
 //! log line starting with `\x01` defeats that guess.
