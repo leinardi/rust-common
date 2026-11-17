@@ -55,19 +55,23 @@ service-kit = [
     { all-features = true },
 ]
 
-# testenv-core: swarm-scheduler-exporter and swarm-device-access build it with `async`, `bollard`
-# and `redact` (bollard implies the other two; each suite passes its own labels, variables and
-# resources); bitgauge with `sync` (its runner, beside the run filter, the tool gate, gitenv, envid
-# and the identity rule of the default build); awtrix-controller, swarm-rootless-docker and
-# repo-meta with the default features, which enable nothing (toolgate::Gate, gitenv). Every feature
-# is also built alone.
+# testenv-core: swarm-device-access builds it with `async`, `bollard` and `redact` (bollard implies
+# the other two; each suite passes its own labels, variables and resources);
+# swarm-scheduler-exporter and runhold add `dind`, their DinD Swarm; bitgauge with `sync` (its
+# runner, beside the run filter, the tool gate, gitenv, envid and the identity rule of the default
+# build); awtrix-controller, swarm-rootless-docker and repo-meta with the default features, which
+# enable nothing (toolgate::Gate, gitenv). Every feature is also built alone, `dind` explicitly
+# without the default features, so a feature it needs cannot come only from a consumer's
+# unification.
 testenv-core = [
     { no-default-features = true },
     { features = ["async"] },
     { features = ["sync"] },
     { features = ["bollard"] },
     { features = ["redact"] },
-    { features = ["async", "bollard", "redact"] }, # swarm-scheduler-exporter, swarm-device-access
+    { no-default-features = true, features = ["dind"] },
+    { features = ["async", "bollard", "redact"] }, # swarm-device-access
+    { features = ["async", "bollard", "dind", "redact"] }, # swarm-scheduler-exporter, runhold
     { all-features = true },
 ]
 

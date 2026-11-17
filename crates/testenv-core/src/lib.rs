@@ -43,9 +43,14 @@
 //!   `redact_env`, `Log` and `Logger`.
 //! - `bollard` (implies `async` and `redact`): `host`, the host daemon's sweep, listing and
 //!   cleanup of runs on bollard, and the PID liveness check.
+//! - `dind` (implies `bollard`, with bollard's `http`): `dind`, a Docker Swarm of `DinD` nodes on
+//!   the host daemon for a suite's integration tests (`up`, `Cluster::down`, the keep-aware
+//!   sweep, `poll_until`).
 
 #[cfg(feature = "async")]
 pub mod context;
+#[cfg(feature = "dind")]
+pub mod dind;
 pub mod envid;
 mod error;
 pub mod gitenv;
