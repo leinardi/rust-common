@@ -20,9 +20,20 @@ workspace = true
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The visitor that reads the YAML into the untyped tree (the traits serde-saphyr implements).
 serde_core = { version = "1.0.229", default-features = false, features = ["std"] }
-# The YAML parser with spans, strict booleans and a duplicate-key policy.
-serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
+# The YAML parser with spans, strict booleans and a duplicate-key policy. Pinned at 2.0.0, with
+# the granit-parser it reads events from: under serde-saphyr 2.1 and granit-parser 2.1, `!!bool
+# tRuE` and the mixed-case boolean rules of `Booleans::GoYamlV3` change, and five tests fail
+# (runhold finding 68). Moving to 2.1 is a decision of its own, with a re-run of runhold's
+# granit-built compose corpus, whose own `=2.0.0` pin cargo would otherwise have to unify.
+serde-saphyr = { version = "=2.0.0", default-features = false, features = ["deserialize"] }
+# Not used directly: a dependency only to hold serde-saphyr's parser at 2.0.0 (above), which
+# serde-saphyr's own `^2.0` requirement would let a `cargo update` move to 2.1.
+granit-parser = { version = "=2.0.0", default-features = false }
 thiserror = "2.0.21"
+
+[package.metadata.cargo-machete]
+# Held only for its version (finding 68, above).
+ignored = ["granit-parser"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
