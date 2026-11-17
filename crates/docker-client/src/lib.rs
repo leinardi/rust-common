@@ -24,7 +24,8 @@
 //! * [`pump_stream`]: a bollard stream (the events, a log) as a channel, fed by a task that stops
 //!   with its receiver or its [`CancellationToken`].
 //! * [`events_established`]: the events stream, returned once the engine accepted the subscription.
-//! * `attach` (feature): a container's output pump and its exit code (`wait` returns once the engine holds the waiter).
+//! * `attach` (feature): a container's output, read with the framing the caller chooses, through
+//!   the pump, and its exit code (`wait` returns once the engine holds the waiter).
 //! * `exec` (feature): a command run in a container, its standard streams one bidirectional
 //!   connection, and `demux`, which splits an output stream by the framing the caller knows.
 //! * `logs` (feature): a container's or a service's log stream as `demux` frames, followed by
@@ -45,8 +46,10 @@
 #[cfg(feature = "attach")]
 pub mod attach;
 mod config;
-#[cfg(any(feature = "exec", feature = "logs"))]
+#[cfg(any(feature = "attach", feature = "exec", feature = "logs"))]
 pub mod demux;
+#[cfg(test)]
+mod dial_tests;
 mod error;
 #[cfg(feature = "exec")]
 pub mod exec;

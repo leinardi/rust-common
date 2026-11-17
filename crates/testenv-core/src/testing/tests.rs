@@ -411,3 +411,37 @@ fn the_suite_is_installed_once() {
     assert!(std::panic::catch_unwind(|| STATE.install(8)).is_err());
     assert_eq!(*STATE.get(), 7);
 }
+
+/// `temp_dir` is there during the body and gone after the run, and a cleanup registered after it
+/// still finds it: its own cleanup was registered first, so it runs after.
+#[tokio::test(start_paused = true)]
+async fn a_temp_dir_lasts_the_test_and_outlives_later_cleanups() {
+    let (runner, _) = make_runner(SSE);
+    let filter = RunFilter::parse("").unwrap();
+    let seen = Rc::new(RefCell::new(None));
+    let found_in_cleanup = Rc::new(RefCell::new(None));
+    let (path_out, cleanup_out) = (Rc::clone(&seen), Rc::clone(&found_in_cleanup));
+    let outcome = runner
+        .run_test(
+            "TestTemp/a b",
+            &Context::background(),
+            &filter,
+            async move |test: TestHandle| {
+                let dir = test.temp_dir()?;
+                assert!(dir.is_dir(), "{}", dir.display());
+                std::fs::write(dir.join("file"), b"x").unwrap();
+                let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+                assert!(name.starts_with("TestTemp_a_b"), "{name}");
+                *path_out.borrow_mut() = Some(dir.clone());
+                test.cleanup(move || async move {
+                    *cleanup_out.borrow_mut() = Some(dir.join("file").is_file());
+                });
+                Ok(())
+            },
+        )
+        .await;
+    assert_eq!(outcome, Outcome::Passed);
+    assert_eq!(*found_in_cleanup.borrow(), Some(true));
+    let dir = seen.borrow().clone().unwrap();
+    assert!(!dir.exists(), "{}", dir.display());
+}

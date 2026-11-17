@@ -28,8 +28,9 @@ tls = [
     "dep:rustls-pki-types",
     "dep:tokio-rustls",
 ]
-# The attach output pump and the wait answer.
-attach = []
+# The attach output pump, read with the caller's framing (io-util for the demultiplexer's reader),
+# and the wait answer.
+attach = ["tokio/io-util"]
 # Exec: create, start as a bidirectional stream, resize and inspect, and the demultiplexer for its
 # output.
 exec = ["tokio/io-util"]
@@ -86,6 +87,8 @@ socket2 = { version = "0.6.3", features = ["all"], optional = true }
 tokio-util = { version = "0.7.20", default-features = false }
 
 [dev-dependencies]
+# Short socket directories under /tmp for the dial-failure tests.
+tempfile = "3.27.0"
 # The fake engine's socket and I/O under the library's own tests, whatever the features.
 tokio = { version = "1.54.1", default-features = false, features = [
     "rt",

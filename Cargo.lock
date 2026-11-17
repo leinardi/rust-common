@@ -189,6 +189,7 @@ dependencies = [
 name = "config-layer"
 version = "1.5.0"
 dependencies = [
+ "granit-parser",
  "jiff",
  "serde-saphyr",
  "serde_core",
@@ -277,6 +278,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "socket2",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-rustls",
@@ -1359,6 +1361,7 @@ name = "testenv-core"
 version = "1.5.0"
 dependencies = [
  "bollard",
+ "futures-util",
  "jiff",
  "regex",
  "rustix",

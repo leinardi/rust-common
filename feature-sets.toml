@@ -51,23 +51,28 @@ service-kit = [
     { features = ["http"] },
     { features = ["process-metrics"] },
     { features = ["http", "process-metrics"] },            # bitgauge
-    { features = ["runtime", "http", "process-metrics"] }, # swarm-scheduler-exporter, swarm-device-access
+    # swarm-scheduler-exporter, swarm-device-access
+    { features = ["runtime", "http", "process-metrics"] },
     { all-features = true },
 ]
 
-# testenv-core: swarm-scheduler-exporter and swarm-device-access build it with `async`, `bollard`
-# and `redact` (bollard implies the other two; each suite passes its own labels, variables and
-# resources); bitgauge with `sync` (its runner, beside the run filter, the tool gate, gitenv, envid
-# and the identity rule of the default build); awtrix-controller, swarm-rootless-docker and
-# repo-meta with the default features, which enable nothing (toolgate::Gate, gitenv). Every feature
-# is also built alone.
+# testenv-core: swarm-device-access builds it with `async`, `bollard` and `redact` (bollard implies
+# the other two; each suite passes its own labels, variables and resources);
+# swarm-scheduler-exporter and runhold add `dind`, their DinD Swarm; bitgauge with `sync` (its
+# runner, beside the run filter, the tool gate, gitenv, envid and the identity rule of the default
+# build); awtrix-controller, swarm-rootless-docker and repo-meta with the default features, which
+# enable nothing (toolgate::Gate, gitenv). Every feature is also built alone, `dind` explicitly
+# without the default features, so a feature it needs cannot come only from a consumer's
+# unification.
 testenv-core = [
     { no-default-features = true },
     { features = ["async"] },
     { features = ["sync"] },
     { features = ["bollard"] },
     { features = ["redact"] },
-    { features = ["async", "bollard", "redact"] }, # swarm-scheduler-exporter, swarm-device-access
+    { no-default-features = true, features = ["dind"] },
+    { features = ["async", "bollard", "redact"] }, # swarm-device-access
+    { features = ["async", "bollard", "dind", "redact"] }, # swarm-scheduler-exporter, runhold
     { all-features = true },
 ]
 
@@ -80,8 +85,9 @@ repo-meta = [
 ]
 
 # tracing-setup: awtrix-controller builds it with `log-bridge` (its dependencies log through the
-# `log` facade), adding `testing` for its tests; swarm-rootless-docker and bitgauge with no features,
-# adding `testing` likewise. Which writer, level, format, target and JSON span fields are parameters.
+# `log` facade), adding `testing` for its tests; swarm-rootless-docker and bitgauge with no
+# features, adding `testing` likewise. Which writer, level, format, target and JSON span fields are
+# parameters.
 tracing-setup = [
     { no-default-features = true },
     { features = ["log-bridge"] },
@@ -115,8 +121,12 @@ docker-client = [
     { features = ["raw-request", "test-util"] }, # raw-request with its tests
     { features = ["raw-spec"] },
     { features = ["raw-spec", "test-util"] },   # raw-spec with its tests
-    { features = ["exec", "logs", "raw-get", "raw-request", "raw-spec", "stats", "tcp", "tls"] }, # runhold
-    { features = ["exec", "logs", "raw-get", "raw-request", "raw-spec", "stats", "tcp", "test-util", "tls"] }, # runhold's tests
+    # runhold
+    { features = ["exec", "logs", "raw-get", "raw-request", "raw-spec", "stats", "tcp", "tls"] },
+    # runhold's tests
+    { features = [
+        "exec", "logs", "raw-get", "raw-request", "raw-spec", "stats", "tcp", "test-util", "tls",
+    ] },
     { features = ["tcp", "tls", "test-util"] }, # a DOCKER_HOST client, with its tests
     { all-features = true },
 ]

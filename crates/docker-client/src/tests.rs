@@ -85,10 +85,36 @@ async fn a_refused_connection_is_unavailable() {
 #[tokio::test]
 async fn a_missing_socket_is_refused_at_connect() {
     let error = connect(Config::unix("/nonexistent/docker.sock")).unwrap_err();
-    assert!(matches!(
-        error,
-        ConnectError::Client(BollardError::SocketNotFoundError(_))
-    ));
+    let ConnectError::Dial { host, source } = &error else {
+        panic!("not a dial failure: {error:?}");
+    };
+    assert_eq!(host, "unix:///nonexistent/docker.sock");
+    assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        error.to_string(),
+        "failed to connect to the docker API at unix:///nonexistent/docker.sock; check if the \
+         path is correct and if the daemon is running: dial unix /nonexistent/docker.sock: \
+         connect: no such file or directory"
+    );
+}
+
+#[test]
+fn the_daemon_host_is_kept_as_given() {
+    assert_eq!(Config::unix("/s").daemon_host(), "unix:///s");
+    assert_eq!(Config::unix("unix:///s").daemon_host(), "unix:///s");
+    let default = Config::from_env(env(&[])).unwrap();
+    assert_eq!(default.daemon_host(), "unix:///var/run/docker.sock");
+    let unix = Config::from_env(env(&[("DOCKER_HOST", "unix:///run/d.sock")])).unwrap();
+    assert_eq!(unix.daemon_host(), "unix:///run/d.sock");
+}
+
+#[cfg(feature = "tcp")]
+#[test]
+fn a_tcp_or_http_daemon_host_is_kept_as_written() {
+    for host in ["tcp://127.0.0.1:2375", "http://127.0.0.1:2375"] {
+        let config = Config::from_env(env(&[("DOCKER_HOST", host)])).unwrap();
+        assert_eq!(config.daemon_host(), host);
+    }
 }
 
 /// An engine that sends the response headers at once and then stalls in the body: the call fails
@@ -439,6 +465,7 @@ fn from_env_reads_tls_from_the_cert_path() {
 mod attach_tests {
     use super::*;
     use crate::attach::{Output, WaitCondition, attach, wait};
+    use crate::demux::Framing;
 
     const SECS: Duration = Duration::from_secs(5);
 
@@ -449,47 +476,210 @@ mod attach_tests {
         bytes
     }
 
+    async fn attached(
+        engine: &FakeEngine,
+        id: &str,
+        framing: Framing,
+        cancel: CancellationToken,
+    ) -> Result<tokio::sync::mpsc::Receiver<Result<Output, Error>>, Error> {
+        attach(&config_of(engine), id, framing, SECS, 4, cancel).await
+    }
+
+    /// The next output, failing the test rather than hanging when none comes.
+    async fn next(
+        receiver: &mut tokio::sync::mpsc::Receiver<Result<Output, Error>>,
+    ) -> Option<Result<Output, Error>> {
+        tokio::time::timeout(SECS, receiver.recv())
+            .await
+            .expect("the output came in time")
+    }
+
     #[tokio::test]
     async fn attach_splits_stdout_from_stderr_and_closes_with_the_stream() {
         let mut stream = frame(1, b"out");
         stream.extend(frame(2, b"err"));
         let engine =
             FakeEngine::start(&[("/containers/c/attach", Reply::upgrade(&stream))]).unwrap();
-        let docker = client(&engine);
-        let mut receiver = attach(
-            &docker,
-            "c",
-            Duration::from_secs(5),
-            4,
+        let mut receiver = attached(&engine, "c", Framing::Multiplexed, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            next(&mut receiver).await.unwrap().unwrap(),
+            Output::Stdout(b"out".to_vec())
+        );
+        assert_eq!(
+            next(&mut receiver).await.unwrap().unwrap(),
+            Output::Stderr(b"err".to_vec())
+        );
+        assert!(next(&mut receiver).await.is_none());
+    }
+
+    /// The request is moby client v0.6.2's `ContainerAttach` with `Stream`, `Stdout` and
+    /// `Stderr`: the query's keys sorted as `url.Values.Encode` sorts them, `text/plain`, no body,
+    /// and the connection asked to be taken over.
+    #[tokio::test]
+    async fn attach_sends_moby_s_request() {
+        let engine =
+            FakeEngine::start(&[("/containers/c/attach", Reply::upgrade(&frame(1, b"x")))])
+                .unwrap();
+        let mut receiver = attached(
+            &engine,
+            " c\n",
+            Framing::Multiplexed,
             CancellationToken::new(),
         )
         .await
         .unwrap();
+        let _ = next(&mut receiver).await;
+        let requests = engine.requests();
+        let request = &requests[0];
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path(), "/containers/c/attach");
+        assert_eq!(request.query(), "stderr=1&stdout=1&stream=1");
+        assert_eq!(request.header("content-type"), Some("text/plain"));
+        assert_eq!(request.header("connection"), Some("Upgrade"));
+        assert_eq!(request.header("upgrade"), Some("tcp"));
+        // hyper sends no length for an empty body (moby's Go request says 0; see the module doc).
+        assert_eq!(request.header("content-length"), None);
+        assert!(request.body.is_empty());
+    }
+
+    /// A TTY stream is raw: chunks that start with a multiplexing stream byte arrive byte for
+    /// byte, as stdout, and each as soon as it is in (the session stays open after it, so a
+    /// reader waiting for a frame's worth of bytes would hang).
+    #[tokio::test]
+    async fn attach_reads_a_raw_stream_byte_for_byte_and_unbuffered() {
+        for output in [
+            b"\x01\x00\x00\x00\x00\x00\x00\x09raw".as_slice(),
+            b"\x02err?",
+        ] {
+            let engine = FakeEngine::start(&[(
+                "/containers/t/attach",
+                Reply::Session {
+                    output: output.to_vec(),
+                    echo: false,
+                },
+            )])
+            .unwrap();
+            let mut receiver = attached(&engine, "t", Framing::Raw, CancellationToken::new())
+                .await
+                .unwrap();
+            let mut read = Vec::new();
+            while read.len() < output.len() {
+                match next(&mut receiver).await.unwrap().unwrap() {
+                    Output::Stdout(bytes) => read.extend(bytes),
+                    Output::Stderr(bytes) => panic!("a raw stream has no stderr: {bytes:?}"),
+                }
+            }
+            assert_eq!(read, output);
+        }
+    }
+
+    /// A multiplexed frame whose payload starts with `\x01` is one stdout piece, intact.
+    #[tokio::test]
+    async fn attach_keeps_a_multiplexed_line_starting_with_a_stream_byte() {
+        let engine = FakeEngine::start(&[(
+            "/containers/c/attach",
+            Reply::upgrade(&frame(1, b"\x01line\n")),
+        )])
+        .unwrap();
+        let mut receiver = attached(&engine, "c", Framing::Multiplexed, CancellationToken::new())
+            .await
+            .unwrap();
         assert_eq!(
-            receiver.recv().await.unwrap().unwrap(),
+            next(&mut receiver).await.unwrap().unwrap(),
+            Output::Stdout(b"\x01line\n".to_vec())
+        );
+        assert!(next(&mut receiver).await.is_none());
+    }
+
+    /// An error the engine sends in the stream is the last item.
+    #[tokio::test]
+    async fn attach_ends_with_an_error_from_the_engine() {
+        let mut stream = frame(1, b"out");
+        stream.extend(frame(3, b"boom"));
+        stream.extend(frame(1, b"never"));
+        let engine =
+            FakeEngine::start(&[("/containers/c/attach", Reply::upgrade(&stream))]).unwrap();
+        let mut receiver = attached(&engine, "c", Framing::Multiplexed, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            next(&mut receiver).await.unwrap().unwrap(),
             Output::Stdout(b"out".to_vec())
         );
-        assert_eq!(
-            receiver.recv().await.unwrap().unwrap(),
-            Output::Stderr(b"err".to_vec())
+        let error = next(&mut receiver).await.unwrap().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .ends_with("error from daemon in stream: boom"),
+            "{error}"
         );
-        assert!(receiver.recv().await.is_none());
+        assert!(next(&mut receiver).await.is_none());
     }
 
     #[tokio::test]
     async fn attach_to_a_missing_container_is_not_found() {
         let engine = FakeEngine::start(&[]).unwrap();
-        let docker = client(&engine);
-        let error = attach(
-            &docker,
-            "c",
-            Duration::from_secs(5),
-            4,
+        let error = attached(&engine, "c", Framing::Multiplexed, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    /// The ID is trimmed and escaped in the path as moby's client does; an empty one is refused
+    /// before sending.
+    #[tokio::test]
+    async fn attach_escapes_the_id_and_refuses_an_empty_one() {
+        let engine = FakeEngine::start(&[]).unwrap();
+        let _ = attached(
+            &engine,
+            " a?b%c ",
+            Framing::Multiplexed,
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(engine.requests()[0].path(), "/containers/a%3Fb%25c/attach");
+        let error = attached(
+            &engine,
+            "  ",
+            Framing::Multiplexed,
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::NotFound);
+        assert_eq!(error.kind(), ErrorKind::Other);
+        assert!(
+            error
+                .to_string()
+                .ends_with("invalid container name or ID: value is empty"),
+            "{error}"
+        );
+        assert_eq!(engine.requests().len(), 1);
+    }
+
+    /// Cancelling ends the stream while the container is quiet: what was sent comes through, then
+    /// the receiver closes.
+    #[tokio::test]
+    async fn attach_ends_when_cancelled() {
+        let engine = FakeEngine::start(&[(
+            "/containers/c/attach",
+            Reply::Session {
+                output: frame(1, b"first"),
+                echo: false,
+            },
+        )])
+        .unwrap();
+        let cancel = CancellationToken::new();
+        let mut receiver = attached(&engine, "c", Framing::Multiplexed, cancel.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            next(&mut receiver).await.unwrap().unwrap(),
+            Output::Stdout(b"first".to_vec())
+        );
+        cancel.cancel();
+        assert!(next(&mut receiver).await.is_none());
     }
 
     /// The wait escapes the ID in the path as moby's client does.
@@ -1107,9 +1297,10 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
 #[tokio::test]
 async fn the_streaming_tcp_connection_has_keepalive_on() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let stream = crate::stream::connect_tcp(&listener.local_addr().unwrap().to_string())
-        .await
-        .unwrap();
+    let stream =
+        crate::stream::connect_tcp("tcp://test", &listener.local_addr().unwrap().to_string())
+            .await
+            .unwrap();
     let socket = socket2::SockRef::from(&stream);
     assert!(socket.keepalive().unwrap());
     assert_eq!(

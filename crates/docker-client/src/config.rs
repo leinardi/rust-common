@@ -41,10 +41,19 @@ pub enum ConnectError {
     /// The setting needs a cargo feature this build lacks (`tcp`, `tls`).
     #[error("{0} is not supported by this build")]
     Unsupported(&'static str),
-    /// bollard refused to build the client (a unix socket that does not exist, a certificate that
-    /// cannot be read).
+    /// bollard refused to build the client (a certificate that cannot be read).
     #[error(transparent)]
     Client(#[from] BollardError),
+    /// The unix socket of the daemon at `host` does not exist or cannot be reached through its
+    /// directories, worded as moby's client words that dial; `source` is the I/O error, its kind
+    /// the path's lookup's (`NotFound`, `PermissionDenied`).
+    #[error("{}", crate::error::DialText(.host, .source))]
+    Dial {
+        /// The daemon host as configured, [`Config::daemon_host`].
+        host: String,
+        /// Why the dial failed.
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +73,8 @@ pub(crate) enum Endpoint {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub(crate) endpoint: Endpoint,
+    /// The daemon host as given, moby's `DaemonHost`.
+    host: String,
     pub(crate) api_version: Option<ClientVersion>,
     /// The version [`negotiate`] settled on, in the `Config` it returns for that client.
     pub(crate) negotiated: Option<ClientVersion>,
@@ -76,10 +87,11 @@ impl Config {
     #[must_use]
     pub fn unix(path: impl Into<String>) -> Self {
         let path = path.into();
-        let path = path
-            .strip_prefix("unix://")
-            .map_or_else(|| path.clone(), str::to_owned);
-        Self::new(Endpoint::Unix(path))
+        let (path, host) = match path.strip_prefix("unix://") {
+            Some(stripped) => (stripped.to_owned(), path.clone()),
+            None => (path.clone(), format!("unix://{path}")),
+        };
+        Self::new(Endpoint::Unix(path), host)
     }
 
     /// The engine `DOCKER_HOST` names (`unix://`, and with `tcp` also `tcp://` and `http://`, with
@@ -136,7 +148,7 @@ impl Config {
                 "DOCKER_HOST {host:?} has an unknown scheme"
             )));
         };
-        let mut config = Self::new(endpoint);
+        let mut config = Self::new(endpoint, host);
         config.api_version = var("DOCKER_API_VERSION")
             .map(|version| parse_version(&version))
             .transpose()?;
@@ -173,9 +185,18 @@ impl Config {
         self
     }
 
-    fn new(endpoint: Endpoint) -> Self {
+    /// The daemon host as configured, moby's `DaemonHost`: `DOCKER_HOST` as written (an
+    /// `http://` host stays `http://`), `unix:///var/run/docker.sock` when unset, or
+    /// `unix://<path>` for [`Config::unix`]. The dial failures name it.
+    #[must_use]
+    pub fn daemon_host(&self) -> &str {
+        &self.host
+    }
+
+    fn new(endpoint: Endpoint, host: String) -> Self {
         Self {
             endpoint,
+            host,
             api_version: None,
             negotiated: None,
             user_agent: None,
@@ -188,8 +209,10 @@ impl Config {
 ///
 /// # Errors
 ///
-/// [`ConnectError::Invalid`] for a `User-Agent` no header can carry, [`ConnectError::Client`] when
-/// bollard refuses (a unix socket that does not exist, a certificate it cannot read).
+/// [`ConnectError::Invalid`] for a `User-Agent` no header can carry, [`ConnectError::Dial`] for a
+/// unix socket that does not exist or sits behind a closed directory (worded as moby's client words that dial, naming
+/// [`Config::daemon_host`]), [`ConnectError::Client`] when bollard refuses otherwise (a
+/// certificate it cannot read).
 pub fn connect(config: Config) -> Result<Docker, ConnectError> {
     let seconds = config
         .header_timeout
@@ -199,7 +222,24 @@ pub fn connect(config: Config) -> Result<Docker, ConnectError> {
     let fixed = sent_version(&config);
     let version = config.api_version.as_ref().unwrap_or(API_DEFAULT_VERSION);
     let docker = match config.endpoint {
-        Endpoint::Unix(path) => Docker::connect_with_unix(&path, seconds, version)?,
+        Endpoint::Unix(path) => {
+            Docker::connect_with_unix(&path, seconds, version).map_err(|error| {
+                if !matches!(error, BollardError::SocketNotFoundError(_)) {
+                    return ConnectError::Client(error);
+                }
+                // bollard checks that the path exists; moby dials it at the first call, which
+                // fails as the path's lookup does (permission denied behind a closed directory).
+                ConnectError::Dial {
+                    host: config.host.clone(),
+                    source: std::io::Error::new(
+                        std::fs::metadata(&path)
+                            .err()
+                            .map_or(std::io::ErrorKind::NotFound, |lookup| lookup.kind()),
+                        error,
+                    ),
+                }
+            })?
+        }
         #[cfg(feature = "tcp")]
         Endpoint::Tcp(addr) => Docker::connect_with_http(&addr, seconds, version)?,
         #[cfg(feature = "tls")]
