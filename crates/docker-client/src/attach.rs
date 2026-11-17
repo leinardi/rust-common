@@ -15,66 +15,108 @@
 //!
 //! Extracted from swarm-rootless-docker/src/docker/mod.rs at e0961f77655f (`Bollard::attach` and
 //! `Bollard::wait`).
+//!
+//! [`attach`] sends moby client v0.6.2's `ContainerAttach` with `Stream`, `Stdout` and `Stderr` set:
+//! `POST /containers/<id>/attach?stderr=1&stdout=1&stream=1` with `Content-Type: text/plain`, no
+//! body, and the connection taken over (`Connection: Upgrade`, `Upgrade: tcp`, moby's
+//! `postHijacked`). The query is Go's `url.Values.Encode`, which sorts the keys. The ID is trimmed
+//! and escaped as moby's `trimID` and `url.URL` do. The output is read with the framing the caller
+//! passes, never guessed from the bytes as bollard's `attach_container` does: a TTY session or a
+//! log line starting with `\x01` defeats that guess.
+//!
+//! As for exec's start, a dial that fails is worded as moby's `doRequest` words it; moby's hijack
+//! has its own text there (`cannot connect to the Docker daemon. Is 'docker daemon' running on this
+//! host?: <err>`), which is not reproduced.
 
 use std::time::Duration;
 
-use bollard::Docker;
-use bollard::container::LogOutput;
 use bollard::errors::Error as BollardError;
 use bollard::models::ContainerWaitResponse;
-use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bytes::Bytes;
-use futures_util::StreamExt as _;
 use http::Method;
 use http_body_util::{BodyExt as _, Collected};
+use hyper_util::rt::TokioIo;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::error::{Error, bounded};
+use crate::demux::{DemuxError, Demuxer, Framing, Pipe};
+use crate::error::Error;
 use crate::pump::pump_stream;
-use crate::stream::{Call, Target, escape_id, establish};
+use crate::stream::{Call, Target, escape_id, establish, failure, trim_id, upgrade};
+
+/// The query of moby's `ContainerAttach` with `Stream`, `Stdout` and `Stderr`, its keys sorted as
+/// `url.Values.Encode` sorts them.
+const ATTACH_QUERY: &str = "stderr=1&stdout=1&stream=1";
 
 /// A piece of a container's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
-    /// Written to the container's stdout.
+    /// Written to the container's stdout (all of a raw, TTY stream).
     Stdout(Vec<u8>),
     /// Written to the container's stderr.
     Stderr(Vec<u8>),
 }
 
-/// Attaches to the container `id`'s stdout and stderr. Only establishing the stream is bounded, by
-/// `timeout`; the stream lasts as long as the container's output, and the pump ends as
-/// [`pump_stream`] says (`capacity` is its buffer).
+/// Attaches to the container `id`'s stdout and stderr and reads them as `framing` says:
+/// [`Framing::Multiplexed`] for a container created without a TTY, [`Framing::Raw`] for one with a
+/// TTY (all of it is then [`Output::Stdout`], each piece as it arrives). The caller knows which
+/// from the `Tty` it created the container with, as moby's client does.
+///
+/// Only establishing the stream is bounded, by `timeout`, and `cancel` interrupts it; the stream
+/// lasts as long as the container's output, and the pump ends as [`pump_stream`] says (`capacity`
+/// is its buffer, at least one). A stream the engine breaks off, or that names an error or an
+/// unknown stream, yields that error and ends. Must be called inside a tokio runtime.
+///
+/// `config` is the client's: the one it was connected from, or the one
+/// [`negotiate`](crate::negotiate) returned with it. The request carries its `User-Agent` and API
+/// version, as the client's own.
 ///
 /// # Errors
 ///
-/// The attach call's failure, sorted into its kind, [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) included.
+/// An empty `id` (whitespace trimmed, as moby's client does) is refused before sending, as
+/// `Other`; an answer other than `101` carries its status and moby's text, `unable to upgrade to
+/// tcp, received <status>`: 404 (no such container) is `NotFound`, 409 `Conflict`; the bound's
+/// `Timeout`, `Cancelled`, and `Unavailable` when the engine cannot be reached.
 pub async fn attach(
-    docker: &Docker,
+    config: &Config,
     id: &str,
+    framing: Framing,
     timeout: Duration,
     capacity: usize,
     cancel: CancellationToken,
 ) -> Result<mpsc::Receiver<Result<Output, Error>>, Error> {
-    let options = AttachContainerOptionsBuilder::new()
-        .stream(true)
-        .stdout(true)
-        .stderr(true)
-        .build();
-    let attached = bounded(timeout, docker.attach_container(id, Some(options)))
-        .await?
-        .output;
-    let output = attached.map(|item| {
-        item.map(|output| match output {
-            LogOutput::StdErr { message } => Output::Stderr(message.to_vec()),
-            LogOutput::StdOut { message }
-            | LogOutput::Console { message }
-            | LogOutput::StdIn { message } => Output::Stdout(message.to_vec()),
-        })
+    let id = trim_id("container", id)?;
+    let path = format!("/containers/{}/attach", escape_id(id));
+    let call = Call::new(Method::POST, &path, ATTACH_QUERY).plain_text();
+    let upgraded = upgrade(config, &Target::of(config), call, timeout, &cancel).await?;
+    let state = Some((TokioIo::new(upgraded), Demuxer::new(framing)));
+    let output = futures_util::stream::unfold(state, |state| async move {
+        let (mut io, mut demuxer) = state?;
+        match demuxer.read_frame(&mut io).await {
+            Ok(Some(frame)) => {
+                let bytes = frame.bytes.to_vec();
+                let output = match frame.pipe {
+                    Pipe::Stdout => Output::Stdout(bytes),
+                    Pipe::Stderr => Output::Stderr(bytes),
+                };
+                Some((Ok(output), Some((io, demuxer))))
+            }
+            Ok(None) => None,
+            // The stream ends with its error: a failed read is not retried.
+            Err(error) => Some((Err(stream_error(error)), None)),
+        }
     });
     Ok(pump_stream(output, capacity, cancel))
+}
+
+/// A stream that cannot be read on, in bollard's error: a broken connection as its I/O error, the
+/// engine's error or an unknown stream as their text.
+fn stream_error(error: DemuxError) -> BollardError {
+    match error {
+        DemuxError::Io(error) => BollardError::from(error),
+        DemuxError::Daemon(_) | DemuxError::Unrecognized(_) => failure(error.to_string()),
+    }
 }
 
 /// When the engine answers a wait: the `condition` query of `POST /containers/{id}/wait`.

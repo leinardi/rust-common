@@ -28,8 +28,9 @@ tls = [
     "dep:rustls-pki-types",
     "dep:tokio-rustls",
 ]
-# The attach output pump and the wait answer.
-attach = []
+# The attach output pump, read with the caller's framing (io-util for the demultiplexer's reader),
+# and the wait answer.
+attach = ["tokio/io-util"]
 # Exec: create, start as a bidirectional stream, resize and inspect, and the demultiplexer for its
 # output.
 exec = ["tokio/io-util"]

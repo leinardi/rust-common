@@ -105,6 +105,8 @@ pub(crate) struct Call<'call> {
     pub(crate) path: &'call str,
     pub(crate) query: &'call str,
     pub(crate) body: Option<Bytes>,
+    /// The `Content-Type` the request announces, if any.
+    content_type: Option<&'static str>,
     /// Whether the path goes out under the version prefix; `/_ping` does not.
     pub(crate) versioned: bool,
 }
@@ -117,6 +119,7 @@ impl<'call> Call<'call> {
             path,
             query,
             body: None,
+            content_type: None,
             versioned: true,
         }
     }
@@ -135,6 +138,16 @@ impl<'call> Call<'call> {
     pub(crate) fn json(self, json: String) -> Self {
         Self {
             body: Some(Bytes::from(json)),
+            content_type: Some("application/json"),
+            ..self
+        }
+    }
+
+    #[cfg(feature = "attach")]
+    /// The same request announcing `Content-Type: text/plain` with no body, as moby's attach does.
+    pub(crate) fn plain_text(self) -> Self {
+        Self {
+            content_type: Some("text/plain"),
             ..self
         }
     }
@@ -249,7 +262,7 @@ pub(crate) async fn answered(
 /// As [`establish`]; an answer other than `101` is an error with that status (so 404 is
 /// `NotFound`, 409 `Conflict`, a `200` `Other`) and moby's text, `unable to upgrade to tcp,
 /// received <status>`.
-#[cfg(feature = "exec")]
+#[cfg(any(feature = "exec", feature = "attach"))]
 pub(crate) async fn upgrade(
     config: &Config,
     target: &Target,
@@ -300,13 +313,13 @@ fn request(
     if mode == Mode::Upgrade {
         request = request.header(CONNECTION, "Upgrade").header(UPGRADE, "tcp");
     }
-    let body = match call.body {
-        Some(json) => {
-            request = request.header(CONTENT_TYPE, "application/json");
-            Either::Right(Full::new(json))
-        }
-        None => Either::Left(Empty::new()),
-    };
+    if let Some(content_type) = call.content_type {
+        request = request.header(CONTENT_TYPE, content_type);
+    }
+    let body = call.body.map_or_else(
+        || Either::Left(Empty::new()),
+        |json| Either::Right(Full::new(json)),
+    );
     request
         .body(body)
         .map_err(|error| Error::from(BollardError::from(error)))
@@ -386,6 +399,7 @@ async fn exchange(
 /// `trimID` does before the calls that use it; `kind` names the object (`container`, `exec`,
 /// `service`).
 #[cfg(any(
+    feature = "attach",
     feature = "exec",
     feature = "logs",
     feature = "stats",
@@ -434,6 +448,7 @@ pub fn escape_id(id: &str) -> String {
 /// A failure of the client's own making, in bollard's error.
 #[cfg(any(
     feature = "tls",
+    feature = "attach",
     feature = "exec",
     feature = "logs",
     feature = "stats",
