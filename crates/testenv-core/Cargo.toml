@@ -23,9 +23,10 @@ required-features = ["async"]
 
 [features]
 # Go's context and testing packages on tokio, for an async `harness = false` suite
-# (swarm-scheduler-exporter's and swarm-device-access's): TestHandle, Outcome, Suite, and the
-# runner skeleton (--run, the suite deadline, SIGINT and SIGTERM, the tally).
-async = ["dep:tokio", "dep:tokio-util"]
+# (swarm-scheduler-exporter's and swarm-device-access's): TestHandle (its temp_dir on tempfile),
+# Outcome, Suite, and the runner skeleton (--run, the suite deadline, SIGINT and SIGTERM, the
+# tally).
+async = ["dep:tokio", "dep:tokio-util", "dep:tempfile"]
 # bitgauge's runner of its Docker suites, without async: TestCase, Test, main and run_selected,
 # libtest's flags accepted.
 sync = ["dep:tempfile"]
@@ -50,7 +51,7 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ], optional = true }
 # CancellationToken, Go's context cancellation.
 tokio-util = { version = "0.7.20", default-features = false, optional = true }
-# Go's t.TempDir for the sync runner.
+# Go's t.TempDir for both runners.
 tempfile = { version = "3.27.0", optional = true }
 # The Docker SDK for the harness's own host calls: the unix socket only (pipe). A suite that also
 # speaks TCP or TLS to its nodes (swarm-scheduler-exporter's) adds bollard's http and ssl itself,

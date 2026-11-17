@@ -45,6 +45,7 @@ use std::fmt::Write as _;
 use std::future::Future;
 use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -271,6 +272,39 @@ impl TestHandle {
             .cleanups
             .borrow_mut()
             .push(Box::new(move || Box::pin(cleanup())));
+    }
+
+    /// Go's `t.TempDir`: a new directory, removed when the test ends. Its name starts with the
+    /// test's name cut to 64 bytes, every byte but an ASCII letter, a digit, `-`, `_` or `.`
+    /// written `_` (Go keeps a few more and drops the rest; only the directory's name differs).
+    /// The sync runner's `Test::temp_dir` names it with the suite's prefix instead, as bitgauge's
+    /// runner did; this one has no suite prefix to hand, so it takes Go's rule, the test's name.
+    /// The directory is removed by a cleanup registered at this call, so it runs in turn with the
+    /// others, last registered first: a cleanup registered after this call still finds it.
+    ///
+    /// # Errors
+    ///
+    /// [`Fatal`], recorded, when the directory cannot be created.
+    pub fn temp_dir(&self) -> Result<PathBuf, Fatal> {
+        let prefix: String = self
+            .name()
+            .bytes()
+            .take(64)
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || b"-_.".contains(&byte) {
+                    char::from(byte)
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let dir = tempfile::Builder::new()
+            .prefix(&prefix)
+            .tempdir()
+            .map_err(|error| self.fatal(format!("create a temporary directory: {error}")))?;
+        let path = dir.path().to_path_buf();
+        self.cleanup(move || async move { drop(dir) });
+        Ok(path)
     }
 
     /// `t.Run`: runs `body` as the subtest `name`, unless the run filter leaves it out, and
