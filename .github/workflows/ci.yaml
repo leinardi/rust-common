@@ -83,6 +83,11 @@ jobs:
       - name: Run every pre-commit hook on every file
         env:
           SKIP: cargo-test,cargo-deny
+          # pre-commit installs the lychee hook with cargo-binstall when the cache lacks it, which
+          # asks GitHub's API for the release. Unauthenticated, a shared runner's address hits the
+          # rate limit (403) and binstall falls back to a source build pre-commit cannot use. The
+          # job's token is read-only (the workflow's permissions).
+          GITHUB_TOKEN: ${{ github.token }}
         run: pre-commit run --all-files --show-diff-on-failure
 
       # pre-commit fails a hook that modifies a tracked file, which covers the auto-fixing hooks
