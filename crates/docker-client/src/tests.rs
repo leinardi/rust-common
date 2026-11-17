@@ -85,10 +85,36 @@ async fn a_refused_connection_is_unavailable() {
 #[tokio::test]
 async fn a_missing_socket_is_refused_at_connect() {
     let error = connect(Config::unix("/nonexistent/docker.sock")).unwrap_err();
-    assert!(matches!(
-        error,
-        ConnectError::Client(BollardError::SocketNotFoundError(_))
-    ));
+    let ConnectError::Dial { host, source } = &error else {
+        panic!("not a dial failure: {error:?}");
+    };
+    assert_eq!(host, "unix:///nonexistent/docker.sock");
+    assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        error.to_string(),
+        "failed to connect to the docker API at unix:///nonexistent/docker.sock; check if the \
+         path is correct and if the daemon is running: dial unix /nonexistent/docker.sock: \
+         connect: no such file or directory"
+    );
+}
+
+#[test]
+fn the_daemon_host_is_kept_as_given() {
+    assert_eq!(Config::unix("/s").daemon_host(), "unix:///s");
+    assert_eq!(Config::unix("unix:///s").daemon_host(), "unix:///s");
+    let default = Config::from_env(env(&[])).unwrap();
+    assert_eq!(default.daemon_host(), "unix:///var/run/docker.sock");
+    let unix = Config::from_env(env(&[("DOCKER_HOST", "unix:///run/d.sock")])).unwrap();
+    assert_eq!(unix.daemon_host(), "unix:///run/d.sock");
+}
+
+#[cfg(feature = "tcp")]
+#[test]
+fn a_tcp_or_http_daemon_host_is_kept_as_written() {
+    for host in ["tcp://127.0.0.1:2375", "http://127.0.0.1:2375"] {
+        let config = Config::from_env(env(&[("DOCKER_HOST", host)])).unwrap();
+        assert_eq!(config.daemon_host(), host);
+    }
 }
 
 /// An engine that sends the response headers at once and then stalls in the body: the call fails
@@ -1107,9 +1133,10 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
 #[tokio::test]
 async fn the_streaming_tcp_connection_has_keepalive_on() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let stream = crate::stream::connect_tcp(&listener.local_addr().unwrap().to_string())
-        .await
-        .unwrap();
+    let stream =
+        crate::stream::connect_tcp("tcp://test", &listener.local_addr().unwrap().to_string())
+            .await
+            .unwrap();
     let socket = socket2::SockRef::from(&stream);
     assert!(socket.keepalive().unwrap());
     assert_eq!(

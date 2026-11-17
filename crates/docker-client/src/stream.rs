@@ -169,8 +169,8 @@ pub(crate) async fn establish(
 ) -> Result<Incoming, Error> {
     let request = request(config, target, call, Mode::Plain)?;
     guarded(timeout, cancel, async {
-        let response = exchange(target, request, Mode::Plain).await?;
-        accepted(response).await
+        let response = exchange(config, target, request, Mode::Plain).await?;
+        Ok(accepted(response).await?)
     })
     .await
 }
@@ -197,8 +197,13 @@ pub(crate) async fn complete(
 ) -> Result<Bytes, Error> {
     let request = request(config, target, call, Mode::Plain)?;
     guarded(timeout, cancel, async {
-        let response = exchange(target, request, Mode::Plain).await?;
-        Ok(accepted(response).await?.collect().await?.to_bytes())
+        let response = exchange(config, target, request, Mode::Plain).await?;
+        Ok(accepted(response)
+            .await?
+            .collect()
+            .await
+            .map_err(BollardError::from)?
+            .to_bytes())
     })
     .await
 }
@@ -220,10 +225,15 @@ pub(crate) async fn answered(
 ) -> Result<(StatusCode, http::HeaderMap, Bytes), Error> {
     let request = request(config, target, call, Mode::Plain)?;
     guarded(timeout, cancel, async {
-        let response = exchange(target, request, Mode::Plain).await?;
+        let response = exchange(config, target, request, Mode::Plain).await?;
         let status = response.status();
         let headers = response.headers().clone();
-        let body = response.into_body().collect().await?.to_bytes();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(BollardError::from)?
+            .to_bytes();
         Ok((status, headers, body))
     })
     .await
@@ -249,15 +259,17 @@ pub(crate) async fn upgrade(
 ) -> Result<hyper::upgrade::Upgraded, Error> {
     let request = request(config, target, call, Mode::Upgrade)?;
     guarded(timeout, cancel, async {
-        let response = exchange(target, request, Mode::Upgrade).await?;
+        let response = exchange(config, target, request, Mode::Upgrade).await?;
         let status = response.status();
         if status != StatusCode::SWITCHING_PROTOCOLS {
-            return Err(BollardError::DockerResponseServerError {
+            return Err(Error::from(BollardError::DockerResponseServerError {
                 status_code: status.as_u16(),
                 message: format!("unable to upgrade to tcp, received {}", status.as_u16()),
-            });
+            }));
         }
-        Ok(hyper::upgrade::on(response).await?)
+        Ok(hyper::upgrade::on(response)
+            .await
+            .map_err(BollardError::from)?)
     })
     .await
 }
@@ -304,13 +316,13 @@ fn request(
 async fn guarded<T>(
     timeout: Duration,
     cancel: &CancellationToken,
-    exchange: impl Future<Output = Result<T, BollardError>>,
+    exchange: impl Future<Output = Result<T, Error>>,
 ) -> Result<T, Error> {
     tokio::select! {
         biased;
         () = cancel.cancelled() => Err(Error::cancelled()),
         bounded = tokio::time::timeout(timeout, exchange) => match bounded {
-            Ok(result) => result.map_err(Error::from),
+            Ok(result) => result,
             Err(_elapsed) => Err(Error::timeout(timeout)),
         },
     }
@@ -322,16 +334,24 @@ async fn accepted(response: http::Response<Incoming>) -> Result<Incoming, Bollar
     if status.is_success() {
         return Ok(response.into_body());
     }
-    let body = response.into_body().collect().await?.to_bytes();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .map_err(BollardError::from)?
+        .to_bytes();
     Err(refusal(status, &body))
 }
 
-/// Connects to `target` and sends `request` on that connection.
+/// Connects to `target` and sends `request` on that connection. A connection that cannot be made
+/// is a dial failure naming `config`'s daemon host, worded as moby's client words it; a failure
+/// after that (the TLS handshake, the exchange, a broken answer) keeps its own text.
 async fn exchange(
+    config: &Config,
     target: &Target,
     request: Request<RequestBody>,
     mode: Mode,
-) -> Result<http::Response<Incoming>, BollardError> {
+) -> Result<http::Response<Incoming>, Error> {
     match target {
         #[cfg(feature = "tls")]
         Target::Tls { addr, certs } => {
@@ -341,19 +361,24 @@ async fn exchange(
                 .map_err(|error| failure(error.to_string()))??;
             let name = rustls_pki_types::ServerName::try_from(host_of(addr).to_owned())
                 .map_err(|error| failure(format!("TLS server name {addr:?}: {error}")))?;
-            let tls = connector.connect(name, connect_tcp(addr).await?).await?;
-            send(TokioIo::new(tls), request, mode).await
+            let stream = connect_tcp(config.daemon_host(), addr).await?;
+            let tls = connector
+                .connect(name, stream)
+                .await
+                .map_err(BollardError::from)?;
+            Ok(send(TokioIo::new(tls), request, mode).await?)
         }
         Target::Unix(path) => {
-            send(
-                TokioIo::new(UnixStream::connect(path).await?),
-                request,
-                mode,
-            )
-            .await
+            let stream = UnixStream::connect(path)
+                .await
+                .map_err(|error| Error::dial(config.daemon_host().to_owned(), error))?;
+            Ok(send(TokioIo::new(stream), request, mode).await?)
         }
         #[cfg(feature = "tcp")]
-        Target::Tcp(addr) => send(TokioIo::new(connect_tcp(addr).await?), request, mode).await,
+        Target::Tcp(addr) => {
+            let stream = connect_tcp(config.daemon_host(), addr).await?;
+            Ok(send(TokioIo::new(stream), request, mode).await?)
+        }
     }
 }
 
@@ -468,16 +493,24 @@ fn tls_connector(certs: &std::path::Path) -> Result<tokio_rustls::TlsConnector, 
 
 /// A TCP connection to `addr` with keepalive on (15 seconds idle and apart, nine probes where the
 /// platform counts them, as docker's own client), so a remote engine that vanishes ends a pending
-/// wait or event stream instead of leaving it hanging forever.
+/// wait or event stream instead of leaving it hanging forever. A dial that fails is a dial failure
+/// naming `daemon_host`; a socket option that cannot be set is not one and keeps its own text.
 #[cfg(feature = "tcp")]
-pub(crate) async fn connect_tcp(addr: &str) -> std::io::Result<tokio::net::TcpStream> {
-    let stream = tokio::net::TcpStream::connect(addr).await?;
+pub(crate) async fn connect_tcp(
+    daemon_host: &str,
+    addr: &str,
+) -> Result<tokio::net::TcpStream, Error> {
+    let stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .map_err(|error| Error::dial(daemon_host.to_owned(), error))?;
     let keepalive = socket2::TcpKeepalive::new()
         .with_time(Duration::from_secs(15))
         .with_interval(Duration::from_secs(15));
     #[cfg(target_os = "linux")]
     let keepalive = keepalive.with_retries(9);
-    socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive)?;
+    socket2::SockRef::from(&stream)
+        .set_tcp_keepalive(&keepalive)
+        .map_err(BollardError::from)?;
     Ok(stream)
 }
 

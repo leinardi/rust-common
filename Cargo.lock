@@ -277,6 +277,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "socket2",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-rustls",

@@ -47,6 +47,8 @@ pub mod attach;
 mod config;
 #[cfg(any(feature = "exec", feature = "logs"))]
 pub mod demux;
+#[cfg(test)]
+mod dial_tests;
 mod error;
 #[cfg(feature = "exec")]
 pub mod exec;
