@@ -89,7 +89,6 @@ pub struct Limits {
     /// One newline-delimited `/events` record, every byte before its newline counted.
     pub event_record: NonZeroUsize,
     /// The payload of one multiplexed output frame, without its 8-byte header. Not a buffer size.
-    /// Not applied yet.
     pub output_frame: NonZeroUsize,
 }
 

@@ -577,7 +577,8 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// that ends the stream, as soon as the excess is seen and without waiting for its newline, so
 /// that the caller reconnects. Every byte before the newline counts, whitespace and record
 /// separators included. The limit bounds what this stream buffers for one record of a successful
-/// answer, capacity included; it does not bound the allocation of a frame by hyper.
+/// answer, capacity included; it does not bound the allocation of a frame by hyper, nor the body
+/// of a refusal.
 ///
 /// # Errors
 ///

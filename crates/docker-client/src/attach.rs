@@ -67,8 +67,9 @@ pub enum Output {
 ///
 /// Only establishing the stream is bounded, by `timeout`, and `cancel` interrupts it; the stream
 /// lasts as long as the container's output, and the pump ends as [`pump_stream`] says (`capacity`
-/// is its buffer, at least one). A stream the engine breaks off, or that names an error or an
-/// unknown stream, yields that error and ends. Must be called inside a tokio runtime.
+/// is its buffer, at least one). A stream the engine breaks off, that names an error or an unknown
+/// stream, or whose frame passes `config`'s [`output_frame`](crate::Limits::output_frame), yields
+/// that error and ends. Must be called inside a tokio runtime.
 ///
 /// `config` is the client's: the one it was connected from, or the one
 /// [`negotiate`](crate::negotiate) returned with it. The request carries its `User-Agent` and API
@@ -92,7 +93,8 @@ pub async fn attach(
     let path = format!("/containers/{}/attach", escape_id(id));
     let call = Call::new(Method::POST, &path, ATTACH_QUERY).plain_text();
     let upgraded = upgrade(config, &Target::of(config), call, timeout, &cancel).await?;
-    let state = Some((TokioIo::new(upgraded), Demuxer::new(framing)));
+    let demuxer = Demuxer::new(framing, config.limits().output_frame);
+    let state = Some((TokioIo::new(upgraded), demuxer));
     let output = futures_util::stream::unfold(state, |state| async move {
         let (mut io, mut demuxer) = state?;
         match demuxer.read_frame(&mut io).await {
@@ -113,11 +115,13 @@ pub async fn attach(
 }
 
 /// A stream that cannot be read on, in bollard's error: a broken connection as its I/O error, the
-/// engine's error or an unknown stream as their text.
+/// engine's error, an unknown stream or an oversized frame as their text.
 fn stream_error(error: DemuxError) -> BollardError {
     match error {
         DemuxError::Io(error) => BollardError::from(error),
-        DemuxError::Daemon(_) | DemuxError::Unrecognized(_) => failure(error.to_string()),
+        DemuxError::Daemon(_) | DemuxError::Unrecognized(_) | DemuxError::FrameTooLarge { .. } => {
+            failure(error.to_string())
+        }
     }
 }
 

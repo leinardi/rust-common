@@ -612,3 +612,39 @@ async fn an_id_is_escaped_in_the_path_as_moby_does() {
         ]
     );
 }
+
+/// An oversized frame ends the stream from its header, while the peer stays open.
+#[tokio::test]
+async fn an_oversized_frame_fails_the_stream_while_the_peer_stays_open() {
+    let header: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 5];
+    let engine =
+        FakeEngine::start(&[("/containers/c/logs", Reply::Held(chunked(&[header], false)))])
+            .unwrap();
+    let limits = crate::Limits {
+        output_frame: std::num::NonZeroUsize::new(4).unwrap(),
+        ..crate::config::TEST_LIMITS
+    };
+    let config = Config::unix(engine.socket().to_str().unwrap(), limits);
+    let receiver = logs::container_logs(
+        &config,
+        "c",
+        &ContainerLogsOptions::default(),
+        Framing::Multiplexed,
+        SECS,
+        4,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let (frames, end) = collect(receiver).await;
+    assert!(frames.is_empty());
+    let StreamEnd::Failed(error) = end else {
+        panic!("{end:?}");
+    };
+    assert!(
+        error
+            .to_string()
+            .ends_with("output frame of 5 bytes exceeds 4 bytes"),
+        "{error}"
+    );
+}

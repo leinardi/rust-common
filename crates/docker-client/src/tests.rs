@@ -683,6 +683,42 @@ mod attach_tests {
         assert!(next(&mut receiver).await.is_none());
     }
 
+    /// An oversized frame ends the stream from its header, while the peer stays open.
+    #[tokio::test]
+    async fn attach_refuses_an_oversized_frame_while_the_peer_stays_open() {
+        let engine = FakeEngine::start(&[(
+            "/containers/c/attach",
+            Reply::Session {
+                output: vec![1, 0, 0, 0, 0, 0, 0, 5],
+                echo: false,
+            },
+        )])
+        .unwrap();
+        let limits = Limits {
+            output_frame: std::num::NonZeroUsize::new(4).unwrap(),
+            ..crate::config::TEST_LIMITS
+        };
+        let config = Config::unix(engine.socket().to_str().unwrap(), limits);
+        let mut receiver = attach(
+            &config,
+            "c",
+            Framing::Multiplexed,
+            SECS,
+            4,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let error = next(&mut receiver).await.unwrap().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .ends_with("output frame of 5 bytes exceeds 4 bytes"),
+            "{error}"
+        );
+        assert!(next(&mut receiver).await.is_none());
+    }
+
     #[tokio::test]
     async fn attach_to_a_missing_container_is_not_found() {
         let engine = FakeEngine::start(&[]).unwrap();

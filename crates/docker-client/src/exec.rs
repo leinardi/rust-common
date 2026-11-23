@@ -170,7 +170,9 @@ pub async fn create(
 ///
 /// Writes reach the command's stdin and a shutdown of the write side closes it; reads are its
 /// output, as the engine sends it: raw with a TTY, else multiplexed, for a
-/// [`Demuxer`](crate::demux::Demuxer) of the same `framing`. `timeout` bounds the connection and
+/// [`Demuxer`](crate::demux::Demuxer) of the same `framing`, given `config`'s
+/// [`output_frame`](crate::Limits::output_frame): this call buffers nothing itself and applies no
+/// limit, so the caller's reads decide what is held. `timeout` bounds the connection and
 /// the engine's answer, not the session, which lasts until the command ends or the stream is
 /// dropped; `cancel` ends the establishment at once.
 ///
