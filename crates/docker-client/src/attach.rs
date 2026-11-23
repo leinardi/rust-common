@@ -30,13 +30,13 @@
 //! has its own text there (`cannot connect to the Docker daemon. Is 'docker daemon' running on this
 //! host?: <err>`), which is not reproduced.
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use bollard::errors::Error as BollardError;
 use bollard::models::ContainerWaitResponse;
 use bytes::Bytes;
 use http::Method;
-use http_body_util::{BodyExt as _, Collected};
 use hyper_util::rt::TokioIo;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -45,7 +45,10 @@ use crate::config::Config;
 use crate::demux::{DemuxError, Demuxer, Framing, Pipe};
 use crate::error::Error;
 use crate::pump::pump_stream;
-use crate::stream::{Call, Target, escape_id, establish, failure, trim_id, upgrade};
+use crate::stream::{
+    Call, ReadError, Target, answer_error, escape_id, establish, failure, read_limited, trim_id,
+    upgrade,
+};
 
 /// The query of moby's `ContainerAttach` with `Stream`, `Stdout` and `Stderr`, its keys sorted as
 /// `url.Values.Encode` sorts them.
@@ -161,6 +164,8 @@ impl WaitCondition {
 /// version, as the client's own.
 ///
 /// A non-zero exit is the exit code here, not a failure. The code is the answer's `StatusCode`.
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is an `Other` error
+/// through the receiver, as soon as the excess is seen.
 ///
 /// # Errors
 ///
@@ -187,22 +192,21 @@ pub async fn wait(
         &cancel,
     )
     .await?;
+    let max = config.limits().response_body;
     tokio::spawn(async move {
         let result = tokio::select! {
             biased;
             () = cancel.cancelled() => return,
             () = sender.closed() => return,
-            collected = body.collect() => decode_exit(collected),
+            read = read_limited(body, max) => decode_exit(read, max),
         };
         let _ = sender.send(result);
     });
     Ok(receiver)
 }
 
-fn decode_exit(collected: Result<Collected<Bytes>, hyper::Error>) -> Result<i64, Error> {
-    let bytes = collected
-        .map_err(|error| Error::from(BollardError::from(error)))?
-        .to_bytes();
+fn decode_exit(read: Result<Bytes, ReadError>, max: NonZeroUsize) -> Result<i64, Error> {
+    let bytes = read.map_err(|error| Error::from(answer_error(error, max)))?;
     serde_json::from_slice::<ContainerWaitResponse>(&bytes)
         .map(|response| response.status_code)
         .map_err(|error| Error::from(BollardError::from(error)))

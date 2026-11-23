@@ -38,8 +38,9 @@ use futures_util::Stream;
 use http::header::{CONNECTION, CONTENT_TYPE, HOST, UPGRADE, USER_AGENT};
 use http::{Method, Request, StatusCode};
 use http_body_util::{BodyExt as _, Either, Empty, Full};
-use hyper::body::Incoming;
+use hyper::body::{Body, Incoming};
 use hyper_util::rt::TokioIo;
+use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use tokio::net::UnixStream;
 use tokio_util::sync::CancellationToken;
 
@@ -184,7 +185,7 @@ pub(crate) async fn establish(
     let request = request(config, target, call, Mode::Plain)?;
     guarded(timeout, cancel, async {
         let response = exchange(config, target, request, Mode::Plain).await?;
-        Ok(accepted(response).await?)
+        Ok(accepted(response, config.limits().response_body).await?)
     })
     .await
 }
@@ -195,7 +196,8 @@ pub(crate) async fn establish(
 /// # Errors
 ///
 /// As [`establish`], with [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) also for a body that
-/// does not end in `timeout`.
+/// does not end in `timeout`, and `Other` for a successful answer past `config`'s
+/// [`response_body`](crate::Limits::response_body).
 #[cfg(any(
     feature = "exec",
     feature = "stats",
@@ -212,18 +214,19 @@ pub(crate) async fn complete(
     let request = request(config, target, call, Mode::Plain)?;
     guarded(timeout, cancel, async {
         let response = exchange(config, target, request, Mode::Plain).await?;
-        Ok(accepted(response)
-            .await?
-            .collect()
+        let max = config.limits().response_body;
+        let body = accepted(response, max).await?;
+        read_limited(body, max)
             .await
-            .map_err(BollardError::from)?
-            .to_bytes())
+            .map_err(|error| Error::from(answer_error(error, max)))
     })
     .await
 }
 
 /// Sends `call` to `target` and returns its answer whatever the status: the status, the headers
-/// and the whole body. `timeout` bounds all of it; `cancel` ends it at once.
+/// and the whole body, or [`TooLarge`] for one past `config`'s
+/// [`response_body`](crate::Limits::response_body), which each caller classifies by its status.
+/// `timeout` bounds all of it; `cancel` ends it at once.
 ///
 /// # Errors
 ///
@@ -236,19 +239,24 @@ pub(crate) async fn answered(
     call: Call<'_>,
     timeout: Duration,
     cancel: &CancellationToken,
-) -> Result<(StatusCode, http::HeaderMap, Bytes), Error> {
+) -> Result<Answer, Error> {
     let request = request(config, target, call, Mode::Plain)?;
     guarded(timeout, cancel, async {
         let response = exchange(config, target, request, Mode::Plain).await?;
         let status = response.status();
         let headers = response.headers().clone();
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .map_err(BollardError::from)?
-            .to_bytes();
-        Ok((status, headers, body))
+        let body = match read_limited(response.into_body(), config.limits().response_body).await {
+            Ok(body) => Ok(body),
+            Err(ReadError::TooLarge) => Err(TooLarge),
+            Err(ReadError::Transport(error)) => {
+                return Err(Error::from(BollardError::from(error)));
+            }
+        };
+        Ok(Answer {
+            status,
+            headers,
+            body,
+        })
     })
     .await
 }
@@ -342,19 +350,225 @@ async fn guarded<T>(
     }
 }
 
-/// The body of a successful `response`, or the refusal its status and body make.
-async fn accepted(response: http::Response<Incoming>) -> Result<Incoming, BollardError> {
+/// The body of a successful `response`, or the refusal its status and body make, read up to
+/// `max` bytes: a longer refusal keeps its status, so its kind, with a text that says so.
+async fn accepted(
+    response: http::Response<Incoming>,
+    max: NonZeroUsize,
+) -> Result<Incoming, BollardError> {
     let status = response.status();
     if status.is_success() {
         return Ok(response.into_body());
     }
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .map_err(BollardError::from)?
-        .to_bytes();
-    Err(refusal(status, &body))
+    Err(match read_limited(response.into_body(), max).await {
+        Ok(body) => refusal(status, &body, max),
+        Err(ReadError::TooLarge) => refusal_too_large(status, max),
+        Err(ReadError::Transport(error)) => BollardError::from(error),
+    })
+}
+
+/// Why a whole body was not read.
+#[derive(Debug)]
+pub(crate) enum ReadError {
+    /// It passes the limit.
+    TooLarge,
+    /// The connection failed, kept as hyper's error so that it stays `Unavailable`.
+    Transport(hyper::Error),
+}
+
+/// A body past the limit, in an [`Answer`].
+#[cfg(feature = "raw-get")]
+#[derive(Debug)]
+pub(crate) struct TooLarge;
+
+/// An answer whatever its status.
+#[cfg(feature = "raw-get")]
+#[derive(Debug)]
+pub(crate) struct Answer {
+    pub(crate) status: StatusCode,
+    pub(crate) headers: http::HeaderMap,
+    pub(crate) body: Result<Bytes, TooLarge>,
+}
+
+/// The whole of `body`, whatever the status it came with, or [`ReadError::TooLarge`] as soon as
+/// its declared length or the data received passes `max`, before the excess is copied.
+/// `http_body_util::Limited` is not used because it boxes the error, which would lose the
+/// connection's failure.
+pub(crate) async fn read_limited<B>(mut body: B, max: NonZeroUsize) -> Result<Bytes, ReadError>
+where
+    B: Body<Data = Bytes, Error = hyper::Error> + Unpin,
+{
+    let max = max.get();
+    if u64::try_from(max).is_ok_and(|max| body.size_hint().lower() > max) {
+        return Err(ReadError::TooLarge);
+    }
+    let mut collected = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(ReadError::Transport)?;
+        if let Ok(data) = frame.into_data() {
+            if data.len() > max - collected.len() {
+                return Err(ReadError::TooLarge);
+            }
+            reserve_capped(&mut collected, data.len(), max);
+            collected.extend_from_slice(&data);
+        }
+    }
+    Ok(Bytes::from(collected))
+}
+
+/// A successful answer past the limit.
+#[cfg(any(
+    feature = "attach",
+    feature = "exec",
+    feature = "stats",
+    feature = "raw-get",
+    feature = "raw-spec"
+))]
+pub(crate) fn answer_too_large(max: NonZeroUsize) -> BollardError {
+    failure(format!("the engine's answer exceeds {max} bytes"))
+}
+
+/// A failed read of a successful answer.
+#[cfg(any(
+    feature = "attach",
+    feature = "exec",
+    feature = "stats",
+    feature = "raw-get",
+    feature = "raw-spec"
+))]
+pub(crate) fn answer_error(error: ReadError, max: NonZeroUsize) -> BollardError {
+    match error {
+        ReadError::TooLarge => answer_too_large(max),
+        ReadError::Transport(error) => BollardError::from(error),
+    }
+}
+
+/// The last `message` of a JSON object when it is a string, the other values skipped unbuilt.
+struct RefusalMessage(Option<String>);
+
+impl<'de> Deserialize<'de> for RefusalMessage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object;
+
+        impl<'de> Visitor<'de> for Object {
+            type Value = Option<String>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut message = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "message" {
+                        message = map.next_value::<StringOrOther>()?.0;
+                    } else {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+                Ok(message)
+            }
+        }
+
+        deserializer.deserialize_map(Object).map(Self)
+    }
+}
+
+/// A JSON string, or `None` for any other value, which is walked but not built.
+struct StringOrOther(Option<String>);
+
+impl<'de> Deserialize<'de> for StringOrOther {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Any;
+
+        impl<'de> Visitor<'de> for Any {
+            type Value = Option<String>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(Some(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(Some(value))
+            }
+
+            fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+
+            fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+
+            fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(None)
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+                Ok(None)
+            }
+        }
+
+        deserializer.deserialize_any(Any).map(Self)
+    }
+}
+
+/// `body` as text, each invalid sequence replaced as `String::from_utf8_lossy` does, or `None` as
+/// soon as the text would pass `max` bytes.
+fn lossy_within(body: &[u8], max: usize) -> Option<String> {
+    let mut text = String::with_capacity(body.len().min(max));
+    for chunk in body.utf8_chunks() {
+        let replacement = if chunk.invalid().is_empty() {
+            ""
+        } else {
+            "\u{FFFD}"
+        };
+        if chunk.valid().len() + replacement.len() > max - text.len() {
+            return None;
+        }
+        text.push_str(chunk.valid());
+        text.push_str(replacement);
+    }
+    Some(text)
+}
+
+/// A refusal past the limit: its status, so its kind, with a text that says so.
+fn refusal_too_large(status: StatusCode, max: NonZeroUsize) -> BollardError {
+    BollardError::DockerResponseServerError {
+        status_code: status.as_u16(),
+        message: format!("the engine's refusal exceeds {max} bytes"),
+    }
+}
+
+/// The refusal an [`Answer`]'s status and body make.
+#[cfg(feature = "raw-get")]
+pub(crate) fn refusal_of(
+    status: StatusCode,
+    body: &Result<Bytes, TooLarge>,
+    max: NonZeroUsize,
+) -> BollardError {
+    match body {
+        Ok(body) => refusal(status, body, max),
+        Err(TooLarge) => refusal_too_large(status, max),
+    }
 }
 
 /// Connects to `target` and sends `request` on that connection. A connection that cannot be made
@@ -548,11 +762,17 @@ where
     Ok(sender.send_request(request).await?)
 }
 
-pub(crate) fn refusal(status: StatusCode, body: &[u8]) -> BollardError {
-    let message = serde_json::from_slice::<serde_json::Value>(body)
+/// The refusal `status` and `body` make: the `message` of a JSON object, else the body as text. A
+/// body within `max` stays within it here: the JSON's other fields are skipped rather than built,
+/// and a text whose invalid bytes would expand past `max` is replaced by the limit's own text.
+pub(crate) fn refusal(status: StatusCode, body: &[u8], max: NonZeroUsize) -> BollardError {
+    let message = serde_json::from_slice::<RefusalMessage>(body)
         .ok()
-        .and_then(|value| value.get("message")?.as_str().map(str::to_owned))
-        .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
+        .and_then(|message| message.0)
+        .or_else(|| lossy_within(body, max.get()));
+    let Some(message) = message else {
+        return refusal_too_large(status, max);
+    };
     BollardError::DockerResponseServerError {
         status_code: status.as_u16(),
         message,
@@ -577,8 +797,8 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// that ends the stream, as soon as the excess is seen and without waiting for its newline, so
 /// that the caller reconnects. Every byte before the newline counts, whitespace and record
 /// separators included. The limit bounds what this stream buffers for one record of a successful
-/// answer, capacity included; it does not bound the allocation of a frame by hyper, nor the body
-/// of a refusal.
+/// answer, capacity included; it does not bound the allocation of a frame by hyper. A refusal's
+/// body is bounded by [`response_body`](crate::Limits::response_body).
 ///
 /// # Errors
 ///
@@ -748,6 +968,83 @@ fn lines(
             }
         },
     )
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use std::num::NonZeroUsize;
+
+    use bollard::errors::Error as BollardError;
+    use http::StatusCode;
+
+    use super::refusal;
+
+    fn message(body: &[u8], max: usize) -> String {
+        let error = refusal(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            body,
+            NonZeroUsize::new(max).unwrap(),
+        );
+        let BollardError::DockerResponseServerError {
+            status_code: 500,
+            message,
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        message
+    }
+
+    #[test]
+    fn the_message_of_a_json_object_is_read_as_before() {
+        assert_eq!(message(br#"{"message":"boom"}"#, 64), "boom");
+        assert_eq!(message(br#"{"message":"a","message":"b"}"#, 64), "b");
+        assert_eq!(message(br#"{"message":"a\nb"}"#, 64), "a\nb");
+    }
+
+    #[test]
+    fn what_has_no_string_message_is_the_body_as_text() {
+        for body in [
+            &br#"{"message":1}"#[..],
+            br#"{"message":"a","message":null}"#,
+            br#"{"other":"a"}"#,
+            br#"["message"]"#,
+            br#""message""#,
+            br#"{"message":"a"} trailing"#,
+            b"plain text",
+        ] {
+            assert_eq!(message(body, 64).as_bytes(), body);
+        }
+    }
+
+    #[test]
+    fn a_large_value_beside_the_message_is_skipped() {
+        let body = format!(
+            r#"{{"other":[{}0],"message":"boom"}}"#,
+            "0,".repeat(100_000)
+        );
+        assert_eq!(message(body.as_bytes(), body.len()), "boom");
+    }
+
+    #[test]
+    fn invalid_bytes_are_replaced_as_lossy_does_within_the_limit() {
+        let body = b"ok\xFF\xFFend";
+        assert_eq!(message(body, 64), String::from_utf8_lossy(body));
+    }
+
+    /// Each invalid byte becomes three: a body within the limit must not expand past it.
+    #[test]
+    fn invalid_bytes_that_would_expand_past_the_limit_are_refused() {
+        assert_eq!(
+            message(&[0xFF; 4], 4),
+            "the engine's refusal exceeds 4 bytes"
+        );
+        assert_eq!(message(&[0xFF; 4], 12), "\u{FFFD}".repeat(4));
+        assert_eq!(
+            message(&[0xFF; 4], 11),
+            "the engine's refusal exceeds 11 bytes"
+        );
+    }
 }
 
 #[cfg(test)]

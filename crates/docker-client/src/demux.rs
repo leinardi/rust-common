@@ -38,8 +38,8 @@
 //! `8 + max_frame_payload + 32 KiB` bytes. Its capacity can exceed that by `BytesMut`'s amortized
 //! growth.
 //!
-//! Any of these errors ends the reading: the decoder yields nothing after it (a failed read does not, as
-//! the reader may be retried). A frame with an empty payload is skipped, as `StdCopy` writes
+//! Any of these errors ends the reading: the decoder yields nothing after it (a failed read does
+//! not, as the reader may be retried). A frame with an empty payload is skipped, as `StdCopy` writes
 //! nothing for it. [`Framing::Raw`] reports every chunk as stdout.
 //!
 //! The reading rules are moby/moby api/pkg/stdcopy/stdcopy.go's at api/v1.56.1 (`StdCopy`); the

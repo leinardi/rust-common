@@ -719,6 +719,40 @@ mod attach_tests {
         assert!(next(&mut receiver).await.is_none());
     }
 
+    /// A wait has no timeout after its headers, so an endless answer must end at the limit.
+    #[tokio::test]
+    async fn wait_ends_an_endless_answer_at_the_limit() {
+        let endless =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nabcde\r\n".to_vec();
+        let engine = FakeEngine::start(&[("/containers/c/wait", Reply::Held(endless))]).unwrap();
+        let limits = Limits {
+            response_body: std::num::NonZeroUsize::new(4).unwrap(),
+            ..crate::config::TEST_LIMITS
+        };
+        let config = Config::unix(engine.socket().to_str().unwrap(), limits);
+        let receiver = wait(
+            &config,
+            "c",
+            WaitCondition::NextExit,
+            SECS,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let error = tokio::time::timeout(SECS, receiver)
+            .await
+            .expect("the limit ended the wait")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("the engine's answer exceeds 4 bytes"),
+            "{error}"
+        );
+    }
+
     #[tokio::test]
     async fn attach_to_a_missing_container_is_not_found() {
         let engine = FakeEngine::start(&[]).unwrap();
@@ -1324,6 +1358,37 @@ async fn events_established_streams_lines_and_survives_an_undecodable_one() {
     assert!(events.next().await.unwrap().is_err());
     assert!(events.next().await.unwrap().is_ok());
     assert!(events.next().await.is_none());
+}
+
+/// A refusal past the limit, through `establish`, keeps its kind.
+#[tokio::test]
+async fn an_oversized_refusal_of_the_events_keeps_its_kind() {
+    for (status, kind) in [(404, ErrorKind::NotFound), (409, ErrorKind::Conflict)] {
+        let reply = Reply::error(status, "a refusal longer than the limit");
+        let engine = FakeEngine::start(&[("/events", reply)]).unwrap();
+        let limits = Limits {
+            response_body: std::num::NonZeroUsize::new(4).unwrap(),
+            ..crate::config::TEST_LIMITS
+        };
+        let config = Config::unix(engine.socket().to_str().unwrap(), limits);
+        let Err(error) = events_established(
+            &config,
+            None,
+            Duration::from_secs(5),
+            &CancellationToken::new(),
+        )
+        .await
+        else {
+            panic!("a refusal is an error");
+        };
+        assert_eq!(error.kind(), kind, "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("the engine's refusal exceeds 4 bytes"),
+            "{error}"
+        );
+    }
 }
 
 #[tokio::test]

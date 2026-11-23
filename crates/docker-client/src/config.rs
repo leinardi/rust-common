@@ -84,7 +84,8 @@ pub(crate) enum Endpoint {
 ///   its `capacity` bounds in frames and where each `Bytes` can keep its parent allocation alive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// A whole response body read by this crate. Not applied yet.
+    /// A whole response body read by this crate: a refusal, the `wait` answer, and the `exec`,
+    /// `stats`, `raw_get`, `raw_request` and `raw_spec` answers.
     pub response_body: NonZeroUsize,
     /// One newline-delimited `/events` record, every byte before its newline counted.
     pub event_record: NonZeroUsize,

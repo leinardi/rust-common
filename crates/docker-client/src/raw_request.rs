@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::stream::{Call, Target, answered, refusal};
+use crate::stream::{Answer, Call, Target, answer_too_large, answered, refusal_of};
 
 /// `POST <path>?<query>` (no `?` for an empty `query`) with no body, and the whole body of the
 /// engine's answer. `path` is the path without the version prefix (`/containers/<id>/restart`),
@@ -47,6 +47,9 @@ use crate::stream::{Call, Target, answered, refusal};
 /// For an answer of `400` or more, the engine's refusal sorted into its kind (404 is `NotFound`,
 /// 409 `Conflict`, the rest `Other`) with the engine's message; the bound's `Timeout`,
 /// `Cancelled`, and `Unavailable` when the engine cannot be reached or the connection breaks.
+///
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is `Other`; a
+/// refusal that long keeps its kind.
 pub async fn post(
     config: &Config,
     path: &str,
@@ -90,11 +93,15 @@ async fn send(
     timeout: Duration,
     cancel: &CancellationToken,
 ) -> Result<Vec<u8>, Error> {
-    let (status, _, body) = answered(config, &Target::of(config), call, timeout, cancel).await?;
+    let Answer { status, body, .. } =
+        answered(config, &Target::of(config), call, timeout, cancel).await?;
+    let max = config.limits().response_body;
     if (200..400).contains(&status.as_u16()) {
-        return Ok(body.to_vec());
+        return body
+            .map(Vec::from)
+            .map_err(|_| Error::from(answer_too_large(max)));
     }
-    Err(Error::from(refusal(status, &body)))
+    Err(Error::from(refusal_of(status, &body, max)))
 }
 
 #[cfg(test)]
@@ -243,6 +250,63 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Timeout);
+    }
+
+    fn limited(engine: &FakeEngine, max: usize) -> Config {
+        let limits = crate::Limits {
+            response_body: std::num::NonZeroUsize::new(max).unwrap(),
+            ..crate::config::TEST_LIMITS
+        };
+        Config::unix(engine.socket().to_str().unwrap(), limits)
+    }
+
+    #[tokio::test]
+    async fn an_oversized_refusal_keeps_its_kind() {
+        for (status, kind) in [(404, ErrorKind::NotFound), (409, ErrorKind::Conflict)] {
+            let reply = Reply::error(status, "a refusal longer than the limit");
+            let engine = FakeEngine::start(&[("/big", reply)]).unwrap();
+            let error = post(
+                &limited(&engine, 4),
+                "/big",
+                "",
+                SECS,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.kind(), kind, "{error:?}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("the engine's refusal exceeds 4 bytes"),
+                "{error}"
+            );
+        }
+    }
+
+    /// A redirect is a success here, as in moby's `checkResponseErr`: a long one is the answer's
+    /// error, not a refusal, and a short one still succeeds.
+    #[tokio::test]
+    async fn a_redirect_is_read_as_a_success() {
+        let engine = FakeEngine::start(&[
+            ("/long", Reply::json_status(302, "abcde")),
+            ("/short", Reply::json_status(302, "abcd")),
+        ])
+        .unwrap();
+        let config = limited(&engine, 4);
+        let cancel = CancellationToken::new();
+        let error = post(&config, "/long", "", SECS, &cancel).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("the engine's answer exceeds 4 bytes"),
+            "{error}"
+        );
+        assert_eq!(
+            post(&config, "/short", "", SECS, &cancel).await.unwrap(),
+            b"abcd"
+        );
     }
 
     /// A cancelled call stops at once.
