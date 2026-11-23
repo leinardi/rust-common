@@ -143,6 +143,9 @@ fn go_json(items: &[String]) -> String {
 /// `NotFound` when it is not there; an empty `container` (whitespace trimmed, as moby's client
 /// does) is refused before sending and an answer without an `Id` is `Other`; the bound's `Timeout`,
 /// `Cancelled`, and `Unavailable` when the engine cannot be reached.
+///
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is `Other`; a
+/// refusal that long keeps its kind.
 pub async fn create(
     config: &Config,
     container: &str,
@@ -170,7 +173,9 @@ pub async fn create(
 ///
 /// Writes reach the command's stdin and a shutdown of the write side closes it; reads are its
 /// output, as the engine sends it: raw with a TTY, else multiplexed, for a
-/// [`Demuxer`](crate::demux::Demuxer) of the same `framing`. `timeout` bounds the connection and
+/// [`Demuxer`](crate::demux::Demuxer) of the same `framing`, given `config`'s
+/// [`output_frame`](crate::Limits::output_frame): this call buffers nothing itself and applies no
+/// limit, so the caller's reads decide what is held. `timeout` bounds the connection and
 /// the engine's answer, not the session, which lasts until the command ends or the stream is
 /// dropped; `cancel` ends the establishment at once.
 ///
@@ -203,6 +208,9 @@ pub async fn start(
 /// `Other`; the engine's refusal sorted into its kind (a command that has already exited is
 /// refused), the
 /// bound's `Timeout`, `Cancelled`, and `Unavailable` when the engine cannot be reached.
+///
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is `Other`; a
+/// refusal that long keeps its kind.
 pub async fn resize(
     config: &Config,
     id: &str,
@@ -252,6 +260,9 @@ impl ExecState {
 /// The engine's refusal sorted into its kind (404 is `NotFound`), an answer that is not JSON or
 /// whose `Running` or `ExitCode` has another type (`Other`), the bound's `Timeout`, `Cancelled`,
 /// and `Unavailable` when the engine cannot be reached.
+///
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is `Other`; a
+/// refusal that long keeps its kind.
 pub async fn inspect(
     config: &Config,
     id: &str,

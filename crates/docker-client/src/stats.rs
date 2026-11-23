@@ -48,6 +48,9 @@ use crate::stream::{Call, Target, complete, escape_id, failure, trim_id};
 /// `Other`; the engine's refusal sorted into its kind (404 for a container that is not there); an
 /// answer that does not decode (`Other`); the bound's `Timeout`, `Cancelled`, and `Unavailable`
 /// when the engine cannot be reached.
+///
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is `Other`; a
+/// refusal that long keeps its kind.
 pub async fn stats_once(
     config: &Config,
     id: &str,

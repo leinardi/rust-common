@@ -165,7 +165,11 @@ mod tcp {
         "Cannot connect to the Docker daemon at tcp://127.0.0.1:1. Is the docker daemon running?";
 
     fn config() -> Config {
-        Config::from_env(|name| (name == "DOCKER_HOST").then(|| HOST.to_owned())).unwrap()
+        Config::from_env(
+            |name| (name == "DOCKER_HOST").then(|| HOST.to_owned()),
+            crate::config::TEST_LIMITS,
+        )
+        .unwrap()
     }
 
     #[cfg(feature = "raw-get")]
@@ -201,7 +205,11 @@ mod own {
 
     #[tokio::test]
     async fn a_missing_socket_reads_as_moby_words_it() {
-        let error = info_error(&Config::unix("/nonexistent/docker.sock")).await;
+        let error = info_error(&Config::unix(
+            "/nonexistent/docker.sock",
+            crate::config::TEST_LIMITS,
+        ))
+        .await;
         assert_dial(
             &error,
             "failed to connect to the docker API at unix:///nonexistent/docker.sock; check if \
@@ -214,7 +222,7 @@ mod own {
     async fn a_socket_nobody_listens_on_reads_as_moby_words_it() {
         let dir = scratch();
         let host = unix_host(&refused_socket(dir.path()));
-        let error = info_error(&Config::unix(&host)).await;
+        let error = info_error(&Config::unix(&host, crate::config::TEST_LIMITS)).await;
         assert_dial(
             &error,
             &format!(
@@ -230,7 +238,7 @@ mod own {
             return;
         };
         let host = unix_host(&locked.path().join("x.sock"));
-        let error = info_error(&Config::unix(&host)).await;
+        let error = info_error(&Config::unix(&host, crate::config::TEST_LIMITS)).await;
         assert_dial(
             &error,
             &format!("permission denied while trying to connect to the docker API at {host}"),
@@ -246,7 +254,10 @@ mod own {
             Reply::Raw(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort".to_vec()),
         )])
         .unwrap();
-        let config = Config::unix(engine.socket().to_str().unwrap());
+        let config = Config::unix(
+            engine.socket().to_str().unwrap(),
+            crate::config::TEST_LIMITS,
+        );
         let error = info_error(&config).await;
         assert_eq!(error.kind(), ErrorKind::Unavailable, "{error}");
         assert!(error.engine().is_some(), "{error}");
@@ -265,7 +276,7 @@ mod bollard_calls {
         let dir = scratch();
         let path = dir.path().join("gone.sock");
         let engine_socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        let config = Config::unix(path.to_str().unwrap());
+        let config = Config::unix(path.to_str().unwrap(), crate::config::TEST_LIMITS);
         let docker = connect(config.clone()).unwrap();
         drop(engine_socket);
         std::fs::remove_file(&path).unwrap();
@@ -284,7 +295,7 @@ mod bollard_calls {
     async fn a_socket_nobody_listens_on_reads_as_moby_words_it() {
         let dir = scratch();
         let path = refused_socket(dir.path());
-        let config = Config::unix(path.to_str().unwrap());
+        let config = Config::unix(path.to_str().unwrap(), crate::config::TEST_LIMITS);
         let docker = connect(config.clone()).unwrap();
         let host = unix_host(&path);
         assert_dial(
@@ -303,7 +314,7 @@ mod bollard_calls {
         };
         open(locked.path());
         let path = refused_socket(locked.path());
-        let config = Config::unix(path.to_str().unwrap());
+        let config = Config::unix(path.to_str().unwrap(), crate::config::TEST_LIMITS);
         let docker = connect(config.clone()).unwrap();
         close(locked.path());
         let error = bollard_error(&docker, &config).await;
@@ -323,7 +334,7 @@ mod bollard_calls {
             return;
         };
         let host = unix_host(&locked.path().join("x.sock"));
-        let error = connect(Config::unix(&host)).unwrap_err();
+        let error = connect(Config::unix(&host, crate::config::TEST_LIMITS)).unwrap_err();
         assert_eq!(
             error.to_string(),
             format!("permission denied while trying to connect to the docker API at {host}")

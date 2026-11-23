@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::stream::{Call, Target, answered, complete, refusal};
+use crate::stream::{Answer, Call, Target, answered, complete, refusal_of};
 
 pub use crate::stream::escape_id;
 
@@ -45,7 +45,8 @@ pub use crate::stream::escape_id;
 ///
 /// The engine's refusal sorted into its kind (404 is `NotFound`, 409 `Conflict`, the rest
 /// `Other`), with the engine's message; the bound's `Timeout`, `Cancelled`, and `Unavailable` when
-/// the engine cannot be reached or the connection breaks.
+/// the engine cannot be reached or the connection breaks; `Other` for an answer past `config`'s
+/// [`response_body`](crate::Limits::response_body), a refusal that long keeping its kind.
 pub async fn get(
     config: &Config,
     path: &str,
@@ -61,7 +62,7 @@ pub async fn get(
         cancel,
     )
     .await?;
-    Ok(body.to_vec())
+    Ok(Vec::from(body))
 }
 
 /// What the engine's `/_ping` answer says, as moby's client reads it (`PingResult`).
@@ -81,7 +82,9 @@ pub struct Ping {
 /// # Errors
 ///
 /// The `GET`'s failure to connect, its bound or cancellation, or, for an answer of 400 or more,
-/// the engine's refusal sorted into its kind with the engine's message.
+/// the engine's refusal sorted into its kind with the engine's message. Only the headers of a
+/// success are used, so a success past `config`'s [`response_body`](crate::Limits::response_body)
+/// is still one.
 pub async fn ping(
     config: &Config,
     timeout: Duration,
@@ -91,15 +94,24 @@ pub async fn ping(
     let started = tokio::time::Instant::now();
     let target = Target::of(config);
     let head = Call::new(Method::HEAD, "/_ping", "").unversioned();
-    if let Ok((StatusCode::OK, headers, _)) = answered(config, &target, head, timeout, cancel).await
+    if let Ok(Answer {
+        status: StatusCode::OK,
+        headers,
+        ..
+    }) = answered(config, &target, head, timeout, cancel).await
     {
         return Ok(ping_of(&headers));
     }
     let get = Call::new(Method::GET, "/_ping", "").unversioned();
     let left = timeout.saturating_sub(started.elapsed());
-    let (status, headers, body) = answered(config, &target, get, left, cancel).await?;
+    let Answer {
+        status,
+        headers,
+        body,
+    } = answered(config, &target, get, left, cancel).await?;
     if status.as_u16() >= 400 {
-        return Err(Error::from(refusal(status, &body)));
+        let max = config.limits().response_body;
+        return Err(Error::from(refusal_of(status, &body, max)));
     }
     Ok(ping_of(&headers))
 }
@@ -127,10 +139,13 @@ mod tests {
     const SECS: Duration = Duration::from_secs(5);
 
     fn config_of(engine: &FakeEngine) -> Config {
-        Config::unix(engine.socket().to_str().unwrap())
-            .api_version("1.44")
-            .unwrap()
-            .user_agent("raw-get-test/1")
+        Config::unix(
+            engine.socket().to_str().unwrap(),
+            crate::config::TEST_LIMITS,
+        )
+        .api_version("1.44")
+        .unwrap()
+        .user_agent("raw-get-test/1")
     }
 
     /// The request carries the version prefix, the query as given and the `User-Agent`, and the
@@ -297,10 +312,139 @@ mod tests {
         assert_eq!(engine.requests().len(), 2);
     }
 
+    fn limited(engine: &FakeEngine, max: usize) -> Config {
+        let limits = crate::Limits {
+            response_body: std::num::NonZeroUsize::new(max).unwrap(),
+            ..crate::config::TEST_LIMITS
+        };
+        Config::unix(engine.socket().to_str().unwrap(), limits)
+    }
+
+    fn chunked(chunks: &[&str], complete: bool) -> Vec<u8> {
+        let mut bytes = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        for chunk in chunks {
+            bytes.extend_from_slice(format!("{:x}\r\n{chunk}\r\n", chunk.len()).as_bytes());
+        }
+        if complete {
+            bytes.extend_from_slice(b"0\r\n\r\n");
+        }
+        bytes
+    }
+
+    async fn get_of(engine: &FakeEngine, max: usize) -> Result<Vec<u8>, Error> {
+        get(
+            &limited(engine, max),
+            "/big",
+            "",
+            SECS,
+            &CancellationToken::new(),
+        )
+        .await
+    }
+
+    fn assert_answer_too_large(error: &Error, max: usize) {
+        assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+        let expected = format!("the engine's answer exceeds {max} bytes");
+        assert!(error.to_string().contains(&expected), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_declared_body_at_the_limit_passes_and_one_byte_over_is_refused() {
+        let engine = FakeEngine::start(&[("/big", Reply::ok("abcd"))]).unwrap();
+        assert_eq!(get_of(&engine, 4).await.unwrap(), b"abcd");
+        assert_answer_too_large(&get_of(&engine, 3).await.unwrap_err(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_chunked_body_at_the_limit_passes_and_one_byte_over_is_refused() {
+        let reply = Reply::Raw(chunked(&["ab", "cd"], true));
+        let engine = FakeEngine::start(&[("/big", reply)]).unwrap();
+        assert_eq!(get_of(&engine, 4).await.unwrap(), b"abcd");
+        assert_answer_too_large(&get_of(&engine, 3).await.unwrap_err(), 3);
+    }
+
+    /// The declared length is enough: no byte of the body is ever sent here.
+    #[tokio::test]
+    async fn a_declared_length_is_refused_before_any_body_byte() {
+        let head = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n".to_vec();
+        let engine = FakeEngine::start(&[("/big", Reply::Held(head))]).unwrap();
+        assert_answer_too_large(&get_of(&engine, 4).await.unwrap_err(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_chunked_body_is_refused_while_the_peer_stays_open() {
+        let reply = Reply::Held(chunked(&["abcde"], false));
+        let engine = FakeEngine::start(&[("/big", reply)]).unwrap();
+        assert_answer_too_large(&get_of(&engine, 4).await.unwrap_err(), 4);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_refusal_keeps_its_kind() {
+        for (status, kind) in [(404, ErrorKind::NotFound), (409, ErrorKind::Conflict)] {
+            let reply = Reply::error(status, "a refusal longer than the limit");
+            let engine = FakeEngine::start(&[("/big", reply)]).unwrap();
+            let error = get_of(&engine, 4).await.unwrap_err();
+            assert_eq!(error.kind(), kind, "{error:?}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("the engine's refusal exceeds 4 bytes"),
+                "{error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_connection_cut_mid_body_stays_unavailable() {
+        let cut = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort".to_vec();
+        let engine = FakeEngine::start(&[("/big", Reply::Raw(cut))]).unwrap();
+        let error = get_of(&engine, 1024).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Unavailable, "{error:?}");
+    }
+
+    /// Only the headers of a ping are used, so a long success is still one.
+    #[tokio::test]
+    async fn ping_succeeds_on_an_oversized_get() {
+        let engine = FakeEngine::start(&[
+            ("HEAD /_ping", Reply::status(500)),
+            (
+                "GET /_ping",
+                ping_reply("200 OK", "Api-Version: 1.47\r\n", "longer than the limit"),
+            ),
+        ])
+        .unwrap();
+        let got = ping(&limited(&engine, 4), SECS, &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(got.api_version, "1.47");
+    }
+
+    #[tokio::test]
+    async fn ping_refuses_an_oversized_error() {
+        let engine = FakeEngine::start(&[
+            ("HEAD /_ping", Reply::status(500)),
+            (
+                "GET /_ping",
+                ping_reply("500 Internal Server Error", "", "longer than the limit"),
+            ),
+        ])
+        .unwrap();
+        let error = ping(&limited(&engine, 4), SECS, &CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("the engine's refusal exceeds 4 bytes"),
+            "{error}"
+        );
+    }
+
     /// A ping that cannot reach the engine fails with `Unavailable`.
     #[tokio::test]
     async fn ping_of_a_missing_socket_is_unavailable() {
-        let config = Config::unix("/nonexistent/docker.sock");
+        let config = Config::unix("/nonexistent/docker.sock", crate::config::TEST_LIMITS);
         let error = ping(&config, SECS, &CancellationToken::new())
             .await
             .unwrap_err();

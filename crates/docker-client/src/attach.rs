@@ -30,13 +30,13 @@
 //! has its own text there (`cannot connect to the Docker daemon. Is 'docker daemon' running on this
 //! host?: <err>`), which is not reproduced.
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use bollard::errors::Error as BollardError;
 use bollard::models::ContainerWaitResponse;
 use bytes::Bytes;
 use http::Method;
-use http_body_util::{BodyExt as _, Collected};
 use hyper_util::rt::TokioIo;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -45,7 +45,10 @@ use crate::config::Config;
 use crate::demux::{DemuxError, Demuxer, Framing, Pipe};
 use crate::error::Error;
 use crate::pump::pump_stream;
-use crate::stream::{Call, Target, escape_id, establish, failure, trim_id, upgrade};
+use crate::stream::{
+    Call, ReadError, Target, answer_error, escape_id, establish, failure, read_limited, trim_id,
+    upgrade,
+};
 
 /// The query of moby's `ContainerAttach` with `Stream`, `Stdout` and `Stderr`, its keys sorted as
 /// `url.Values.Encode` sorts them.
@@ -67,8 +70,9 @@ pub enum Output {
 ///
 /// Only establishing the stream is bounded, by `timeout`, and `cancel` interrupts it; the stream
 /// lasts as long as the container's output, and the pump ends as [`pump_stream`] says (`capacity`
-/// is its buffer, at least one). A stream the engine breaks off, or that names an error or an
-/// unknown stream, yields that error and ends. Must be called inside a tokio runtime.
+/// is its buffer, at least one). A stream the engine breaks off, that names an error or an unknown
+/// stream, or whose frame passes `config`'s [`output_frame`](crate::Limits::output_frame), yields
+/// that error and ends. Must be called inside a tokio runtime.
 ///
 /// `config` is the client's: the one it was connected from, or the one
 /// [`negotiate`](crate::negotiate) returned with it. The request carries its `User-Agent` and API
@@ -92,7 +96,8 @@ pub async fn attach(
     let path = format!("/containers/{}/attach", escape_id(id));
     let call = Call::new(Method::POST, &path, ATTACH_QUERY).plain_text();
     let upgraded = upgrade(config, &Target::of(config), call, timeout, &cancel).await?;
-    let state = Some((TokioIo::new(upgraded), Demuxer::new(framing)));
+    let demuxer = Demuxer::new(framing, config.limits().output_frame);
+    let state = Some((TokioIo::new(upgraded), demuxer));
     let output = futures_util::stream::unfold(state, |state| async move {
         let (mut io, mut demuxer) = state?;
         match demuxer.read_frame(&mut io).await {
@@ -113,11 +118,13 @@ pub async fn attach(
 }
 
 /// A stream that cannot be read on, in bollard's error: a broken connection as its I/O error, the
-/// engine's error or an unknown stream as their text.
+/// engine's error, an unknown stream or an oversized frame as their text.
 fn stream_error(error: DemuxError) -> BollardError {
     match error {
         DemuxError::Io(error) => BollardError::from(error),
-        DemuxError::Daemon(_) | DemuxError::Unrecognized(_) => failure(error.to_string()),
+        DemuxError::Daemon(_) | DemuxError::Unrecognized(_) | DemuxError::FrameTooLarge { .. } => {
+            failure(error.to_string())
+        }
     }
 }
 
@@ -157,6 +164,8 @@ impl WaitCondition {
 /// version, as the client's own.
 ///
 /// A non-zero exit is the exit code here, not a failure. The code is the answer's `StatusCode`.
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is an `Other` error
+/// through the receiver, as soon as the excess is seen.
 ///
 /// # Errors
 ///
@@ -183,22 +192,21 @@ pub async fn wait(
         &cancel,
     )
     .await?;
+    let max = config.limits().response_body;
     tokio::spawn(async move {
         let result = tokio::select! {
             biased;
             () = cancel.cancelled() => return,
             () = sender.closed() => return,
-            collected = body.collect() => decode_exit(collected),
+            read = read_limited(body, max) => decode_exit(read, max),
         };
         let _ = sender.send(result);
     });
     Ok(receiver)
 }
 
-fn decode_exit(collected: Result<Collected<Bytes>, hyper::Error>) -> Result<i64, Error> {
-    let bytes = collected
-        .map_err(|error| Error::from(BollardError::from(error)))?
-        .to_bytes();
+fn decode_exit(read: Result<Bytes, ReadError>, max: NonZeroUsize) -> Result<i64, Error> {
+    let bytes = read.map_err(|error| Error::from(answer_error(error, max)))?;
     serde_json::from_slice::<ContainerWaitResponse>(&bytes)
         .map(|response| response.status_code)
         .map_err(|error| Error::from(BollardError::from(error)))

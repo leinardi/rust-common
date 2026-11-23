@@ -29,21 +29,23 @@
 //! ([`StreamEnd::Eof`]; a partial frame at the end is dropped, as `stdcopy.StdCopy` does), the
 //! caller's token fired ([`StreamEnd::Cancelled`]), or the transport or the stream failed
 //! ([`StreamEnd::Failed`]: a connection cut mid-body, an error the engine sent in the stream, an
-//! unknown stream byte).
+//! unknown stream byte, a frame past `config`'s [`output_frame`](crate::Limits::output_frame)).
 //!
 //! The wire is moby/moby `client/container_logs.go`, `client/service_logs.go` and
 //! `client/utils.go`'s at client/v0.6.2; the code is written anew, not extracted.
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use bytes::Bytes;
 use http::Method;
 use http_body_util::BodyExt as _;
-use hyper::body::Incoming;
+use hyper::body::{Body, Incoming};
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::demux::{Demuxer, Frame, Framing};
+use crate::demux::{Demuxer, Frame, Framing, READ_SIZE};
 use crate::error::Error;
 use crate::stream::{Call, Target, escape_id, establish, failure, trim_id};
 
@@ -205,11 +207,12 @@ async fn logs(
     )
     .await?;
     let (sender, receiver) = mpsc::channel(capacity.clamp(1, Semaphore::MAX_PERMITS));
+    let output_frame = config.limits().output_frame;
     tokio::spawn(async move {
         let end = tokio::select! {
             biased;
             () = sender.closed() => return,
-            end = pump(body, framing, &sender, &cancel) => end,
+            end = pump(body, framing, output_frame, &sender, &cancel) => end,
         };
         let _ = sender.send(LogItem::End(end)).await;
     });
@@ -218,12 +221,30 @@ async fn logs(
 
 /// Sends `body`'s frames until it ends, fails or `cancel` fires, and returns why it stopped.
 async fn pump(
-    mut body: Incoming,
+    body: Incoming,
     framing: Framing,
+    output_frame: NonZeroUsize,
     sender: &mpsc::Sender<LogItem>,
     cancel: &CancellationToken,
 ) -> StreamEnd {
-    let mut demuxer = Demuxer::new(framing);
+    let mut demuxer = Demuxer::new(framing, output_frame);
+    drive(body, &mut demuxer, framing, sender, cancel).await
+}
+
+/// Decodes `body` through `demuxer` and sends its frames, feeding each body chunk by
+/// [`next_piece`] and draining between pieces.
+async fn drive<B>(
+    mut body: B,
+    demuxer: &mut Demuxer,
+    framing: Framing,
+    sender: &mpsc::Sender<LogItem>,
+    cancel: &CancellationToken,
+) -> StreamEnd
+where
+    B: Body<Data = Bytes, Error = hyper::Error> + Unpin,
+{
+    let mut pending = Bytes::new();
+
     loop {
         loop {
             let frame = match demuxer.next_frame() {
@@ -242,6 +263,10 @@ async fn pump(
             };
             permit.send(LogItem::Frame(frame));
         }
+        if !pending.is_empty() {
+            demuxer.push(&next_piece(&mut pending, framing));
+            continue;
+        }
         let next = tokio::select! {
             biased;
             () = cancel.cancelled() => return StreamEnd::Cancelled,
@@ -254,11 +279,22 @@ async fn pump(
             }
             Some(Ok(frame)) => {
                 if let Ok(data) = frame.into_data() {
-                    demuxer.push(&data);
+                    pending = data;
                 }
             }
         }
     }
+}
+
+/// The next piece of a body chunk to decode. A multiplexed chunk goes in small pieces, drained
+/// between them, so an oversized header is refused before the rest of its chunk is copied; a raw
+/// chunk stays whole, so its item boundaries and the channel's backpressure do not change.
+fn next_piece(pending: &mut Bytes, framing: Framing) -> Bytes {
+    let length = match framing {
+        Framing::Multiplexed => pending.len().min(READ_SIZE),
+        Framing::Raw => pending.len(),
+    };
+    pending.split_to(length)
 }
 
 /// A query string written as Go's `url.Values.Encode` writes it; the keys are added in order.
@@ -324,4 +360,68 @@ mod tests {
     }
 
     const GO_ESCAPED: &str = "a+b%2A~-_.%C3%A9%2F%2B%25%26%3D";
+
+    /// A body of exactly one data frame, whatever its size: hyper may split a real one.
+    struct OneFrame(Option<Bytes>);
+
+    impl Body for OneFrame {
+        type Data = Bytes;
+        type Error = hyper::Error;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, hyper::Error>>> {
+            std::task::Poll::Ready(self.0.take().map(|data| Ok(hyper::body::Frame::data(data))))
+        }
+    }
+
+    fn received(receiver: &mut mpsc::Receiver<LogItem>) -> Vec<Frame> {
+        let mut frames = Vec::new();
+        while let Ok(LogItem::Frame(frame)) = receiver.try_recv() {
+            frames.push(frame);
+        }
+        frames
+    }
+
+    /// A raw body chunk larger than the read size stays one frame.
+    #[tokio::test]
+    async fn a_raw_chunk_stays_one_frame() {
+        let (sender, mut receiver) = mpsc::channel(8);
+        let mut demuxer = Demuxer::new(Framing::Raw, NonZeroUsize::MIN);
+        let chunk = Bytes::from(vec![b'x'; READ_SIZE * 2 + 1]);
+        let cancel = CancellationToken::new();
+        let body = OneFrame(Some(chunk));
+        let end = drive(body, &mut demuxer, Framing::Raw, &sender, &cancel).await;
+        assert!(matches!(end, StreamEnd::Eof), "{end:?}");
+        let frames = received(&mut receiver);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].bytes.len(), READ_SIZE * 2 + 1);
+    }
+
+    /// A multiplexed body chunk is decoded in pieces: frames that span a piece boundary come out
+    /// whole, and the decoder never holds the whole chunk.
+    #[tokio::test]
+    async fn a_multiplexed_chunk_is_fed_in_pieces() {
+        const PAYLOAD: usize = 1_000;
+        const FRAMES: usize = 100;
+        let mut one = vec![1, 0, 0, 0];
+        one.extend_from_slice(&u32::try_from(PAYLOAD).unwrap().to_be_bytes());
+        one.extend_from_slice(&[b'x'; PAYLOAD]);
+        let chunk = Bytes::from(one.repeat(FRAMES));
+        assert!(chunk.len() > READ_SIZE * 3);
+
+        let (sender, mut receiver) = mpsc::channel(FRAMES + 1);
+        let limit = NonZeroUsize::new(PAYLOAD).unwrap();
+        let mut demuxer = Demuxer::new(Framing::Multiplexed, limit);
+        let cancel = CancellationToken::new();
+        let body = OneFrame(Some(chunk));
+        let end = drive(body, &mut demuxer, Framing::Multiplexed, &sender, &cancel).await;
+        assert!(matches!(end, StreamEnd::Eof), "{end:?}");
+        let frames = received(&mut receiver);
+        assert_eq!(frames.len(), FRAMES);
+        assert!(frames.iter().all(|frame| frame.bytes.len() == PAYLOAD));
+        assert!(demuxer.peak >= READ_SIZE, "{}", demuxer.peak);
+        assert!(demuxer.peak < READ_SIZE + PAYLOAD + 8, "{}", demuxer.peak);
+    }
 }

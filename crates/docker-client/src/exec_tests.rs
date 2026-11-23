@@ -25,7 +25,10 @@ use crate::{CancellationToken, Config, ErrorKind};
 const SECS: Duration = Duration::from_secs(5);
 
 fn config_of(engine: &FakeEngine) -> Config {
-    Config::unix(engine.socket().to_str().unwrap())
+    Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    )
 }
 
 fn terminal() -> ExecOptions {
@@ -233,7 +236,7 @@ async fn a_session_without_a_tty_demultiplexes() {
         .await
         .unwrap();
     stream.shutdown().await.unwrap();
-    let mut demuxer = Demuxer::new(framing);
+    let mut demuxer = Demuxer::new(framing, crate::config::TEST_LIMITS.output_frame);
     let mut frames = Vec::new();
     while let Some(frame) = demuxer.read_frame(&mut stream).await.unwrap() {
         frames.push((frame.pipe, frame.bytes.to_vec()));

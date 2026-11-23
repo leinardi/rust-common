@@ -84,6 +84,9 @@ impl RawService {
 /// answer that is not JSON, or whose `Version.Index` is missing or not an unsigned integer
 /// (`Other`); the bound's `Timeout`, `Cancelled`, and `Unavailable` when the engine cannot be
 /// reached.
+///
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is `Other`; a
+/// refusal that long keeps its kind.
 pub async fn inspect_service_raw(
     config: &Config,
     id: &str,
@@ -125,6 +128,9 @@ pub async fn inspect_service_raw(
 /// ... update out of sequence`, so it is `Other`, as moby's Go client sees it too; an answer that
 /// does not decode (`Other`); the bound's `Timeout`, `Cancelled`, and `Unavailable` when the
 /// engine cannot be reached.
+///
+/// An answer past `config`'s [`response_body`](crate::Limits::response_body) is `Other`; a
+/// refusal that long keeps its kind.
 pub async fn update_service_raw(
     config: &Config,
     id: &str,

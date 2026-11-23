@@ -73,6 +73,8 @@ bytes = "1.12.1"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+# The refusal's message read without building the rest of an engine's JSON.
+serde = { version = "1.0.229", default-features = false, features = ["std"] }
 serde_json = "1.0.154"
 serde_urlencoded = "0.7.1"
 # TCP keepalive on the streaming calls' connection (tcp feature).
