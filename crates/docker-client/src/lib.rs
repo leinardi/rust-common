@@ -80,7 +80,7 @@ pub mod test_util;
 mod tests;
 
 pub use bollard;
-pub use config::{Config, ConnectError, connect, negotiate};
+pub use config::{Config, ConnectError, Limits, connect, negotiate};
 pub use error::{Error, ErrorKind, bounded};
 pub use pump::pump_stream;
 pub use stream::{EventStream, events_established};

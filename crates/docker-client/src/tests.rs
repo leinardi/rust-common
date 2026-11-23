@@ -25,7 +25,11 @@ use crate::test_util::{FakeEngine, Reply};
 use crate::*;
 
 fn client(engine: &FakeEngine) -> Docker {
-    connect(Config::unix(engine.socket().to_str().unwrap())).unwrap()
+    connect(Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    ))
+    .unwrap()
 }
 
 fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -76,7 +80,11 @@ async fn a_refused_connection_is_unavailable() {
     let socket = engine.socket().with_file_name("refused.sock");
     // A socket file nobody listens on: the connection is refused.
     drop(UnixListener::bind(&socket).unwrap());
-    let docker = connect(Config::unix(socket.to_str().unwrap())).unwrap();
+    let docker = connect(Config::unix(
+        socket.to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    ))
+    .unwrap();
     let error = inspect(&docker, "x").await.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unavailable, "{error}");
     assert!(std::error::Error::source(&error).is_some());
@@ -84,7 +92,11 @@ async fn a_refused_connection_is_unavailable() {
 
 #[tokio::test]
 async fn a_missing_socket_is_refused_at_connect() {
-    let error = connect(Config::unix("/nonexistent/docker.sock")).unwrap_err();
+    let error = connect(Config::unix(
+        "/nonexistent/docker.sock",
+        crate::config::TEST_LIMITS,
+    ))
+    .unwrap_err();
     let ConnectError::Dial { host, source } = &error else {
         panic!("not a dial failure: {error:?}");
     };
@@ -100,11 +112,21 @@ async fn a_missing_socket_is_refused_at_connect() {
 
 #[test]
 fn the_daemon_host_is_kept_as_given() {
-    assert_eq!(Config::unix("/s").daemon_host(), "unix:///s");
-    assert_eq!(Config::unix("unix:///s").daemon_host(), "unix:///s");
-    let default = Config::from_env(env(&[])).unwrap();
+    assert_eq!(
+        Config::unix("/s", crate::config::TEST_LIMITS).daemon_host(),
+        "unix:///s"
+    );
+    assert_eq!(
+        Config::unix("unix:///s", crate::config::TEST_LIMITS).daemon_host(),
+        "unix:///s"
+    );
+    let default = Config::from_env(env(&[]), crate::config::TEST_LIMITS).unwrap();
     assert_eq!(default.daemon_host(), "unix:///var/run/docker.sock");
-    let unix = Config::from_env(env(&[("DOCKER_HOST", "unix:///run/d.sock")])).unwrap();
+    let unix = Config::from_env(
+        env(&[("DOCKER_HOST", "unix:///run/d.sock")]),
+        crate::config::TEST_LIMITS,
+    )
+    .unwrap();
     assert_eq!(unix.daemon_host(), "unix:///run/d.sock");
 }
 
@@ -112,7 +134,8 @@ fn the_daemon_host_is_kept_as_given() {
 #[test]
 fn a_tcp_or_http_daemon_host_is_kept_as_written() {
     for host in ["tcp://127.0.0.1:2375", "http://127.0.0.1:2375"] {
-        let config = Config::from_env(env(&[("DOCKER_HOST", host)])).unwrap();
+        let config =
+            Config::from_env(env(&[("DOCKER_HOST", host)]), crate::config::TEST_LIMITS).unwrap();
         assert_eq!(config.daemon_host(), host);
     }
 }
@@ -275,11 +298,13 @@ async fn a_304_is_a_success_not_an_error() {
 async fn the_user_agent_is_sent_and_a_bad_one_refused() {
     let engine = FakeEngine::start(&[("/_ping", Reply::ok("OK"))]).unwrap();
     let socket = engine.socket().to_str().unwrap();
-    let docker = connect(Config::unix(socket).user_agent("tool/1.2")).unwrap();
+    let docker =
+        connect(Config::unix(socket, crate::config::TEST_LIMITS).user_agent("tool/1.2")).unwrap();
     docker.ping().await.unwrap();
     let requests = engine.requests();
     assert_eq!(requests[0].header("user-agent"), Some("tool/1.2"));
-    let bad = connect(Config::unix(socket).user_agent("a\nb")).unwrap_err();
+    let bad =
+        connect(Config::unix(socket, crate::config::TEST_LIMITS).user_agent("a\nb")).unwrap_err();
     assert!(matches!(bad, ConnectError::Invalid(_)), "{bad}");
 }
 
@@ -288,14 +313,16 @@ async fn a_fixed_version_is_kept_and_otherwise_negotiated() {
     let engine = FakeEngine::start(&[("/version", Reply::ok(r#"{"ApiVersion":"1.41"}"#))]).unwrap();
     let socket = engine.socket().to_str().unwrap();
 
-    let fixed = Config::unix(socket).api_version("1.44").unwrap();
+    let fixed = Config::unix(socket, crate::config::TEST_LIMITS)
+        .api_version("1.44")
+        .unwrap();
     let (docker, _) = negotiate(connect(fixed.clone()).unwrap(), &fixed)
         .await
         .unwrap();
     assert_eq!(docker.client_version().to_string(), "1.44");
     assert!(engine.requests().is_empty());
 
-    let open = Config::unix(socket);
+    let open = Config::unix(socket, crate::config::TEST_LIMITS);
     let (docker, _) = negotiate(connect(open.clone()).unwrap(), &open)
         .await
         .unwrap();
@@ -305,7 +332,11 @@ async fn a_fixed_version_is_kept_and_otherwise_negotiated() {
 
 #[test]
 fn from_env_defaults_to_the_standard_socket_and_ignores_empty_variables() {
-    let config = Config::from_env(env(&[("DOCKER_HOST", ""), ("DOCKER_API_VERSION", "")])).unwrap();
+    let config = Config::from_env(
+        env(&[("DOCKER_HOST", ""), ("DOCKER_API_VERSION", "")]),
+        crate::config::TEST_LIMITS,
+    )
+    .unwrap();
     assert_eq!(
         config.endpoint,
         crate::config::Endpoint::Unix("/var/run/docker.sock".to_owned())
@@ -315,12 +346,15 @@ fn from_env_defaults_to_the_standard_socket_and_ignores_empty_variables() {
 
 #[test]
 fn from_env_reads_a_unix_host_and_the_api_version() {
-    let config = Config::from_env(env(&[
-        ("DOCKER_HOST", "unix:///run/user/1000/docker.sock"),
-        ("DOCKER_API_VERSION", "1.43"),
-        // A unix host needs no TLS.
-        ("DOCKER_TLS_VERIFY", "1"),
-    ]))
+    let config = Config::from_env(
+        env(&[
+            ("DOCKER_HOST", "unix:///run/user/1000/docker.sock"),
+            ("DOCKER_API_VERSION", "1.43"),
+            // A unix host needs no TLS.
+            ("DOCKER_TLS_VERIFY", "1"),
+        ]),
+        crate::config::TEST_LIMITS,
+    )
     .unwrap();
     assert_eq!(
         config.endpoint,
@@ -333,25 +367,39 @@ fn from_env_reads_a_unix_host_and_the_api_version() {
 #[test]
 fn from_env_refuses_what_is_not_an_address_or_a_version() {
     for host in ["unix://", "tcp://", "ftp://x", "/var/run/docker.sock"] {
-        let error = Config::from_env(env(&[("DOCKER_HOST", host)])).unwrap_err();
+        let error = Config::from_env(env(&[("DOCKER_HOST", host)]), crate::config::TEST_LIMITS)
+            .unwrap_err();
         assert!(matches!(error, ConnectError::Invalid(_)), "{host}: {error}");
     }
     for version in ["1", "1.", ".43", "1.x", "1.2.3", "v1.43", "-1.43", "+1.43"] {
-        let error = Config::from_env(env(&[("DOCKER_API_VERSION", version)])).unwrap_err();
+        let error = Config::from_env(
+            env(&[("DOCKER_API_VERSION", version)]),
+            crate::config::TEST_LIMITS,
+        )
+        .unwrap_err();
         assert!(
             matches!(error, ConnectError::Invalid(_)),
             "{version}: {error}"
         );
     }
-    assert!(Config::unix("/s").api_version("1.43").is_ok());
-    assert!(Config::unix("/s").api_version("x").is_err());
+    assert!(
+        Config::unix("/s", crate::config::TEST_LIMITS)
+            .api_version("1.43")
+            .is_ok()
+    );
+    assert!(
+        Config::unix("/s", crate::config::TEST_LIMITS)
+            .api_version("x")
+            .is_err()
+    );
 }
 
 #[cfg(not(feature = "tcp"))]
 #[test]
 fn from_env_needs_the_tcp_feature_for_a_tcp_host() {
     for host in ["tcp://127.0.0.1:2375", "http://h:1", "https://h:2376"] {
-        let error = Config::from_env(env(&[("DOCKER_HOST", host)])).unwrap_err();
+        let error = Config::from_env(env(&[("DOCKER_HOST", host)]), crate::config::TEST_LIMITS)
+            .unwrap_err();
         assert!(
             matches!(error, ConnectError::Unsupported(_)),
             "{host}: {error}"
@@ -362,10 +410,13 @@ fn from_env_needs_the_tcp_feature_for_a_tcp_host() {
 #[test]
 fn from_env_refuses_a_plain_http_host_with_tls_verify() {
     for verify in ["1", "0"] {
-        let error = Config::from_env(env(&[
-            ("DOCKER_HOST", "http://h:2375"),
-            ("DOCKER_TLS_VERIFY", verify),
-        ]))
+        let error = Config::from_env(
+            env(&[
+                ("DOCKER_HOST", "http://h:2375"),
+                ("DOCKER_TLS_VERIFY", verify),
+            ]),
+            crate::config::TEST_LIMITS,
+        )
         .unwrap_err();
         let ConnectError::Invalid(text) = &error else {
             panic!("{error:?}");
@@ -381,7 +432,8 @@ fn from_env_refuses_a_plain_http_host_with_tls_verify() {
 #[test]
 fn from_env_reads_a_tcp_host() {
     for host in ["tcp://127.0.0.1:2375", "http://127.0.0.1:2375"] {
-        let config = Config::from_env(env(&[("DOCKER_HOST", host)])).unwrap();
+        let config =
+            Config::from_env(env(&[("DOCKER_HOST", host)]), crate::config::TEST_LIMITS).unwrap();
         assert_eq!(
             config.endpoint,
             crate::config::Endpoint::Tcp("tcp://127.0.0.1:2375".to_owned())
@@ -397,7 +449,7 @@ fn from_env_needs_the_tls_feature_for_tls() {
         &[("DOCKER_HOST", "https://h:2376")][..],
         &[("DOCKER_HOST", "tcp://h:2376"), ("DOCKER_TLS_VERIFY", "1")][..],
     ] {
-        let error = Config::from_env(env(pairs)).unwrap_err();
+        let error = Config::from_env(env(pairs), crate::config::TEST_LIMITS).unwrap_err();
         assert!(matches!(error, ConnectError::Unsupported(_)), "{error}");
     }
 }
@@ -420,7 +472,12 @@ fn from_env_reads_tls_from_the_cert_path() {
             ("DOCKER_CERT_PATH", "/certs"),
         ][..],
     ] {
-        assert_eq!(Config::from_env(env(pairs)).unwrap().endpoint, expected);
+        assert_eq!(
+            Config::from_env(env(pairs), crate::config::TEST_LIMITS)
+                .unwrap()
+                .endpoint,
+            expected
+        );
     }
     // An unset or empty DOCKER_CERT_PATH falls back to $HOME/.docker, as moby does; with no HOME
     // either, there is nowhere to read from. Any non-empty DOCKER_TLS_VERIFY counts, `0` too.
@@ -440,20 +497,28 @@ fn from_env_reads_tls_from_the_cert_path() {
             ("HOME", "/home/u"),
         ][..],
     ] {
-        assert_eq!(Config::from_env(env(pairs)).unwrap().endpoint, home);
+        assert_eq!(
+            Config::from_env(env(pairs), crate::config::TEST_LIMITS)
+                .unwrap()
+                .endpoint,
+            home
+        );
     }
     for pairs in [
         &[("DOCKER_HOST", "tcp://h:2376"), ("DOCKER_TLS_VERIFY", "1")][..],
         &[("DOCKER_HOST", "https://h:2376"), ("DOCKER_CERT_PATH", "")][..],
     ] {
-        let error = Config::from_env(env(pairs)).unwrap_err();
+        let error = Config::from_env(env(pairs), crate::config::TEST_LIMITS).unwrap_err();
         assert!(matches!(error, ConnectError::Invalid(_)), "{error}");
     }
     // Without DOCKER_TLS_VERIFY a tcp host stays plain, certificates or not.
-    let plain = Config::from_env(env(&[
-        ("DOCKER_HOST", "tcp://h:2375"),
-        ("DOCKER_CERT_PATH", "/certs"),
-    ]))
+    let plain = Config::from_env(
+        env(&[
+            ("DOCKER_HOST", "tcp://h:2375"),
+            ("DOCKER_CERT_PATH", "/certs"),
+        ]),
+        crate::config::TEST_LIMITS,
+    )
     .unwrap();
     assert_eq!(
         plain.endpoint,
@@ -798,10 +863,13 @@ mod attach_tests {
             ("/containers/slow/start", Reply::status(204)),
         ])
         .unwrap();
-        let config = Config::unix(engine.socket().to_str().unwrap())
-            .api_version("1.41")
-            .unwrap()
-            .user_agent("tool/1.2");
+        let config = Config::unix(
+            engine.socket().to_str().unwrap(),
+            crate::config::TEST_LIMITS,
+        )
+        .api_version("1.41")
+        .unwrap()
+        .user_agent("tool/1.2");
         let docker = connect(config.clone()).unwrap();
         let begun = Instant::now();
         let receiver = wait(
@@ -882,15 +950,9 @@ mod attach_tests {
             )
             .await
             .unwrap();
-            let _events = events_established(
-                &config,
-                None,
-                SECS,
-                crate::tests::MAX_RECORD,
-                &CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+            let _events = events_established(&config, None, SECS, &CancellationToken::new())
+                .await
+                .unwrap();
             let paths: Vec<String> = engine
                 .requests()
                 .iter()
@@ -914,7 +976,10 @@ mod attach_tests {
     async fn a_unix_scheme_path_works_for_streaming_calls() {
         let engine =
             FakeEngine::start(&[("/containers/c/wait", Reply::ok(r#"{"StatusCode":4}"#))]).unwrap();
-        let config = Config::unix(format!("unix://{}", engine.socket().to_str().unwrap()));
+        let config = Config::unix(
+            format!("unix://{}", engine.socket().to_str().unwrap()),
+            crate::config::TEST_LIMITS,
+        );
         let receiver = wait(
             &config,
             "c",
@@ -946,9 +1011,7 @@ mod attach_tests {
             .await
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Cancelled);
-        let Err(error) =
-            events_established(&config, None, long, crate::tests::MAX_RECORD, &before).await
-        else {
+        let Err(error) = events_established(&config, None, long, &before).await else {
             panic!("established under a cancelled token");
         };
         assert_eq!(error.kind(), ErrorKind::Cancelled);
@@ -996,10 +1059,13 @@ mod attach_tests {
 async fn requests_carry_the_fixed_api_version() {
     let engine = FakeEngine::start(&[("/containers/json", Reply::ok("[]"))]).unwrap();
     let socket = engine.socket().to_str().unwrap();
-    let config = Config::from_env(env(&[
-        ("DOCKER_HOST", &format!("unix://{socket}")),
-        ("DOCKER_API_VERSION", "1.43"),
-    ]))
+    let config = Config::from_env(
+        env(&[
+            ("DOCKER_HOST", &format!("unix://{socket}")),
+            ("DOCKER_API_VERSION", "1.43"),
+        ]),
+        crate::config::TEST_LIMITS,
+    )
     .unwrap();
     let (docker, _) = negotiate(connect(config.clone()).unwrap(), &config)
         .await
@@ -1022,7 +1088,7 @@ async fn requests_carry_the_negotiated_version_and_negotiation_itself_is_unversi
     ])
     .unwrap();
     let socket = engine.socket().to_str().unwrap();
-    let config = Config::unix(socket).user_agent("tool/1.2");
+    let config = Config::unix(socket, crate::config::TEST_LIMITS).user_agent("tool/1.2");
     let docker = connect(config.clone()).unwrap();
 
     // Before negotiation: unversioned, as bollard has always sent it.
@@ -1063,7 +1129,10 @@ async fn requests_carry_the_negotiated_version_and_negotiation_itself_is_unversi
 #[tokio::test]
 async fn renegotiating_asks_the_version_unversioned_again() {
     let engine = FakeEngine::start(&[("/version", Reply::ok(r#"{"ApiVersion":"1.41"}"#))]).unwrap();
-    let config = Config::unix(engine.socket().to_str().unwrap());
+    let config = Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    );
     let (docker, negotiated) = negotiate(connect(config.clone()).unwrap(), &config)
         .await
         .unwrap();
@@ -1137,7 +1206,7 @@ async fn clients_from_clones_of_one_config_keep_their_own_version() {
     ])
     .unwrap();
     let socket = engine.socket().to_str().unwrap();
-    let base = Config::unix(socket);
+    let base = Config::unix(socket, crate::config::TEST_LIMITS);
     let old_config = base.clone().api_version("1.41").unwrap();
     let new_config = base.clone().api_version("1.44").unwrap();
     let old = connect(old_config).unwrap();
@@ -1175,7 +1244,10 @@ async fn a_clone_of_the_config_shares_no_negotiated_version() {
         ("/containers/json", Reply::ok("[]")),
     ])
     .unwrap();
-    let config = Config::unix(engine.socket().to_str().unwrap());
+    let config = Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    );
     let first = connect(config.clone()).unwrap();
     let second = connect(config.clone()).unwrap();
     let (_negotiated, _) = negotiate(first, &config).await.unwrap();
@@ -1187,12 +1259,13 @@ async fn a_clone_of_the_config_shares_no_negotiated_version() {
     assert_eq!(requests[1].raw_path(), "/containers/json");
 }
 
-const MAX_RECORD: std::num::NonZeroUsize = std::num::NonZeroUsize::new(1024 * 1024).unwrap();
-
 const EVENT_A: &str = r#"{"Type":"container","Action":"start","Actor":{"ID":"a","Attributes":{}}}"#;
 
 fn config_of(engine: &FakeEngine) -> Config {
-    Config::unix(engine.socket().to_str().unwrap())
+    Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    )
 }
 
 #[tokio::test]
@@ -1206,7 +1279,6 @@ async fn events_established_streams_lines_and_survives_an_undecodable_one() {
         &config,
         None,
         Duration::from_secs(5),
-        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1233,12 +1305,15 @@ async fn an_over_long_record_ends_the_stream_while_the_peer_stays_open() {
         response.extend_from_slice(format!("{:x}\r\n{chunk}\r\n", chunk.len()).as_bytes());
     }
     let engine = FakeEngine::start(&[("/events", Reply::Held(response))]).unwrap();
-    let config = config_of(&engine);
+    let limits = Limits {
+        event_record: max,
+        ..crate::config::TEST_LIMITS
+    };
+    let config = Config::unix(engine.socket().to_str().unwrap(), limits);
     let mut events = events_established(
         &config,
         None,
         Duration::from_secs(5),
-        max,
         &CancellationToken::new(),
     )
     .await
@@ -1274,10 +1349,13 @@ async fn events_established_sends_the_options_the_agent_and_the_version() {
     use bollard::query_parameters::EventsOptionsBuilder;
 
     let engine = FakeEngine::start(&[("/events", Reply::events(&[]))]).unwrap();
-    let config = Config::unix(engine.socket().to_str().unwrap())
-        .api_version("1.43")
-        .unwrap()
-        .user_agent("tool/1.2");
+    let config = Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    )
+    .api_version("1.43")
+    .unwrap()
+    .user_agent("tool/1.2");
     let options = EventsOptionsBuilder::new()
         .since("100")
         .filters(&HashMap::from([("type", vec!["container"])]))
@@ -1286,7 +1364,6 @@ async fn events_established_sends_the_options_the_agent_and_the_version() {
         &config,
         Some(options),
         Duration::from_secs(5),
-        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1315,7 +1392,6 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
         &config,
         None,
         Duration::from_millis(200),
-        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1332,7 +1408,6 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
         &config,
         None,
         Duration::from_secs(30),
-        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1349,7 +1424,6 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
         &config,
         None,
         Duration::from_secs(30),
-        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1397,11 +1471,14 @@ mod tls_tests {
     }
 
     fn config(port: u16, certs: &std::path::Path) -> Config {
-        Config::from_env(env(&[
-            ("DOCKER_HOST", &format!("tcp://127.0.0.1:{port}")),
-            ("DOCKER_TLS_VERIFY", "1"),
-            ("DOCKER_CERT_PATH", certs.to_str().unwrap()),
-        ]))
+        Config::from_env(
+            env(&[
+                ("DOCKER_HOST", &format!("tcp://127.0.0.1:{port}")),
+                ("DOCKER_TLS_VERIFY", "1"),
+                ("DOCKER_CERT_PATH", certs.to_str().unwrap()),
+            ]),
+            crate::config::TEST_LIMITS,
+        )
         .unwrap()
     }
 
@@ -1474,7 +1551,6 @@ mod tls_tests {
             &config,
             None,
             Duration::from_secs(10),
-            crate::tests::MAX_RECORD,
             &CancellationToken::new(),
         )
         .await
@@ -1491,7 +1567,6 @@ mod tls_tests {
             &config,
             None,
             Duration::from_millis(300),
-            crate::tests::MAX_RECORD,
             &CancellationToken::new(),
         )
         .await
@@ -1510,7 +1585,6 @@ mod tls_tests {
             &config,
             None,
             Duration::from_secs(5),
-            crate::tests::MAX_RECORD,
             &CancellationToken::new(),
         )
         .await

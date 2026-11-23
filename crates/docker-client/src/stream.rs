@@ -573,11 +573,11 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// Each line of the stream is decoded as an [`EventMessage`]; one that does not decode is an `Err`
 /// item and the stream goes on. A transport failure is an `Err` item that ends it.
 ///
-/// A line longer than `max_record_bytes` is an `Err` item that ends the stream, as soon as the
-/// excess is seen and without waiting for its newline, so that the caller reconnects. Every byte
-/// before the newline counts, whitespace and record separators included. The limit bounds what
-/// this stream buffers for one record of a successful answer; it does not bound the allocation of
-/// a frame by hyper, nor the body of a refusal.
+/// A line longer than `config`'s [`event_record`](crate::Limits::event_record) is an `Err` item
+/// that ends the stream, as soon as the excess is seen and without waiting for its newline, so
+/// that the caller reconnects. Every byte before the newline counts, whitespace and record
+/// separators included. The limit bounds what this stream buffers for one record of a successful
+/// answer, capacity included; it does not bound the allocation of a frame by hyper.
 ///
 /// # Errors
 ///
@@ -588,7 +588,6 @@ pub async fn events_established(
     config: &Config,
     options: Option<EventsOptions>,
     timeout: Duration,
-    max_record_bytes: NonZeroUsize,
     cancel: &CancellationToken,
 ) -> Result<EventStream, Error> {
     let target = Target::of(config);
@@ -605,7 +604,18 @@ pub async fn events_established(
         cancel,
     )
     .await?;
-    Ok(Box::pin(lines(body, max_record_bytes)))
+    Ok(Box::pin(lines(body, config.limits().event_record)))
+}
+
+/// Grows `buffer` to hold `additional` more bytes without its capacity passing `max`, which the
+/// caller has checked the contents fit. Growth stays geometric, so many small appends stay linear.
+fn reserve_capped(buffer: &mut Vec<u8>, additional: usize, max: usize) {
+    let needed = buffer.len() + additional;
+    debug_assert!(needed <= max);
+    if needed > buffer.capacity() {
+        let target = buffer.capacity().saturating_mul(2).max(needed).min(max);
+        buffer.reserve_exact(target - buffer.len());
+    }
 }
 
 /// An event record past the caller's maximum.
@@ -616,7 +626,7 @@ struct RecordTooLong;
 ///
 /// A frame is walked by offset and never shifted, and each byte is searched for a newline at most
 /// once, so the work is linear in the body. Only the fragments of an incomplete record are copied,
-/// and only after they are known to fit, so `partial` never holds more than `max` bytes.
+/// and only after they are known to fit, so neither `partial` nor its capacity passes `max` bytes.
 #[derive(Debug)]
 struct RecordReader {
     frame: Bytes,
@@ -668,6 +678,7 @@ impl RecordReader {
             if available > budget {
                 return Err(RecordTooLong);
             }
+            reserve_capped(&mut self.partial, available, self.max);
             self.partial
                 .extend_from_slice(&self.frame.slice(start..start + available));
             self.offset = self.frame.len();
@@ -680,6 +691,7 @@ impl RecordReader {
         if self.partial.is_empty() {
             return Ok(Some(fragment));
         }
+        reserve_capped(&mut self.partial, fragment.len(), self.max);
         self.partial.extend_from_slice(&fragment);
         Ok(Some(Bytes::from(std::mem::take(&mut self.partial))))
     }
@@ -834,6 +846,41 @@ mod record_tests {
             assert_eq!(split.next_record(), Ok(None));
         }
         assert_eq!(split.searched, 10_000);
+    }
+
+    #[test]
+    fn the_capacity_never_passes_the_limit() {
+        let mut reader = reader(100);
+        reader.set_frame(Bytes::from(vec![b'x'; 60]));
+        assert_eq!(reader.next_record(), Ok(None));
+        reader.set_frame(Bytes::from_static(b"x"));
+        assert_eq!(reader.next_record(), Ok(None));
+        assert!(
+            reader.partial.capacity() <= 100,
+            "{}",
+            reader.partial.capacity()
+        );
+        reader.set_frame(Bytes::from(vec![b'x'; 39]));
+        assert_eq!(reader.next_record(), Ok(None));
+        assert_eq!(reader.partial.len(), 100);
+        assert_eq!(reader.partial.capacity(), 100);
+    }
+
+    #[test]
+    fn many_one_byte_frames_reallocate_logarithmically() {
+        let mut reader = reader(10_000);
+        let mut capacity = reader.partial.capacity();
+        let mut growths = 0;
+        for _ in 0..10_000 {
+            reader.set_frame(Bytes::from_static(b"x"));
+            assert_eq!(reader.next_record(), Ok(None));
+            if reader.partial.capacity() != capacity {
+                capacity = reader.partial.capacity();
+                growths += 1;
+            }
+        }
+        assert!(capacity <= 10_000, "{capacity}");
+        assert!(growths <= 15, "{growths}");
     }
 
     #[test]

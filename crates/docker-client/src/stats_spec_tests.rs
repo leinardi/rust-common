@@ -21,9 +21,12 @@ use crate::{CancellationToken, Config, ErrorKind};
 const SECS: Duration = Duration::from_secs(5);
 
 fn config_of(engine: &FakeEngine) -> Config {
-    Config::unix(engine.socket().to_str().unwrap())
-        .api_version("1.44")
-        .unwrap()
+    Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    )
+    .api_version("1.44")
+    .unwrap()
 }
 
 #[cfg(feature = "stats")]

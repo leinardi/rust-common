@@ -106,10 +106,13 @@ mod tests {
     const SECS: Duration = Duration::from_secs(5);
 
     fn config_of(engine: &FakeEngine) -> Config {
-        Config::unix(engine.socket().to_str().unwrap())
-            .api_version("1.44")
-            .unwrap()
-            .user_agent("raw-request-test/1")
+        Config::unix(
+            engine.socket().to_str().unwrap(),
+            crate::config::TEST_LIMITS,
+        )
+        .api_version("1.44")
+        .unwrap()
+        .user_agent("raw-request-test/1")
     }
 
     /// The request carries the method, the version prefix, the query as given and the

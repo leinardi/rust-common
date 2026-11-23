@@ -16,6 +16,7 @@
 //! Extracted from swarm-rootless-docker/src/docker/mod.rs at e0961f77655f (`Bollard::with_timeout`,
 //! the unix connection with a whole-second header timeout).
 
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -68,6 +69,38 @@ pub(crate) enum Endpoint {
     },
 }
 
+/// The most this crate's own calls buffer from an engine, chosen by the consumer: there is no
+/// default, because how much output or JSON is reasonable is the program's policy.
+///
+/// The limits do not cover:
+///
+/// * calls made through bollard, [`negotiate`]'s `/version` and streams given to
+///   [`pump_stream`](crate::pump_stream) included: bollard collects whole bodies and has no limit
+///   option;
+/// * direct reads of an [`ExecStream`](crate::exec::ExecStream), which buffers nothing itself: a
+///   caller that decodes one passes [`Limits::output_frame`] to its
+///   [`Demuxer`](crate::demux::Demuxer);
+/// * the transport and queued data: hyper's read buffers, and output waiting in a channel, which
+///   its `capacity` bounds in frames and where each `Bytes` can keep its parent allocation alive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// A whole response body read by this crate. Not applied yet.
+    pub response_body: NonZeroUsize,
+    /// One newline-delimited `/events` record, every byte before its newline counted.
+    pub event_record: NonZeroUsize,
+    /// The payload of one multiplexed output frame, without its 8-byte header. Not a buffer size.
+    /// Not applied yet.
+    pub output_frame: NonZeroUsize,
+}
+
+/// The limits of the crate's own tests, far above anything they send.
+#[cfg(test)]
+pub(crate) const TEST_LIMITS: Limits = Limits {
+    response_body: NonZeroUsize::new(16 * 1024 * 1024).unwrap(),
+    event_record: NonZeroUsize::new(1024 * 1024).unwrap(),
+    output_frame: NonZeroUsize::new(16 * 1024 * 1024).unwrap(),
+};
+
 /// How to reach an engine and how the client behaves; build it with [`Config::unix`] or
 /// [`Config::from_env`], then [`connect`] it.
 #[derive(Debug, Clone, PartialEq)]
@@ -80,18 +113,20 @@ pub struct Config {
     pub(crate) negotiated: Option<ClientVersion>,
     pub(crate) user_agent: Option<String>,
     header_timeout: Option<Duration>,
+    limits: Limits,
 }
 
 impl Config {
-    /// The unix socket at `path`; a leading `unix://` is dropped, as bollard does.
+    /// The unix socket at `path`; a leading `unix://` is dropped, as bollard does. `limits` bounds
+    /// what this crate's calls buffer from the engine.
     #[must_use]
-    pub fn unix(path: impl Into<String>) -> Self {
+    pub fn unix(path: impl Into<String>, limits: Limits) -> Self {
         let path = path.into();
         let (path, host) = match path.strip_prefix("unix://") {
             Some(stripped) => (stripped.to_owned(), path.clone()),
             None => (path.clone(), format!("unix://{path}")),
         };
-        Self::new(Endpoint::Unix(path), host)
+        Self::new(Endpoint::Unix(path), host, limits)
     }
 
     /// The engine `DOCKER_HOST` names (`unix://`, and with `tcp` also `tcp://` and `http://`, with
@@ -107,6 +142,7 @@ impl Config {
     /// ignored.
     ///
     /// `getenv` is the caller's lookup, `|name| std::env::var(name).ok()` for the process.
+    /// `limits` bounds what this crate's calls buffer from the engine.
     ///
     /// # Errors
     ///
@@ -114,7 +150,10 @@ impl Config {
     /// neither `DOCKER_CERT_PATH` nor `HOME` set, or a `DOCKER_API_VERSION` that is not
     /// `<major>.<minor>`; [`ConnectError::Unsupported`] for TCP or TLS this build lacks, or
     /// `DOCKER_TLS` set.
-    pub fn from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Self, ConnectError> {
+    pub fn from_env(
+        getenv: impl Fn(&str) -> Option<String>,
+        limits: Limits,
+    ) -> Result<Self, ConnectError> {
         let var = |name: &str| getenv(name).filter(|value| !value.is_empty());
         if var("DOCKER_TLS").is_some() {
             return Err(ConnectError::Unsupported("DOCKER_TLS (unverified TLS)"));
@@ -148,7 +187,7 @@ impl Config {
                 "DOCKER_HOST {host:?} has an unknown scheme"
             )));
         };
-        let mut config = Self::new(endpoint, host);
+        let mut config = Self::new(endpoint, host, limits);
         config.api_version = var("DOCKER_API_VERSION")
             .map(|version| parse_version(&version))
             .transpose()?;
@@ -193,7 +232,13 @@ impl Config {
         &self.host
     }
 
-    fn new(endpoint: Endpoint, host: String) -> Self {
+    /// The limits this client's calls buffer under.
+    #[must_use]
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    fn new(endpoint: Endpoint, host: String, limits: Limits) -> Self {
         Self {
             endpoint,
             host,
@@ -201,6 +246,7 @@ impl Config {
             negotiated: None,
             user_agent: None,
             header_timeout: None,
+            limits,
         }
     }
 }

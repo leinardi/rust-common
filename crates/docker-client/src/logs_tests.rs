@@ -27,7 +27,10 @@ use crate::{CancellationToken, Config, ErrorKind};
 const SECS: Duration = Duration::from_secs(5);
 
 fn config_of(engine: &FakeEngine) -> Config {
-    Config::unix(engine.socket().to_str().unwrap())
+    Config::unix(
+        engine.socket().to_str().unwrap(),
+        crate::config::TEST_LIMITS,
+    )
 }
 
 fn frame(stream: u8, payload: &[u8]) -> Vec<u8> {
@@ -540,7 +543,7 @@ async fn dropping_the_receiver_closes_the_connection() {
         let _ = closed.send(());
     });
     let mut receiver = logs::container_logs(
-        &Config::unix(socket.to_str().unwrap()),
+        &Config::unix(socket.to_str().unwrap(), crate::config::TEST_LIMITS),
         "c",
         &every_option(),
         Framing::Multiplexed,

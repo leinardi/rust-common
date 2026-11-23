@@ -127,10 +127,13 @@ mod tests {
     const SECS: Duration = Duration::from_secs(5);
 
     fn config_of(engine: &FakeEngine) -> Config {
-        Config::unix(engine.socket().to_str().unwrap())
-            .api_version("1.44")
-            .unwrap()
-            .user_agent("raw-get-test/1")
+        Config::unix(
+            engine.socket().to_str().unwrap(),
+            crate::config::TEST_LIMITS,
+        )
+        .api_version("1.44")
+        .unwrap()
+        .user_agent("raw-get-test/1")
     }
 
     /// The request carries the version prefix, the query as given and the `User-Agent`, and the
@@ -300,7 +303,7 @@ mod tests {
     /// A ping that cannot reach the engine fails with `Unavailable`.
     #[tokio::test]
     async fn ping_of_a_missing_socket_is_unavailable() {
-        let config = Config::unix("/nonexistent/docker.sock");
+        let config = Config::unix("/nonexistent/docker.sock", crate::config::TEST_LIMITS);
         let error = ping(&config, SECS, &CancellationToken::new())
             .await
             .unwrap_err();
