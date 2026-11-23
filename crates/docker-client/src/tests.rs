@@ -882,9 +882,15 @@ mod attach_tests {
             )
             .await
             .unwrap();
-            let _events = events_established(&config, None, SECS, &CancellationToken::new())
-                .await
-                .unwrap();
+            let _events = events_established(
+                &config,
+                None,
+                SECS,
+                crate::tests::MAX_RECORD,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
             let paths: Vec<String> = engine
                 .requests()
                 .iter()
@@ -940,7 +946,9 @@ mod attach_tests {
             .await
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Cancelled);
-        let Err(error) = events_established(&config, None, long, &before).await else {
+        let Err(error) =
+            events_established(&config, None, long, crate::tests::MAX_RECORD, &before).await
+        else {
             panic!("established under a cancelled token");
         };
         assert_eq!(error.kind(), ErrorKind::Cancelled);
@@ -1179,6 +1187,8 @@ async fn a_clone_of_the_config_shares_no_negotiated_version() {
     assert_eq!(requests[1].raw_path(), "/containers/json");
 }
 
+const MAX_RECORD: std::num::NonZeroUsize = std::num::NonZeroUsize::new(1024 * 1024).unwrap();
+
 const EVENT_A: &str = r#"{"Type":"container","Action":"start","Actor":{"ID":"a","Attributes":{}}}"#;
 
 fn config_of(engine: &FakeEngine) -> Config {
@@ -1196,6 +1206,7 @@ async fn events_established_streams_lines_and_survives_an_undecodable_one() {
         &config,
         None,
         Duration::from_secs(5),
+        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1205,6 +1216,57 @@ async fn events_established_streams_lines_and_survives_an_undecodable_one() {
     assert!(events.next().await.unwrap().is_err());
     assert!(events.next().await.unwrap().is_ok());
     assert!(events.next().await.is_none());
+}
+
+#[tokio::test]
+async fn an_over_long_record_ends_the_stream_while_the_peer_stays_open() {
+    use futures_util::StreamExt as _;
+
+    let max = std::num::NonZeroUsize::new(EVENT_A.len()).unwrap();
+    let mut response =
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .to_vec();
+    let first = format!("{EVENT_A}\n");
+    let over = "x".repeat(EVENT_A.len() / 2 + 1);
+    // Two chunks of one record that passes the limit only in the second, with no newline at all.
+    for chunk in [first.as_str(), over.as_str(), over.as_str()] {
+        response.extend_from_slice(format!("{:x}\r\n{chunk}\r\n", chunk.len()).as_bytes());
+    }
+    let engine = FakeEngine::start(&[("/events", Reply::Held(response))]).unwrap();
+    let config = config_of(&engine);
+    let mut events = events_established(
+        &config,
+        None,
+        Duration::from_secs(5),
+        max,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let within = Duration::from_secs(5);
+    let first = tokio::time::timeout(within, events.next()).await.unwrap();
+    assert_eq!(first.unwrap().unwrap().action.as_deref(), Some("start"));
+    let refused = tokio::time::timeout(within, events.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Other);
+    let expected = format!("event record exceeds {max} bytes");
+    assert!(
+        matches!(
+            refused.engine(),
+            Some(bollard::errors::Error::DockerStreamError { error }) if *error == expected
+        ),
+        "{refused:?}"
+    );
+    // The peer never closes: only the client's own refusal can end the stream here.
+    assert!(
+        tokio::time::timeout(within, events.next())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -1224,6 +1286,7 @@ async fn events_established_sends_the_options_the_agent_and_the_version() {
         &config,
         Some(options),
         Duration::from_secs(5),
+        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1252,6 +1315,7 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
         &config,
         None,
         Duration::from_millis(200),
+        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1268,6 +1332,7 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
         &config,
         None,
         Duration::from_secs(30),
+        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1284,6 +1349,7 @@ async fn events_established_times_out_on_stalled_headers_and_fails_fast_on_a_ref
         &config,
         None,
         Duration::from_secs(30),
+        crate::tests::MAX_RECORD,
         &CancellationToken::new(),
     )
     .await
@@ -1408,6 +1474,7 @@ mod tls_tests {
             &config,
             None,
             Duration::from_secs(10),
+            crate::tests::MAX_RECORD,
             &CancellationToken::new(),
         )
         .await
@@ -1424,6 +1491,7 @@ mod tls_tests {
             &config,
             None,
             Duration::from_millis(300),
+            crate::tests::MAX_RECORD,
             &CancellationToken::new(),
         )
         .await
@@ -1442,6 +1510,7 @@ mod tls_tests {
             &config,
             None,
             Duration::from_secs(5),
+            crate::tests::MAX_RECORD,
             &CancellationToken::new(),
         )
         .await

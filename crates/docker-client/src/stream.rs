@@ -27,6 +27,7 @@
 //! config's certificate directory, so bollard's calls and these accept the same engines.
 
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use bollard::errors::Error as BollardError;
@@ -446,14 +447,6 @@ pub fn escape_id(id: &str) -> String {
 }
 
 /// A failure of the client's own making, in bollard's error.
-#[cfg(any(
-    feature = "tls",
-    feature = "attach",
-    feature = "exec",
-    feature = "logs",
-    feature = "stats",
-    feature = "raw-spec"
-))]
 pub(crate) fn failure(message: String) -> BollardError {
     BollardError::DockerStreamError { error: message }
 }
@@ -580,6 +573,12 @@ pub type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<EventMessage, 
 /// Each line of the stream is decoded as an [`EventMessage`]; one that does not decode is an `Err`
 /// item and the stream goes on. A transport failure is an `Err` item that ends it.
 ///
+/// A line longer than `max_record_bytes` is an `Err` item that ends the stream, as soon as the
+/// excess is seen and without waiting for its newline, so that the caller reconnects. Every byte
+/// before the newline counts, whitespace and record separators included. The limit bounds what
+/// this stream buffers for one record of a successful answer; it does not bound the allocation of
+/// a frame by hyper, nor the body of a refusal.
+///
 /// # Errors
 ///
 /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) when the headers do not come in `timeout`,
@@ -589,6 +588,7 @@ pub async fn events_established(
     config: &Config,
     options: Option<EventsOptions>,
     timeout: Duration,
+    max_record_bytes: NonZeroUsize,
     cancel: &CancellationToken,
 ) -> Result<EventStream, Error> {
     let target = Target::of(config);
@@ -605,49 +605,250 @@ pub async fn events_established(
         cancel,
     )
     .await?;
-    Ok(Box::pin(lines(body)))
+    Ok(Box::pin(lines(body, max_record_bytes)))
 }
 
-fn lines(body: Incoming) -> impl Stream<Item = Result<EventMessage, Error>> + Send {
+/// An event record past the caller's maximum.
+#[derive(Debug, PartialEq, Eq)]
+struct RecordTooLong;
+
+/// Splits a body's frames into newline-terminated records of at most `max` bytes.
+///
+/// A frame is walked by offset and never shifted, and each byte is searched for a newline at most
+/// once, so the work is linear in the body. Only the fragments of an incomplete record are copied,
+/// and only after they are known to fit, so `partial` never holds more than `max` bytes.
+#[derive(Debug)]
+struct RecordReader {
+    frame: Bytes,
+    offset: usize,
+    partial: Vec<u8>,
+    max: usize,
+    #[cfg(test)]
+    searched: usize,
+}
+
+impl RecordReader {
+    fn new(max: NonZeroUsize) -> Self {
+        Self {
+            frame: Bytes::new(),
+            offset: 0,
+            partial: Vec::new(),
+            max: max.get(),
+            #[cfg(test)]
+            searched: 0,
+        }
+    }
+
+    /// The next frame, once `next_record` has consumed the previous one.
+    fn set_frame(&mut self, frame: Bytes) {
+        debug_assert_eq!(self.offset, self.frame.len());
+        self.frame = frame;
+        self.offset = 0;
+    }
+
+    /// The next whole record, without its newline, or `None` when the frame is used up.
+    fn next_record(&mut self) -> Result<Option<Bytes>, RecordTooLong> {
+        let start = self.offset;
+        let available = self.frame.len() - start;
+        if available == 0 {
+            return Ok(None);
+        }
+        let budget = self.max - self.partial.len();
+        let found = self
+            .frame
+            .iter()
+            .skip(start)
+            .take(budget.saturating_add(1))
+            .position(|byte| *byte == b'\n');
+        #[cfg(test)]
+        {
+            self.searched += found.map_or(available.min(budget.saturating_add(1)), |at| at + 1);
+        }
+        let Some(length) = found else {
+            if available > budget {
+                return Err(RecordTooLong);
+            }
+            self.partial
+                .extend_from_slice(&self.frame.slice(start..start + available));
+            self.offset = self.frame.len();
+            return Ok(None);
+        };
+        // A newline within `budget + 1` bytes leaves at most `budget` before it.
+        let end = start + length;
+        self.offset = end + 1;
+        let fragment = self.frame.slice(start..end);
+        if self.partial.is_empty() {
+            return Ok(Some(fragment));
+        }
+        self.partial.extend_from_slice(&fragment);
+        Ok(Some(Bytes::from(std::mem::take(&mut self.partial))))
+    }
+
+    /// What is left at the end of the body: a last record with no newline.
+    fn finish(&mut self) -> Option<Bytes> {
+        (!self.partial.is_empty()).then(|| Bytes::from(std::mem::take(&mut self.partial)))
+    }
+}
+
+fn lines(
+    body: Incoming,
+    max_record_bytes: NonZeroUsize,
+) -> impl Stream<Item = Result<EventMessage, Error>> + Send {
     futures_util::stream::unfold(
-        (Some(body), Vec::<u8>::new()),
-        |(mut body, mut buffer)| async move {
+        (Some(body), RecordReader::new(max_record_bytes)),
+        move |(mut body, mut reader)| async move {
             loop {
-                let line = if let Some(at) = buffer.iter().position(|byte| *byte == b'\n') {
-                    buffer.drain(..=at).collect::<Vec<u8>>()
-                } else if body.is_none() {
-                    std::mem::take(&mut buffer)
-                } else {
-                    match body.as_mut()?.frame().await {
-                        Some(Ok(frame)) => {
-                            if let Ok(data) = frame.into_data() {
-                                buffer.extend_from_slice(&data);
+                let record = match reader.next_record() {
+                    Ok(Some(record)) => record,
+                    Err(RecordTooLong) => {
+                        let message = format!("event record exceeds {max_record_bytes} bytes");
+                        let item = Err(Error::from(failure(message)));
+                        return Some((item, (None, RecordReader::new(max_record_bytes))));
+                    }
+                    Ok(None) if body.is_none() => reader.finish()?,
+                    Ok(None) => {
+                        // A body that is always ready must not keep shutdown or other tasks from
+                        // running.
+                        tokio::task::yield_now().await;
+                        match body.as_mut()?.frame().await {
+                            Some(Ok(frame)) => {
+                                if let Ok(data) = frame.into_data() {
+                                    reader.set_frame(data);
+                                }
                             }
-                            continue;
+                            Some(Err(error)) => {
+                                let item = Err(Error::from(BollardError::from(error)));
+                                return Some((item, (None, RecordReader::new(max_record_bytes))));
+                            }
+                            None => body = None,
                         }
-                        Some(Err(error)) => {
-                            let item = Err(Error::from(BollardError::from(error)));
-                            return Some((item, (None, Vec::new())));
-                        }
-                        None => {
-                            body = None;
-                            continue;
-                        }
+                        continue;
                     }
                 };
-                let line = line.trim_ascii();
+                let line = record.trim_ascii();
                 if line.is_empty() {
-                    if body.is_none() && buffer.is_empty() {
-                        return None;
-                    }
                     continue;
                 }
                 let item = serde_json::from_slice::<EventMessage>(line)
                     .map_err(|error| Error::from(BollardError::from(error)));
-                return Some((item, (body, buffer)));
+                return Some((item, (body, reader)));
             }
         },
     )
+}
+
+#[cfg(test)]
+mod record_tests {
+    use std::num::NonZeroUsize;
+
+    use bytes::Bytes;
+
+    use super::{RecordReader, RecordTooLong};
+
+    fn reader(max: usize) -> RecordReader {
+        RecordReader::new(NonZeroUsize::new(max).unwrap())
+    }
+
+    /// Every record of `frames`, the last one unterminated included, or the refusal.
+    fn read_all(max: usize, frames: &[&[u8]]) -> Result<Vec<Vec<u8>>, RecordTooLong> {
+        let mut reader = reader(max);
+        let mut records = Vec::new();
+        for frame in frames {
+            reader.set_frame(Bytes::copy_from_slice(frame));
+            while let Some(record) = reader.next_record()? {
+                records.push(record.to_vec());
+            }
+        }
+        records.extend(reader.finish().map(|record| record.to_vec()));
+        Ok(records)
+    }
+
+    #[test]
+    fn a_record_at_the_limit_is_accepted() {
+        assert_eq!(read_all(4, &[b"abcd\n"]).unwrap(), [b"abcd"]);
+        assert_eq!(read_all(4, &[b"abcd"]).unwrap(), [b"abcd"]);
+        assert_eq!(read_all(4, &[b"ab", b"cd", b"\n"]).unwrap(), [b"abcd"]);
+    }
+
+    #[test]
+    fn one_byte_over_the_limit_is_refused() {
+        assert_eq!(read_all(4, &[b"abcde\n"]), Err(RecordTooLong));
+        assert_eq!(read_all(4, &[b"abcde"]), Err(RecordTooLong));
+        assert_eq!(read_all(4, &[b"abcd", b"e\n"]), Err(RecordTooLong));
+    }
+
+    #[test]
+    fn a_split_record_is_refused_before_its_newline_arrives() {
+        let mut reader = reader(4);
+        reader.set_frame(Bytes::from_static(b"abc"));
+        assert_eq!(reader.next_record(), Ok(None));
+        reader.set_frame(Bytes::from_static(b"de"));
+        assert_eq!(reader.next_record(), Err(RecordTooLong));
+    }
+
+    #[test]
+    fn a_fragment_past_the_budget_is_not_copied() {
+        let mut reader = reader(4);
+        reader.set_frame(Bytes::from_static(b"abc"));
+        assert_eq!(reader.next_record(), Ok(None));
+        reader.set_frame(Bytes::from(vec![b'x'; 1 << 20]));
+        assert_eq!(reader.next_record(), Err(RecordTooLong));
+        assert_eq!(reader.partial, b"abc");
+    }
+
+    #[test]
+    fn an_over_long_record_inside_a_frame_is_refused_after_the_good_ones() {
+        let mut reader = reader(4);
+        reader.set_frame(Bytes::from_static(b"ok\nabcdefgh\nlater\n"));
+        assert_eq!(reader.next_record().unwrap().unwrap(), "ok");
+        assert_eq!(reader.next_record(), Err(RecordTooLong));
+    }
+
+    #[test]
+    fn a_large_frame_of_small_records_is_not_over_the_limit() {
+        let frame = b"ab\n".repeat(10_000);
+        let records = read_all(2, &[&frame]).unwrap();
+        assert_eq!(records.len(), 10_000);
+        assert!(records.iter().all(|record| record == b"ab"));
+    }
+
+    #[test]
+    fn whitespace_and_record_separators_count() {
+        assert_eq!(read_all(4, &[b"  \x1e{}\n"]), Err(RecordTooLong));
+        assert_eq!(read_all(4, &[b" \x1e{}\n"]).unwrap(), [b" \x1e{}"]);
+        assert_eq!(read_all(4, &[b"     "]), Err(RecordTooLong));
+    }
+
+    #[test]
+    fn each_byte_is_searched_at_most_once() {
+        let frame = Bytes::from(b"ab\n".repeat(10_000));
+        let supplied = frame.len();
+        let mut small = reader(2);
+        small.set_frame(frame);
+        while small.next_record().unwrap().is_some() {}
+        assert!(small.searched <= supplied, "{}", small.searched);
+
+        let mut split = reader(10_000);
+        for _ in 0..10_000 {
+            split.set_frame(Bytes::from_static(b"x"));
+            assert_eq!(split.next_record(), Ok(None));
+        }
+        assert_eq!(split.searched, 10_000);
+    }
+
+    #[test]
+    fn consuming_a_record_does_not_move_the_unread_bytes() {
+        let frame = Bytes::from(b"ab\n".repeat(1_000));
+        let base = frame.as_ptr();
+        let mut reader = reader(2);
+        reader.set_frame(frame);
+        let mut offset = 0;
+        while let Some(record) = reader.next_record().unwrap() {
+            assert_eq!(record.as_ptr(), base.wrapping_add(offset));
+            offset += 3;
+        }
+        assert_eq!(offset, 3_000);
+    }
 }
 
 #[cfg(all(
