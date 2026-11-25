@@ -173,7 +173,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "clock"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "jiff",
  "tokio",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "config-layer"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "granit-parser",
  "jiff",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "docker-client"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "bollard",
  "bytes",
@@ -964,7 +964,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-meta"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "regex",
  "serde-saphyr",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "service-kit"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "testenv-core"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "bollard",
  "futures-util",
@@ -1520,7 +1520,7 @@ dependencies = [
 
 [[package]]
 name = "tracing-setup"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "log",
  "serde_json",
