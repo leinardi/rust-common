@@ -28,6 +28,9 @@ name = "dind"
 required-features = ["dind"]
 
 [features]
+# bollard's TLS, for a suite that speaks it to its daemons through the re-exported bollard
+# (swarm-scheduler-exporter's and runhold's testenv), so the suite does not declare bollard itself.
+bollard-ssl = ["bollard", "bollard/ssl"]
 # Go's context and testing packages on tokio, for an async `harness = false` suite
 # (swarm-scheduler-exporter's and swarm-device-access's): TestHandle (its temp_dir on tempfile),
 # Outcome, Suite, and the runner skeleton (--run, the suite deadline, SIGINT and SIGTERM, the
@@ -64,7 +67,8 @@ tokio-util = { version = "0.7.20", default-features = false, optional = true }
 tempfile = { version = "3.27.0", optional = true }
 # The Docker SDK for the harness's own host calls: the unix socket only (pipe). The dind feature
 # adds bollard's http, for the nodes' daemons over plain TCP; a suite that speaks TLS to its nodes
-# adds ssl itself, and cargo unifies them. The version is pinned as the consumers pin it.
+# enables `bollard-ssl` (bollard's ssl) instead of declaring bollard itself, and takes it through
+# the re-export. The version is pinned as the consumers pin it.
 bollard = { version = "=0.21.1", default-features = false, features = ["pipe"], optional = true }
 # The image pull's progress stream (dind).
 futures-util = { version = "0.3.34", default-features = false, optional = true }
