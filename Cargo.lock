@@ -190,7 +190,7 @@ name = "config-layer"
 version = "3.0.0"
 dependencies = [
  "granit-parser",
- "jiff 0.2.38",
+ "jiff 1.0.3",
  "serde-saphyr",
  "serde_core",
  "tempfile",
