@@ -59,10 +59,13 @@ The meta-tests (`cargo test -p meta`) need nothing beyond cargo and git. They ru
 crate's checks on this repository, with its parameters: every workspace member opts into the
 workspace lints (`workspace_lints.rs`); the Rust line and one ShellCheck are pinned everywhere
 (`toolchain.rs`); no gate passes on nothing (`vacuous_flags.rs`); `ci-result` needs every gate,
-every skipped hook is run elsewhere (`ci_gates.rs`); and `feature-sets.toml` covers every crate and
+every skipped hook is run elsewhere (`ci_gates.rs`); `feature-sets.toml` covers every crate and
 every feature it declares, while the matrix fails a set that leaves a warning (`feature_sets.rs`, on
-`meta/src`). Each test file also runs its checks on a scratch tree or an altered copy with a planted
-violation, so none is trusted on the strength of having found nothing to check.
+`meta/src`); and `repo_meta::boundary::TABLE` classifies every third-party dependency of every
+crate and lists exactly the root re-exports, while `boundary::check` reads real `cargo metadata`
+(`boundary_table.rs`, on `meta/src`). Each test file also runs its checks on a scratch tree or an
+altered copy with a planted violation, so none is trusted on the strength of having found nothing
+to check.
 
 ### Generated or vendored: never hand-edit
 
@@ -89,6 +92,19 @@ violation, so none is trusted on the strength of having found nothing to check.
 - **Dependencies run downward.** A crate depends only on the crates before it in the README's
   table, and adds a dependency only for what it uses, with `default-features = false` where the
   defaults pull in more.
+- **Crates at the boundary.** A pre-1.0 third-party crate whose types appear in a crate's public
+  API is re-exported at that crate's root (`pub use X;`) and is part of that crate's semver, so
+  moving it is a `!`. Three pre-1.0 crates are guarded instead (one package ID, not re-exported):
+  `tracing` 0.1, which consumers keep declaring by choice; `futures-core` 0.3, whose `Stream`
+  reaches the API through `futures-util`; and `tokio-util` 0.7 under `docker-client` and
+  `testenv-core` (`async`), where only `CancellationToken` crosses (re-exported as
+  `docker_client::CancellationToken`) and the crate itself is re-exported by `service-kit` (`http`)
+  alone. Consumers import a re-exported crate through the re-export and do not declare it, except
+  for the exceptions they list. Every boundary crate, re-exported or not, must
+  resolve to the same Cargo package ID (name, version and source) everywhere in a consumer's graph
+  (`repo_meta::boundary::check`). Every third-party dependency of every crate has an entry in
+  `repo_meta::boundary::TABLE` (`Reexport`, `Guarded` or `Internal` with a reason), and the root
+  re-exports are exactly its `Reexport` entries (`meta/tests/boundary_table.rs`).
 - **Every feature is built alone.** A new crate is added to the workspace `members` and to
   `feature-sets.toml` in the same change, with a `{ no-default-features = true }` set, an
   `{ all-features = true }` set and each exact set a consumer uses.

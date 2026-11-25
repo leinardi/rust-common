@@ -23,8 +23,8 @@ it. All seven are available.
 | `clock` (available) | The injected wall clock: `Clock`, the system's, one that follows tokio's (paused) clock, and a `FakeClock` | – |
 | `config-layer` (available) | A layered YAML and environment configuration loader: a spanned untyped tree, an environment overlay checked against the known paths, koanf's merge, typed reads under a profile, `*_file` secrets, every problem with its source | – (the environment rules, the typing profile and the rule texts are parameters) |
 | `docker-client` (available) | Small shared plumbing over bollard: the connection from `DOCKER_HOST`, a whole-call timeout, an error with a kind and dial failures worded as moby's, a stream pump, attach with the caller's framing and wait, exec with a bidirectional stream, log streams and the output demultiplexer, one-shot stats, reads answered as raw bytes, changes sent as moby sends them, a raw service spec round trip, a fake engine | `tcp`, `tls`, `attach`, `exec`, `logs`, `stats`, `raw-get`, `raw-request`, `raw-spec`, `test-util` (the `User-Agent`, the API version and the response-header timeout are parameters) |
-| `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners, a DinD Swarm | `async`, `sync`, `bollard`, `redact`, `dind` (the labels, variables, tools, runner output and setup step are parameters) |
-| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags | – (each check's strictness is a parameter) |
+| `testenv-core` (available) | Test-environment helpers: Go's `-run` filter, environment IDs, the sweep rules, the tool gate, git isolation, the identity rule, Go's `testing` for async and sync runners, a DinD Swarm | `async`, `sync`, `bollard`, `bollard-ssl`, `redact`, `dind` (the labels, variables, tools, runner output and setup step are parameters) |
+| `repo-meta` (available) | Repository meta-test checks returning problems: workspace lint opt-in, Dockerfiles and images, toolchain pins, CI gates, vacuous flags, one copy of each crate at rust-common's public API | – (each check's strictness is a parameter) |
 | `tracing-setup` (available) | A `tracing` subscriber set up the way the projects log: tracing-subscriber's text or flat JSON, no ANSI, to the caller's writer | `log-bridge`, `testing` (the writer, level, format, target and JSON span fields are parameters) |
 | `service-kit` (available) | Process plumbing: `buildinfo!` stamps, the runtime and its bounded shutdown, the shutdown and hangup signals, a minimal HTTP server, the `process_*` metrics collector | `runtime`, `http`, `process-metrics` |
 
@@ -155,8 +155,9 @@ resources and tally, swarm-scheduler-exporter and runhold adding `dind` with the
 reading, keep label and setup step; bitgauge builds `sync` and the default modules;
 awtrix-controller, swarm-rootless-docker and `repo-meta` the default features, for the tool gate and
 git isolation.
-`bollard` builds bollard 0.21.1 with `pipe` only, `dind` adds `http`; a suite that also needs
-`ssl` enables it on its own bollard dependency.
+`bollard` builds bollard 0.21.1 with `pipe` only and re-exports it as `testenv_core::bollard`,
+`dind` adds `http`, and `bollard-ssl` adds `ssl`, for a suite that speaks TLS to its nodes through
+the re-export instead of a bollard dependency of its own.
 
 It depends on `jiff` and `regex`; `async` adds `tokio` (`rt`,
 `time`, `signal`, `macros`), `tokio-util` and `tempfile`, `sync` adds `tempfile`, `redact` adds
@@ -196,6 +197,7 @@ with the project's own pattern, held by `one_value`.
 | `toolchain` | `one_value` (one pin read from several files, over `PinSource`s and `PinValue`s), the `PinSource` presets for the Rust release (`rust_channel`, `rust_channel_line`, `rust_version`, `rust_version_line`, `rust_image_tag`, `rust_version_arg`), `rust_release` and `toolchain_targets` (from `rust-toolchain.toml`), `make_value` (make's value of a variable, `export`, `override`, `?=` and `+=` read as make reads them) |
 | `git_pins` | `git_pins` and `root_git_pins` (every dependency on the rust-common git URL, `RUST_COMMON_URL` or the caller's, has a `tag` of the form `vX.Y.Z`, a `version` equal to its `X.Y`, and one tag shared by all; none at all is a problem) |
 | `ci` | `CiGates` (the result job needs every gate job; the pre-commit job skips something, and every hook it skips exists and is run by a job the result job needs) |
+| `boundary` | `check(root, url, exceptions)`: in a consumer's `cargo metadata --locked --all-features`, every crate whose types cross rust-common's API (`TABLE`, active by feature) is one package ID, and no workspace member declares a re-exported one outside an `Exception`; `check_metadata` on parsed output (see [Crates at the boundary](#crates-at-the-boundary)) |
 | `vacuous` | `VacuousFlags` (`core`, `with_rust`): what turns a failing gate into a pass (an `or true`, `continue-on-error`, `if: false`, make's `-` prefix, `--cap-lints`, cargo's `--skip`, `--passWithNoTests`, …) and a clippy run without `-D warnings`, with `AllowedFragment` exceptions that must each be used |
 | `yaml` | workflows and the pre-commit configuration as `serde_json::Value`: `action_steps`, `jobs`, `pre_commit_hooks` |
 | `scratch` | `ScratchRepo` (a git-isolated temporary repository, `repo()` a `Repo::scratch`), `ScratchRepo::run` (a script run in it) |
@@ -238,8 +240,9 @@ What a service's `main` repeats. Every message, exit code and default stays the 
 
 Without features it has no dependency; `runtime` adds `tokio` (`rt-multi-thread`, `signal`, `sync`,
 `time`, `macros`); `http` adds `hyper` (`http1`, `server`), `hyper-util`, `tokio` (`net`),
-`tokio-util`, `tower-service`, `bytes` and `libc` (constants only); `process-metrics` adds
-`prometheus-client`.
+`tokio-util`, `tower-service`, `bytes` and `libc` (constants only), re-exporting `tokio_util` and
+`tower_service`; `process-metrics` adds `prometheus-client`, re-exported as
+`service_kit::prometheus_client`.
 
 ## Using a crate
 
@@ -264,6 +267,44 @@ published (see [SECURITY.md](SECURITY.md)).
 
 The workspace's `rust-version` is the language line (`1.98`), so a consumer on any 1.98 patch
 release builds it; this repository itself pins its toolchain in `rust-toolchain.toml`.
+
+## Crates at the boundary
+
+A crate whose types appear in a rust-common crate's public API must be one package (the same name,
+version and source) everywhere in a consumer's graph: two copies compile apart, and a type of one
+does not implement the other's traits (`E0277`) or is not the other's type (`E0308`).
+
+- A pre-1.0 third-party crate in a crate's public API is re-exported at that crate's root and is
+  part of its semver, so moving it is a breaking release: `docker_client::bollard`,
+  `testenv_core::bollard` (`bollard`), `service_kit::prometheus_client` (`process-metrics`),
+  `service_kit::tokio_util` and `service_kit::tower_service` (`http`) and
+  `tracing_setup::tracing_subscriber`.
+- Three pre-1.0 crates are guarded rather than re-exported: `tracing` 0.1, which consumers keep
+  declaring by choice; `futures-core` 0.3, whose `Stream` reaches the API through `futures-util`;
+  and `tokio-util` 0.7 under `docker-client` and `testenv-core` (`async`), where only
+  `CancellationToken` crosses (re-exported as `docker_client::CancellationToken`) and the crate is
+  re-exported by `service-kit` (`http`) alone. A consumer may declare these, at rust-common's
+  package.
+- A consumer imports a re-exported crate through the re-export and does not declare it, except
+  under an exception with a reason.
+- Every boundary crate, re-exported or not (`tracing`, `tokio`, `hyper`, `http`, `http-body`,
+  `bytes`, `futures-core`, `serde_json`, `jiff`, `toml`, `regex`, `tokio-util` under
+  `docker-client` and `testenv-core`), resolves to one package ID in the consumer's graph.
+
+`repo_meta::boundary::TABLE` lists every third-party dependency of every crate with its role, and
+a consumer's meta-test runs `repo_meta::boundary::check` with its exceptions (after
+`cargo fetch --locked` in CI):
+
+```rust
+use repo_meta::boundary::{Exception, check};
+
+let problems = check(
+    &root,
+    "https://github.com/leinardi/rust-common",
+    &[Exception { member: "testenv", package: "tokio-util", reason: "its io feature" }],
+);
+assert!(problems.is_empty(), "{}", repo_meta::report(&problems));
+```
 
 ## Working on a crate and a consumer together
 

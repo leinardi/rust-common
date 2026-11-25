@@ -46,6 +46,8 @@
 //! - `dind` (implies `bollard`, with bollard's `http`): `dind`, a Docker Swarm of `DinD` nodes on
 //!   the host daemon for a suite's integration tests (`up`, `Cluster::down`, the keep-aware
 //!   sweep, `poll_until`).
+//! - `bollard-ssl` (implies `bollard`): bollard's `ssl`, for a suite that speaks TLS to its
+//!   nodes through the re-exported `bollard`.
 
 #[cfg(feature = "async")]
 pub mod context;
@@ -68,4 +70,9 @@ pub mod testing;
 mod text;
 pub mod toolgate;
 
+/// The Docker SDK the `host` and `dind` helpers take and return clients and models of,
+/// re-exported so a suite takes the very copy (`repo_meta::boundary`): moving it is a breaking
+/// change.
+#[cfg(feature = "bollard")]
+pub use bollard;
 pub use error::Error;

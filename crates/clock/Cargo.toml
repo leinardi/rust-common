@@ -17,7 +17,7 @@ workspace = true
 
 [dependencies]
 # Timestamps, no tzdb or system feature, only arithmetic on instants.
-jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "1.0.3", default-features = false, features = ["std"] }
 # TokioClock reads tokio's clock (tokio::time::Instant), which a paused runtime controls. Only
 # `time`: no runtime, no I/O.
 tokio = { version = "1.54.1", default-features = false, features = ["time"] }

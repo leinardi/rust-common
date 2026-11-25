@@ -45,3 +45,16 @@ pub mod signal;
 mod stamps;
 
 pub use stamps::{BuildInfo, Defaults, EmptyStamp};
+
+// The pre-1.0 crates whose types cross the public API, re-exported so a consumer takes the very
+// copy these types come from (`repo_meta::boundary`): moving one of them is a breaking change.
+/// The Prometheus client `process::ProcessCollector` implements `Collector` of; register it in
+/// a registry of this crate.
+#[cfg(feature = "process-metrics")]
+pub use prometheus_client;
+/// The `CancellationToken`s that stop and cut `http::serve`.
+#[cfg(feature = "http")]
+pub use tokio_util;
+/// The `Service` trait `http::serve` takes the handler as.
+#[cfg(feature = "http")]
+pub use tower_service;

@@ -17,7 +17,7 @@ workspace = true
 
 [dependencies]
 # The duration type and its friendly parser; no tzdb or system feature.
-jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "1.0.3", default-features = false, features = ["std"] }
 # The visitor that reads the YAML into the untyped tree (the traits serde-saphyr implements).
 serde_core = { version = "1.0.229", default-features = false, features = ["std"] }
 # The YAML parser with spans, strict booleans and a duplicate-key policy. Pinned at 2.0.0, with

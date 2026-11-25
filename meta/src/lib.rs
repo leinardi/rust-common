@@ -17,6 +17,7 @@
 //! reader and the feature-matrix runner behind `make rust-feature-matrix`,
 //! `src/bin/feature-matrix.rs`) and the repository the tests read.
 
+pub mod boundary_table;
 pub mod feature_sets;
 
 use repo_meta::Repo;

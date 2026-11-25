@@ -63,7 +63,8 @@ service-kit = [
 # build); awtrix-controller, swarm-rootless-docker and repo-meta with the default features, which
 # enable nothing (toolgate::Gate, gitenv). Every feature is also built alone, `dind` explicitly
 # without the default features, so a feature it needs cannot come only from a consumer's
-# unification.
+# unification. `bollard-ssl` forwards bollard's `ssl` for the suites that speak TLS to their nodes
+# through the re-exported bollard.
 testenv-core = [
     { no-default-features = true },
     { features = ["async"] },
@@ -73,6 +74,9 @@ testenv-core = [
     { no-default-features = true, features = ["dind"] },
     { features = ["async", "bollard", "redact"] }, # swarm-device-access
     { features = ["async", "bollard", "dind", "redact"] }, # swarm-scheduler-exporter, runhold
+    { features = ["bollard-ssl"] },
+    # swarm-scheduler-exporter's and runhold's testenv, TLS to their nodes
+    { features = ["async", "bollard", "bollard-ssl", "dind", "redact"] },
     { all-features = true },
 ]
 

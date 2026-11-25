@@ -35,9 +35,14 @@
 //! - [`git_pins`]: the `tag` and `version` pins of a consumer's dependencies on this workspace's
 //!   git repository agree with the release and with each other.
 //! - [`vacuous`]: no gate carries a flag that makes it pass on nothing.
+//! - [`boundary`]: every crate whose types cross rust-common's public API resolves to one package
+//!   in a consumer's graph, and a re-exported one is not declared beside its re-export.
 //!
-//! The crate needs no network, no Docker and no tool beyond git.
+//! The crate needs no network, no Docker and no tool beyond git, except [`boundary::check`] and
+//! [`boundary::metadata`], which run `cargo metadata` (online, so it may fetch a missing
+//! dependency).
 
+pub mod boundary;
 pub mod ci;
 pub mod dockerfile;
 pub mod git_pins;
