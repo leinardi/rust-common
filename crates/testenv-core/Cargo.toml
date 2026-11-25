@@ -48,7 +48,7 @@ redact = []
 
 [dependencies]
 # The sweep's started label, read as RFC 3339; no tzdb or system feature.
-jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "1.0.3", default-features = false, features = ["std"] }
 # The run filter: Go's -run patterns are regular expressions.
 regex = "1.13.1"
 # The suite deadline, its signals and select!, on the caller's current-thread runtime.
