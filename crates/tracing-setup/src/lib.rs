@@ -49,6 +49,11 @@ use tracing_subscriber::{Layer, Registry, reload};
 #[cfg(feature = "testing")]
 pub mod testing;
 
+/// The subscriber crate whose `MakeWriter` and layers [`build`] takes and builds on,
+/// re-exported so a consumer takes the very copy (`repo_meta::boundary`): moving it is a breaking
+/// change.
+pub use tracing_subscriber;
+
 /// The two formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
